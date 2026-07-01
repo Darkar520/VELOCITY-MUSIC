@@ -187,4 +187,25 @@ export const api = {
       method: 'DELETE', headers: authHeaders(),
     }));
   },
+
+  // ── Metadatos de pistas (sincronización entre dispositivos) ──
+  // Sube los metadatos de un lote de pistas para que otros dispositivos puedan
+  // renderizar la biblioteca del usuario. Silencioso ante errores.
+  async saveTracks(tracks) {
+    if (!tracks || !tracks.length) return;
+    try {
+      await fetch('/api/tracks', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ tracks }),
+      });
+    } catch {}
+  },
+  // Recupera (hidrata) metadatos de pistas por sus IDs.
+  async getTracks(ids) {
+    if (!ids || !ids.length) return [];
+    try {
+      const d = await jsonOrThrow(await fetch(`/api/tracks?ids=${encodeURIComponent(ids.join(','))}`, { headers: authHeaders() }));
+      return d.tracks || [];
+    } catch { return []; }
+  },
 };

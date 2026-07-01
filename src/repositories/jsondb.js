@@ -19,7 +19,7 @@ const DATA_DIR = path.join(__dirname, '..', '..', 'data');
 const DB_FILE = path.join(DATA_DIR, 'velocity-db.json');
 
 function emptyStore() {
-  return { users: {}, emailIndex: {}, playlists: {}, favorites: {}, history: [], savedAlbums: {}, seq: 0 };
+  return { users: {}, emailIndex: {}, playlists: {}, favorites: {}, history: [], savedAlbums: {}, tracks: {}, seq: 0 };
 }
 
 let store = emptyStore();
@@ -212,6 +212,52 @@ export function createJsonSavedAlbumsRepo() {
     async remove(userId, albumId) {
       store.savedAlbums[userId] = ensure(userId).filter((a) => a.albumId !== albumId);
       save();
+    },
+  };
+}
+
+/**
+ * Metadatos de pistas, indexados por id (videoId de YouTube Music).
+ *
+ * El backend guarda solo IDs en favoritos/playlists/historial; este repositorio
+ * conserva además los metadatos (título, artista, carátula...) para que
+ * CUALQUIER dispositivo pueda renderizar la biblioteca del usuario sin depender
+ * de su caché local. La `url` de streaming NO se guarda: es específica de cada
+ * dispositivo/calidad y se reconstruye al hidratar.
+ */
+export function createJsonTrackMetaRepo() {
+  const MAX_TRACKS = 5000; // tope para que el archivo no crezca sin límite
+  const slim = (t) => ({
+    id: t.id,
+    title: t.title || '',
+    artist: t.artist || '',
+    artistId: t.artistId || null,
+    album: t.album || '',
+    albumId: t.albumId || null,
+    genre: t.genre || '',
+    cover: t.cover || '',
+    durationSeconds: t.durationSeconds || t.duration || 0,
+  });
+  return {
+    async upsertMany(tracks) {
+      if (!Array.isArray(tracks)) return;
+      let changed = false;
+      for (const t of tracks.slice(0, 500)) {
+        if (t && t.id) { store.tracks[t.id] = { ...store.tracks[t.id], ...slim(t) }; changed = true; }
+      }
+      // Evicción simple si se supera el tope (elimina las primeras claves).
+      const keys = Object.keys(store.tracks);
+      if (keys.length > MAX_TRACKS) {
+        for (const k of keys.slice(0, keys.length - MAX_TRACKS)) delete store.tracks[k];
+      }
+      if (changed) save();
+    },
+    async getMany(ids) {
+      if (!Array.isArray(ids)) return [];
+      return ids.map((id) => store.tracks[id]).filter(Boolean);
+    },
+    async has(id) {
+      return !!store.tracks[id];
     },
   };
 }

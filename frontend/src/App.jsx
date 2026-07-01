@@ -134,6 +134,17 @@ function normalizeTrack(t) {
   return cacheTrack(n);
 }
 
+// Metadatos "ligeros" (sin url, que es específica de cada dispositivo/calidad)
+// para sincronizar la biblioteca del usuario entre dispositivos vía backend.
+function slimTrack(t) {
+  if (!t || !t.id) return null;
+  return {
+    id: t.id, title: t.title || '', artist: t.artist || '', artistId: t.artistId || null,
+    album: t.album || '', albumId: t.albumId || null, genre: t.genre || '',
+    cover: t.cover || '', durationSeconds: t.durationSeconds || t.duration || 0,
+  };
+}
+
 // Quita duplicados por artista+título (misma canción, distintas subidas).
 function dedupeByTitle(tracks) {
   const seen = new Set(); const out = [];
@@ -1508,6 +1519,24 @@ export default function App() {
           return { id: p.id, name: p.name, trackIds: ids };
         }));
         if (!cancel) setPlaylists(withTracks);
+
+        // ── Sincronización de metadatos entre dispositivos ──
+        // 1) Subir lo que este dispositivo ya conoce (para otros dispositivos).
+        const local = [..._catalog.values()].map(slimTrack).filter(Boolean);
+        if (local.length) api.saveTracks(local);
+        // 2) Hidratar metadatos faltantes de la biblioteca (favoritos, historial,
+        //    playlists) desde el backend, para poder renderizarlos aquí.
+        const allIds = new Set([...fav, ...hist.map(h => h.trackId)]);
+        withTracks.forEach(p => (p.trackIds || []).forEach(id => allIds.add(id)));
+        const missing = [...allIds].filter(id => id && !trackById(id));
+        if (missing.length) {
+          // En lotes de 300 (límite del endpoint).
+          for (let i = 0; i < missing.length && !cancel; i += 300) {
+            const metas = await api.getTracks(missing.slice(i, i + 300));
+            if (!cancel && metas.length) { metas.forEach(normalizeTrack); }
+          }
+          if (!cancel) { saveMeta(); setCatVer(v => v + 1); }
+        }
       } catch {}
     })();
     return () => { cancel = true; };
@@ -1714,6 +1743,7 @@ export default function App() {
     } else { setPlaySrc(trackWithQuality.url); }
     setRecent(r => [t.id, ...r.filter(x => x !== t.id)].slice(0, 30));
     api.recordHistory(t.id).catch(() => {});
+    api.saveTracks([slimTrack(t)]); // sincronizar metadatos entre dispositivos
     try { localStorage.setItem('velocity.player', JSON.stringify({ track: trackWithQuality, queue: initialQueue, t: 0 })); } catch {}
     // Precargar la(s) siguiente(s) pista(s) de la cola para que el cambio sea instantáneo.
     prefetchNext(t.id, initialQueue, qParam);
@@ -1770,6 +1800,7 @@ export default function App() {
     if (!tk || downloaded.has(tk.id) || downloading.has(tk.id)) return;
     setDownloading(d => { const n = new Set(d); n.add(tk.id); return n; });
     cacheTrack(tk); saveMeta(); pendingRef.current.add(tk.id); savePending();
+    api.saveTracks([slimTrack(tk)]);
     try {
       const blob = await fetchBlobWithTimeout(tk.url, 60000);
       await offline.saveTrack(tk, blob);
@@ -1788,6 +1819,7 @@ export default function App() {
     if (!todo.length) { showToast('Ya está todo descargado'); return; }
     setDownloading(d => { const n = new Set(d); todo.forEach(id => n.add(id)); return n; });
     todo.forEach(id => pendingRef.current.add(id)); savePending(); saveMeta();
+    api.saveTracks(todo.map(trackById).map(slimTrack).filter(Boolean));
     let ok = 0, done = 0;
     const worker = async (id) => {
       const tk = trackById(id);
@@ -1843,6 +1875,7 @@ export default function App() {
   const toggleFav = async (id) => {
     const has = favs.includes(id);
     setFavs(f => has ? f.filter(x => x !== id) : [id, ...f]);
+    if (!has) { const tk = trackById(id); if (tk) api.saveTracks([slimTrack(tk)]); }
     try { has ? await api.removeFavorite(id) : await api.addFavorite(id); }
     catch { setFavs(f => has ? [id, ...f] : f.filter(x => x !== id)); showToast('No se pudo actualizar Me gusta'); }
   };
@@ -1854,6 +1887,7 @@ export default function App() {
   };
   const addToPlaylist = async (pid, tid) => {
     setPlaylists(p => p.map(pl => pl.id===pid && !pl.trackIds.includes(tid) ? { ...pl, trackIds:[...pl.trackIds, tid] } : pl));
+    const tk = trackById(tid); if (tk) api.saveTracks([slimTrack(tk)]);
     try { await api.addToPlaylist(pid, tid); } catch { showToast('No se pudo añadir'); }
   };
   const removeFromPlaylist = async (pid, tid) => {
@@ -1938,37 +1972,9 @@ export default function App() {
     tick(); const id = setInterval(tick, 30000); return () => clearInterval(id);
   }, []);
 
-  if (!authed) return <AuthScreen onAuthed={handleAuthed} T={T} />;
-
-  const NAV = [
-    { id:'home', label:'Inicio', I: Icon.Home }, { id:'search', label:'Buscar', I: Icon.Search },
-    { id:'library', label:'Biblioteca', I: Icon.Lib }, { id:'profile', label:'Yo', I: Icon.User },
-  ];
-
-  const ctx = {
-    track, playing, play, T, favs, toggleFav, playlists, createPlaylist, addToPlaylist, removeFromPlaylist, deletePlaylist,
-    recent, recentSearches, addSearch, removeSearch, homeRows, homeLoading, detailLoading,
-    openPlaylist, setOpenPlaylist, setTab, addToTarget: setAddTarget, onMenu: setMenuTarget,
-    themeKey, setThemeKey, quality, setQuality, glow, setGlow, eq, setEq, settings, setSettings,
-    view, setView, goArtist, goAlbum, shareTrack, email, onLogout, detailData,
-    addToQueue, download, removeDownload, downloadMany, downloaded, downloading, openQueue: () => setShowQueue(true),
-    savedAlbums, saveAlbum, unsaveAlbum, isAlbumSaved,
-    selecting, selection, toggleSelect, startSelection, clearSelection,
-  };
-
-  const playerProps = { track, playing, togglePlay, next, prev, time, dur, seek, vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved: track ? favs.includes(track.id) : false, toggleFav, T, loadingAudio };
-
-  const TabContent = (
-    <>
-      {tab === 'home' && <HomeTab ctx={ctx} />}
-      {tab === 'search' && <SearchTab ctx={ctx} />}
-      {tab === 'library' && <LibraryTab ctx={ctx} />}
-      {tab === 'profile' && <ProfileTab ctx={ctx} />}
-    </>
-  );
-  const Content = view ? <DetailView view={view} ctx={ctx} /> : TabContent;
-
   // ── Media Session API: controles de pantalla de bloqueo y notificación del OS ──
+  // (Debe declararse ANTES de cualquier return condicional para no romper el
+  //  orden de los hooks de React.)
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;
     if (track) {
@@ -1998,6 +2004,36 @@ export default function App() {
     if (!('mediaSession' in navigator)) return;
     navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
   }, [playing]);
+
+  if (!authed) return <AuthScreen onAuthed={handleAuthed} T={T} />;
+
+  const NAV = [
+    { id:'home', label:'Inicio', I: Icon.Home }, { id:'search', label:'Buscar', I: Icon.Search },
+    { id:'library', label:'Biblioteca', I: Icon.Lib }, { id:'profile', label:'Yo', I: Icon.User },
+  ];
+
+  const ctx = {
+    track, playing, play, T, favs, toggleFav, playlists, createPlaylist, addToPlaylist, removeFromPlaylist, deletePlaylist,
+    recent, recentSearches, addSearch, removeSearch, homeRows, homeLoading, detailLoading,
+    openPlaylist, setOpenPlaylist, setTab, addToTarget: setAddTarget, onMenu: setMenuTarget,
+    themeKey, setThemeKey, quality, setQuality, glow, setGlow, eq, setEq, settings, setSettings,
+    view, setView, goArtist, goAlbum, shareTrack, email, onLogout, detailData,
+    addToQueue, download, removeDownload, downloadMany, downloaded, downloading, openQueue: () => setShowQueue(true),
+    savedAlbums, saveAlbum, unsaveAlbum, isAlbumSaved,
+    selecting, selection, toggleSelect, startSelection, clearSelection,
+  };
+
+  const playerProps = { track, playing, togglePlay, next, prev, time, dur, seek, vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved: track ? favs.includes(track.id) : false, toggleFav, T, loadingAudio };
+
+  const TabContent = (
+    <>
+      {tab === 'home' && <HomeTab ctx={ctx} />}
+      {tab === 'search' && <SearchTab ctx={ctx} />}
+      {tab === 'library' && <LibraryTab ctx={ctx} />}
+      {tab === 'profile' && <ProfileTab ctx={ctx} />}
+    </>
+  );
+  const Content = view ? <DetailView view={view} ctx={ctx} /> : TabContent;
 
   const audioEl = (
     <audio ref={audioRef} src={playSrc || (track ? track.url : undefined)} preload="metadata"

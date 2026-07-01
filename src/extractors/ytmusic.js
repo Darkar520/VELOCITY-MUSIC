@@ -278,6 +278,31 @@ export async function getRadio(videoId, limit = 25) {
 
 export function createYTMusicRadio() { return (videoId, limit) => getRadio(videoId, limit); }
 
+/**
+ * Metadatos de una canción por su videoId. Se usa para recuperar (hidratar) los
+ * datos de pistas que un usuario tiene en su biblioteca (favoritos, playlists,
+ * historial) cuando el dispositivo no los tiene en caché local.
+ */
+export async function getSongById(videoId) {
+  if (!videoId) return null;
+  const client = await getClientSafe();
+  const s = await client.getSong(videoId);
+  if (!s) return null;
+  return {
+    id: s.videoId ?? videoId,
+    title: s.name ?? null,
+    artist: s.artist?.name ?? null,
+    artistId: s.artist?.artistId ?? null,
+    album: null,
+    albumId: null,
+    cover: pickBestThumb(s.thumbnails) || null,
+    durationSeconds: s.duration ?? null,
+    genre: null,
+  };
+}
+
+export function createYTMusicSong() { return (videoId) => getSongById(videoId); }
+
 function mapAlbumDetailed(al) {
   return {
     albumId: al.albumId ?? null,

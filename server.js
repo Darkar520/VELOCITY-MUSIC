@@ -4,7 +4,7 @@ import { createApp } from './src/app.js';
 import { StreamCache } from './src/services/streamCache.js';
 import { resolveActiveMode } from './src/services/resolutionMode.js';
 import { probeYtDlp, createYtDlpExtractor, createYtDlpCatalog, YT_DLP_BIN_DIR } from './src/extractors/ytdlp.js';
-import { createYTMusicCatalog, createYTMusicArtist, createYTMusicAlbum, createYTMusicLyrics, createYTMusicSearchAll, createYTMusicRadio } from './src/extractors/ytmusic.js';
+import { createYTMusicCatalog, createYTMusicArtist, createYTMusicAlbum, createYTMusicLyrics, createYTMusicSearchAll, createYTMusicRadio, createYTMusicSong } from './src/extractors/ytmusic.js';
 import { installYtDlpByDownload } from './src/services/extractorSetup.js';
 import {
   createMemoryUserRepo,
@@ -19,6 +19,7 @@ import {
   createJsonFavoritesRepo,
   createJsonHistoryRepo,
   createJsonSavedAlbumsRepo,
+  createJsonTrackMetaRepo,
 } from './src/repositories/jsondb.js';
 import { query } from './src/db/pool.js';
 import {
@@ -63,6 +64,7 @@ async function bootstrap() {
         favoritesRepo: createJsonFavoritesRepo(),
         historyRepo: createJsonHistoryRepo(),
         savedAlbumsRepo: createJsonSavedAlbumsRepo(),
+        trackMetaRepo: createJsonTrackMetaRepo(),
         // trackRepo en null: el catálogo es YouTube Music (IDs dinámicos), por lo que
         // no validamos existencia local de pista al guardar favoritos/listas/historial.
         trackRepo: null,
@@ -98,6 +100,7 @@ async function bootstrap() {
     radioImpl: createYTMusicRadio(),
     lyricsByIdImpl: createYTMusicLyrics(),
     searchAllImpl: createYTMusicSearchAll(),
+    songByIdImpl: createYTMusicSong(),
     getActiveMode: () => activeMode,
     setActiveMode: refreshMode,
     extractorProbe: probeYtDlp,

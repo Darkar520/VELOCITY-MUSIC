@@ -47,6 +47,8 @@ export function createApp(deps = {}) {
     favoritesRepo,
     historyRepo,
     savedAlbumsRepo,
+    trackMetaRepo,
+    songByIdImpl = null,
     trackRepo,
     jwtSecret,
     staticDir = path.join(__dirname, '..', 'public'),
@@ -457,6 +459,34 @@ export function createApp(deps = {}) {
     app.delete('/api/albums/saved/:albumId', requireAuth, wrap(async (req, res) => {
       await savedAlbumsRepo.remove(req.userId, req.params.albumId);
       res.json({ ok: true });
+    }));
+  }
+
+  // ---- Metadatos de pistas (sincronización entre dispositivos) ----
+  // El frontend sube los metadatos de las pistas que el usuario reproduce,
+  // guarda o añade a playlists, y los descarga (hidrata) en cualquier otro
+  // dispositivo para renderizar su biblioteca sin depender de la caché local.
+  if (requireAuth && trackMetaRepo) {
+    app.post('/api/tracks', requireAuth, wrap(async (req, res) => {
+      await trackMetaRepo.upsertMany((req.body || {}).tracks || []);
+      res.status(201).json({ ok: true });
+    }));
+    app.get('/api/tracks', requireAuth, wrap(async (req, res) => {
+      const ids = String(req.query.ids || '').split(',').map((s) => s.trim()).filter(Boolean).slice(0, 300);
+      if (!ids.length) return res.json({ tracks: [] });
+      const found = await trackMetaRepo.getMany(ids);
+      const foundIds = new Set(found.map((t) => t.id));
+      // Recuperación: los IDs que no tenemos guardados, intentar resolverlos por
+      // el catálogo (best-effort) y guardarlos para la próxima vez.
+      const missing = ids.filter((id) => !foundIds.has(id));
+      if (missing.length && typeof songByIdImpl === 'function') {
+        const resolved = await Promise.all(
+          missing.slice(0, 40).map((id) => withTimeout(songByIdImpl(id), 8000).catch(() => null)),
+        );
+        const ok = resolved.filter((t) => t && t.id && t.title);
+        if (ok.length) { await trackMetaRepo.upsertMany(ok); found.push(...ok); }
+      }
+      res.json({ tracks: found });
     }));
   }
 
