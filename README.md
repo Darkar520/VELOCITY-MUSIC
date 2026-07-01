@@ -12,9 +12,10 @@ A premium, self-hosted music streaming player inspired by Spotify, YouTube Music
 - **Synchronized lyrics** (LRC format, sourced from lrclib.net + YouTube Music native)
 - **Offline downloads** — saves tracks to IndexedDB for playback without internet
 - **User accounts** — JWT authentication, personal library (playlists, favorites, history)
+- **Cross-device sync** — library and track metadata sync across all your devices via the backend
 - **Saved albums** — bookmark full albums to your library
 - **Smart radio** — autoplay related tracks when the queue ends (like Spotify)
-- **Personalized feed** — home mixes based on your listening history, likes and downloads
+- **Personalized feed** — multi-section home (Made for you, genre mixes, decade mixes, discover), each an openable playlist built from your listening history, likes and downloads
 - **Media Session API** — control playback from lock screen and notification shade
 - **Stream quality selector** — High (Opus ~160 kbps), Medium (AAC ~128 kbps), Low
 - **Adaptive cover colors** — player background adapts to the dominant color of the album art
@@ -175,6 +176,20 @@ Uses Node's built-in test runner with property-based tests via [fast-check](http
 ---
 
 ## Deployment
+
+### Self-hosting with Cloudflare Tunnel (recommended)
+
+Because yt-dlp needs a residential IP to avoid YouTube's datacenter bot checks, the
+most reliable setup is to run the app on your own machine and expose it with a free
+[Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/):
+
+1. Build the frontend: `cd frontend && npm run build` (outputs to `public/`)
+2. Start the backend: `npm start` (serves the app on port 3000)
+3. Install `cloudflared` and run: `cloudflared tunnel --url http://localhost:3000`
+4. Share the printed `https://….trycloudflare.com` URL
+
+On Windows, `start-velocity.bat` automates steps 2–3 and disables sleep while running.
+For a permanent URL, create a *named* tunnel (requires a Cloudflare account + domain).
 
 ### Render (backend) + Vercel (frontend)
 

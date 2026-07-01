@@ -436,24 +436,6 @@ function ToggleRow({ label, desc, on, onToggle, T }) {
   );
 }
 
-function Row({ label, tracks, T, play, onFav, onMenu, favs }) {
-  if (!tracks || !tracks.length) return null;
-  const ids = tracks.map(x => x.id);
-  return (
-    <>
-      <SectionHeader label={label} accent={T.accent} />
-      <div style={{ display:'flex', gap:15, overflowX:'auto', paddingBottom:6, paddingTop:2, marginBottom:18 }}>
-        {tracks.map(t => (
-          <MediaCard key={t.id} cover={t.cover} title={t.title} subtitle={t.artist} T={T}
-            onClick={() => play(t, ids)} onPlay={() => play(t, ids)}
-            onFav={onFav ? () => onFav(t.id) : undefined} faved={favs ? favs.includes(t.id) : false}
-            onMenu={onMenu ? () => onMenu(t.id) : undefined} />
-        ))}
-      </div>
-    </>
-  );
-}
-
 // ═══════════════════════════════════════════════════════════════
 // AUTH SCREEN — login / registro
 // ═══════════════════════════════════════════════════════════════
