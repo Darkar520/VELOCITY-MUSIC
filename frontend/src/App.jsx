@@ -1671,9 +1671,25 @@ export default function App() {
 
   // ── Sincronizar elemento audio (playSrc incluido: reproduce al resolver archivo offline) ──
   useEffect(() => {
-    if (!audioRef.current) return;
-    if (playing) audioRef.current.play().catch(() => {});
-    else audioRef.current.pause();
+    const a = audioRef.current;
+    if (!a) return;
+    if (playing) {
+      // Restaurar volumen si el fundido lo dejó en 0 (ej: pantalla bloqueada durante el fade)
+      if (a.volume === 0) { cancelAnimationFrame(fadeRafRef.current); clearTimeout(fadeSafetyRef.current); a.volume = vol; }
+      const p = a.play();
+      if (p && p.catch) {
+        p.catch((err) => {
+          // AbortError es normal al cambiar src rápido — ignorar.
+          // NotAllowedError requiere interacción del usuario — dejar playing=true
+          // para que el siguiente tap lo reactive sin perder la canción.
+          if (err.name !== 'AbortError' && err.name !== 'NotAllowedError') {
+            console.warn('[Audio]', err.name, err.message);
+          }
+        });
+      }
+    } else {
+      a.pause();
+    }
   }, [playing, track, playSrc]);
   useEffect(() => { if (audioRef.current) audioRef.current.volume = vol; }, [vol]);
 
@@ -1915,31 +1931,50 @@ export default function App() {
     showToast(`${ok}/${todo.length} descargadas`);
   };
 
+  // Refs para que onEnded lea siempre el estado actual (evita stale closure).
+  const queueRef = useRef(queue);
+  const trackRef = useRef(track);
+  const settingsRef = useRef(settings);
+  useEffect(() => { queueRef.current = queue; }, [queue]);
+  useEffect(() => { trackRef.current = track; }, [track]);
+  useEffect(() => { settingsRef.current = settings; }, [settings]);
+
   // ── Fin de pista: repeat / autoplay / radio de relacionadas ──
   const onEnded = async () => {
-    if (repeat && audioRef.current) { audioRef.current.currentTime = 0; audioRef.current.play(); return; }
-    if (!settings.autoplay) { setPlaying(false); return; }
-    const ids = queue.length ? queue : (track ? [track.id] : []);
-    const i = ids.indexOf(track?.id);
+    const currentTrack = trackRef.current;
+    const currentQueue = queueRef.current;
+    const currentSettings = settingsRef.current;
+
+    if (repeat && audioRef.current) { audioRef.current.currentTime = 0; audioRef.current.play().catch(() => {}); return; }
+    if (!currentSettings.autoplay) { setPlaying(false); return; }
+
+    const ids = currentQueue.length ? currentQueue : (currentTrack ? [currentTrack.id] : []);
+    const i = ids.indexOf(currentTrack?.id);
+
+    // Hay siguiente en la cola → reproducir
     if (i !== -1 && i < ids.length - 1) { next(); return; }
-    // Fin de la cola: continuar con canciones relacionadas a la actual (radio),
-    // NO con otras del mismo nombre. Igual que Spotify.
-    if (track) {
+
+    // Fin de la cola → radio de relacionadas
+    if (currentTrack) {
       try {
-        const rel = await api.radio(track.id);
+        const rel = await api.radio(currentTrack.id);
         let more = capPerArtist(dedupeByTitle(rel.map(normalizeTrack)), 3)
-          .filter(t => t.id !== track.id && !ids.includes(t.id));
+          .filter(t => t.id !== currentTrack.id && !ids.includes(t.id));
         if (more.length) {
           const add = more.slice(0, 20).map(t => t.id);
           const nxt = trackById(add[0]);
           if (nxt) { play(nxt, [...ids, ...add]); return; }
         }
       } catch {}
-      // Respaldo: relacionadas por artista si la radio no devolvió nada.
+      // Respaldo: búsqueda por artista
       try {
-        const raw = await api.search(track.artist);
-        const more = raw.map(normalizeTrack).filter(t => t.id !== track.id && !ids.includes(t.id));
-        if (more.length) { const add = more.slice(0, 8).map(t => t.id); const nxt = trackById(add[0]); if (nxt) { play(nxt, [...ids, ...add]); return; } }
+        const raw = await api.search(currentTrack.artist);
+        const more = raw.map(normalizeTrack).filter(t => t.id !== currentTrack.id && !ids.includes(t.id));
+        if (more.length) {
+          const add = more.slice(0, 8).map(t => t.id);
+          const nxt = trackById(add[0]);
+          if (nxt) { play(nxt, [...ids, ...add]); return; }
+        }
       } catch {}
     }
     setPlaying(false);

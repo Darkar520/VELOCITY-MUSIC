@@ -185,8 +185,8 @@ most reliable setup is to run the app on your own machine and expose it with a f
 
 1. Build the frontend: `cd frontend && npm run build` (outputs to `public/`)
 2. Start the backend: `npm start` (serves the app on port 3000)
-3. Install `cloudflared` and run: `cloudflared tunnel --url http://localhost:3000`
-4. Share the printed `https://….trycloudflare.com` URL
+3. Install `cloudflared` and run: `cloudflared tunnel run --token <your-token> --url http://localhost:3000`
+4. The app is accessible at the permanent URL: `https://velocity-music.velocity-music.workers.dev`
 
 On Windows, `start-velocity.bat` automates steps 2–3 and disables sleep while running.
 For a permanent URL, create a *named* tunnel (requires a Cloudflare account + domain).
