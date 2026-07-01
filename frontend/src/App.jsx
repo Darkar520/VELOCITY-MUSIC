@@ -107,7 +107,7 @@ function loadPlayerState() {
 function saveMeta() { try { localStorage.setItem('velocity.meta', JSON.stringify([..._catalog.values()].slice(-500))); } catch {} }
 // Invalidación de caché: si subimos la versión, descartamos metadata/feed viejos
 // (p.ej. pistas de radio cacheadas sin carátula por un bug previo) una sola vez.
-const CACHE_VERSION = '2';
+const CACHE_VERSION = '3';
 try {
   if (localStorage.getItem('velocity.cacheVer') !== CACHE_VERSION) {
     localStorage.removeItem('velocity.meta');
@@ -593,17 +593,17 @@ function HomeTab({ ctx }) {
         </div>
       )}
 
-      {homeRows.length > 0 && (
-        <>
-          <SectionHeader label="Hecho para ti" accent={T.accent} />
-          <div style={{ display:'flex', gap:15, overflowX:'auto', paddingBottom:6, paddingTop:2, marginBottom:8 }}>
-            {homeRows.map(row => (
-              <MixCard key={row.label} mix={row} T={T}
-                onPlay={() => { const ids = row.tracks.map(t => t.id); play(row.tracks[0], ids); }} />
+      {homeRows.map(sec => (
+        <div key={sec.section}>
+          <SectionHeader label={sec.section} accent={T.accent} />
+          <div style={{ display:'flex', gap:15, overflowX:'auto', paddingBottom:6, paddingTop:2, marginBottom:20 }}>
+            {(sec.mixes || []).map(mix => (
+              <MixCard key={mix.label} mix={mix} T={T}
+                onPlay={() => { const ids = mix.tracks.map(t => t.id); play(mix.tracks[0], ids); }} />
             ))}
           </div>
-        </>
-      )}
+        </div>
+      ))}
     </div>
   );
 }
@@ -1505,7 +1505,7 @@ export default function App() {
   // Cargar descargas offline + manejar expiración de sesión (401 → re-login)
   useEffect(() => {
     setOnUnauthorized(() => { setAuthed(false); showToast('Tu sesión expiró. Inicia sesión de nuevo.'); });
-    homeRows.forEach(r => (r.tracks || []).forEach(cacheTrack)); // hidratar caché del feed guardado
+    homeRows.forEach(sec => (sec.mixes || []).forEach(m => (m.tracks || []).forEach(cacheTrack))); // hidratar caché del feed guardado
     (async () => {
       try {
         const metas = await offline.listMetas();
@@ -1601,26 +1601,46 @@ export default function App() {
     feedSigRef.current = sig;
     setHomeLoading(true);
     (async () => {
-      const rows = [];
-      // Mezclas personalizadas: radio de cada semilla → blend de artistas
-      // relacionados (mismo estilo), con tope de 3 por artista para variar.
-      const mixes = await Promise.all(seeds.map(async (seed) => {
+      // Helpers para construir mezclas (cada una es una "playlist" con carátula collage).
+      const mixFromSeed = async (seed) => {
         try {
           const rel = await api.radio(seed.id);
-          let tracks = capPerArtist(dedupeByTitle([seed, ...rel.map(normalizeTrack)]), 3).filter(t => t.id);
-          tracks = tracks.slice(0, 20);
-          if (tracks.length < 4) return null;
-          return { label: `Mezcla · ${seed.artist}`, tracks };
+          const tracks = capPerArtist(dedupeByTitle([seed, ...rel.map(normalizeTrack)]), 3).filter(t => t.id).slice(0, 25);
+          return tracks.length >= 4 ? { label: seed.artist || 'Mezcla', tracks } : null;
         } catch { return null; }
-      }));
-      mixes.filter(Boolean).forEach(r => rows.push(r));
-      // Descubrimiento para completar / usuarios nuevos.
-      const seedRows = await Promise.all((rows.length ? SEED_ROWS.slice(0, 2) : SEED_ROWS).map(async (seed) => {
-        try { const raw = await api.search(seed.q); return { label: seed.label, tracks: dedupeByTitle(raw.slice(0, 14).map(normalizeTrack)) }; }
-        catch { return null; }
-      }));
-      seedRows.filter(Boolean).forEach(r => r.tracks.length && rows.push(r));
-      if (!cancel) { setHomeRows(rows); setHomeLoading(false); }
+      };
+      const mixFromSearch = async (label, q) => {
+        try {
+          const raw = await api.search(q);
+          const tracks = dedupeByTitle(raw.slice(0, 22).map(normalizeTrack)).filter(t => t.id);
+          return tracks.length >= 4 ? { label, tracks } : null;
+        } catch { return null; }
+      };
+      const clean = (arr) => arr.filter(Boolean);
+
+      const sections = [];
+      const pushSection = (section, mixes) => {
+        if (!mixes.length || cancel) return;
+        sections.push({ section, mixes });
+        setHomeRows([...sections]);
+        setHomeLoading(false);
+      };
+
+      // 1) Hecho para ti — mezclas personalizadas por artista semilla.
+      pushSection('Hecho para ti', clean(await Promise.all(seeds.map(mixFromSeed))));
+      // 2) Mezclas por género.
+      pushSection('Mezclas por género', clean(await Promise.all(GENRES.map(g => mixFromSearch(g.label, g.q)))));
+      // 3) Viaja en el tiempo — por década.
+      const decades = [
+        ['Éxitos 2020s', 'top hits 2023'], ['Lo mejor de los 2010s', 'best songs 2010s'],
+        ['Clásicos de los 2000s', 'top hits 2000s'], ['Rock de los 90', 'best rock 90s'],
+        ['Éxitos de los 80', 'greatest hits 80s'],
+      ];
+      pushSection('Viaja en el tiempo', clean(await Promise.all(decades.map(([l, q]) => mixFromSearch(l, q)))));
+      // 4) Descubre — recomendaciones generales.
+      pushSection('Descubre', clean(await Promise.all(SEED_ROWS.map(s => mixFromSearch(s.label, s.q)))));
+
+      if (!cancel) setHomeLoading(false);
     })();
     return () => { cancel = true; };
   }, [authed, recent, favs, downloaded, catVer]);
