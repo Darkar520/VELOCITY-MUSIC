@@ -522,7 +522,7 @@ function AuthScreen({ onAuthed, T }) {
 // ═══════════════════════════════════════════════════════════════
 // MIX CARD — tarjeta de mezcla/playlist (collage de carátulas)
 // ═══════════════════════════════════════════════════════════════
-function MixCard({ mix, T, onPlay }) {
+function MixCard({ mix, T, onPlay, onOpen }) {
   const tracks = mix.tracks || [];
   // Collage 2x2 con hasta 4 carátulas distintas.
   let covers = [...new Set(tracks.map(t => t.cover).filter(c => c && !c.startsWith('data:')))].slice(0, 4);
@@ -531,7 +531,7 @@ function MixCard({ mix, T, onPlay }) {
   const artists = [...new Set(tracks.map(t => t.artist).filter(Boolean))].slice(0, 3).join(' · ');
   return (
     <div className="card-hover media-card" style={{ flexShrink:0, width:150 }}>
-      <div onClick={onPlay} style={{ position:'relative', width:150, height:150, borderRadius:16, overflow:'hidden', marginBottom:9, cursor:'pointer', boxShadow:'0 8px 22px #0007' }}>
+      <div onClick={onOpen} style={{ position:'relative', width:150, height:150, borderRadius:16, overflow:'hidden', marginBottom:9, cursor:'pointer', boxShadow:'0 8px 22px #0007' }}>
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gridTemplateRows:'1fr 1fr', width:'100%', height:'100%', gap:1 }}>
           {covers.map((c, i) => <img key={i} src={hiResCover(c)} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" style={{ width:'100%', height:'100%', objectFit:'cover', display:'block' }} />)}
         </div>
@@ -539,7 +539,7 @@ function MixCard({ mix, T, onPlay }) {
         <div style={{ position:'absolute', top:8, left:10, fontSize:8.5, fontWeight:900, letterSpacing:1.5, color:'#fff', textTransform:'uppercase', opacity:.9, textShadow:'0 1px 3px #000' }}>Mezcla</div>
         <button aria-label="Reproducir mezcla" onClick={e => { e.stopPropagation(); onPlay(); }} className="btn-tap" style={{ position:'absolute', bottom:8, right:8, width:38, height:38, borderRadius:'50%', background:grad(T), border:'none', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', boxShadow:`0 4px 14px ${hex2rgba(T.accent,.6)}` }}><Icon.Play c="#04060a" sz={18} /></button>
       </div>
-      <div onClick={onPlay} style={{ fontSize:12, fontWeight:800, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', cursor:'pointer' }}>{mix.label.replace(/^Mezcla · /, '')}</div>
+      <div onClick={onOpen} style={{ fontSize:12, fontWeight:800, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', cursor:'pointer' }}>{mix.label.replace(/^Mezcla · /, '')}</div>
       <div style={{ fontSize:10, color:'var(--txt-2)', marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{artists || `${tracks.length} canciones`}</div>
     </div>
   );
@@ -549,7 +549,7 @@ function MixCard({ mix, T, onPlay }) {
 // HOME TAB
 // ═══════════════════════════════════════════════════════════════
 function HomeTab({ ctx }) {
-  const { track, playing, play, T, recent, homeRows, homeLoading, favs, toggleFav, onMenu } = ctx;
+  const { track, playing, play, T, recent, homeRows, homeLoading, favs, toggleFav, onMenu, goMix } = ctx;
   const recentTracks = dedupeByTitle(recent.map(trackById).filter(Boolean));
   const recentIds = recentTracks.map(t => t.id);
   const hour = new Date().getHours();
@@ -599,6 +599,7 @@ function HomeTab({ ctx }) {
           <div style={{ display:'flex', gap:15, overflowX:'auto', paddingBottom:6, paddingTop:2, marginBottom:20 }}>
             {(sec.mixes || []).map(mix => (
               <MixCard key={mix.label} mix={mix} T={T}
+                onOpen={() => goMix(mix)}
                 onPlay={() => { const ids = mix.tracks.map(t => t.id); play(mix.tracks[0], ids); }} />
             ))}
           </div>
@@ -1196,6 +1197,40 @@ function DetailView({ view, ctx }) {
   const Back = () => (
     <button onClick={() => setView(null)} className="press" style={{ display:'flex', alignItems:'center', gap:6, background:'none', border:'none', cursor:'pointer', color:'var(--txt-1)', marginBottom:18, paddingTop:4, fontSize:13, fontWeight:700 }}><Icon.ChevL c="var(--txt-1)" sz={18} /> Atrás</button>
   );
+
+  // ── Mezcla / playlist generada (tracklist embebido en la vista) ──
+  if (view.type === 'mix') {
+    const songs = (view.tracks || []).map(t => trackById(t.id) || t).filter(Boolean);
+    const ids = songs.map(s => s.id);
+    let covers = [...new Set(songs.map(s => s.cover).filter(c => c && !c.startsWith('data:')))].slice(0, 4);
+    if (!covers.length) covers = [FALLBACK_COVER];
+    while (covers.length < 4) covers.push(covers[covers.length - 1]);
+    return (
+      <div className="fade-up" style={{ paddingBottom:8 }}>
+        <Back />
+        <div style={{ display:'flex', alignItems:'flex-end', gap:18, marginBottom:24 }}>
+          <div style={{ width:128, height:128, borderRadius:18, overflow:'hidden', flexShrink:0, boxShadow:`0 16px 40px ${hex2rgba(T.accent,.3)}`, display:'grid', gridTemplateColumns:'1fr 1fr', gridTemplateRows:'1fr 1fr', gap:1, background:'var(--surf-2)' }}>
+            {covers.map((c, i) => <img key={i} src={hiResCover(c)} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" style={{ width:'100%', height:'100%', objectFit:'cover', display:'block' }} />)}
+          </div>
+          <div style={{ minWidth:0 }}>
+            <div style={{ fontSize:9, fontWeight:900, letterSpacing:2.5, color:T.accent, textTransform:'uppercase' }}>Mezcla</div>
+            <div style={{ fontSize:24, fontWeight:900, color:'var(--txt-0)', letterSpacing:-.6, marginTop:3 }}>{view.label}</div>
+            <div style={{ fontSize:11, color:'var(--txt-2)', marginTop:3 }}>{songs.length} canciones</div>
+          </div>
+        </div>
+        {songs.length > 0 && (
+          <div style={{ display:'flex', gap:8, marginBottom:18, flexWrap:'wrap' }}>
+            <button onClick={() => play(songs[0], ids)} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:8, background:grad(T), border:'none', borderRadius:99, padding:'10px 22px', cursor:'pointer', color:'#04060a', fontSize:12.5, fontWeight:800, boxShadow:`0 6px 18px ${hex2rgba(T.accent,.45)}` }}><Icon.Play c="#04060a" sz={16} /> Reproducir</button>
+            <DownloadAllButton ids={ids} downloaded={downloaded} downloading={downloading} onClick={() => downloadMany(ids)} T={T} />
+            {!selecting && <button onClick={() => startSelection()} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:7, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:99, padding:'10px 16px', cursor:'pointer', color:'var(--txt-1)', fontSize:12, fontWeight:700 }}><Icon.Check c={T.accent} sz={15} /> Seleccionar</button>}
+          </div>
+        )}
+        <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
+          {songs.map(t => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => play(t, ids)} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} />)}
+        </div>
+      </div>
+    );
+  }
 
   if (view.type === 'artist') {
     const name = d?.name || view.name || 'Artista';
@@ -1960,6 +1995,12 @@ export default function App() {
   const removeSearch = (term) => setRecentSearches(s => s.filter(x => x !== term));
 
   // ── Navegación a artista / álbum (metadatos reales del backend) ──
+  const goMix = (mix) => {
+    if (!mix || !mix.tracks) return;
+    mix.tracks.forEach(cacheTrack);
+    setExpanded(false);
+    setView({ type:'mix', label: mix.label, tracks: mix.tracks });
+  };
   const goArtist = (artistId, name) => {
     setExpanded(false); setView({ type:'artist', artistId, name });
     setDetailData(null); setDetailLoading(true);
@@ -2074,7 +2115,7 @@ export default function App() {
     recent, recentSearches, addSearch, removeSearch, homeRows, homeLoading, detailLoading,
     openPlaylist, setOpenPlaylist, setTab, addToTarget: setAddTarget, onMenu: setMenuTarget,
     themeKey, setThemeKey, quality, setQuality, glow, setGlow, eq, setEq, settings, setSettings,
-    view, setView, goArtist, goAlbum, shareTrack, email, onLogout, detailData,
+    view, setView, goArtist, goAlbum, goMix, shareTrack, email, onLogout, detailData,
     addToQueue, download, removeDownload, downloadMany, downloaded, downloading, openQueue: () => setShowQueue(true),
     savedAlbums, saveAlbum, unsaveAlbum, isAlbumSaved,
     selecting, selection, toggleSelect, startSelection, clearSelection,
