@@ -1,0 +1,38 @@
+# ── Variables de entorno (nunca al repo) ──────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── Dependencias ──────────────────────────────────────────────
+node_modules/
+frontend/node_modules/
+
+# ── Datos y backups de la base de datos JSON ──────────────────
+data/
+*.bak
+*.pre-recover
+
+# ── Binarios descargados en runtime (yt-dlp) ──────────────────
+bin/
+
+# ── Build del frontend (generado por npm run build) ───────────
+public/app/
+
+# ── Logs ──────────────────────────────────────────────────────
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# ── Sistema operativo ─────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Editores ──────────────────────────────────────────────────
+.vscode/
+*.swp
+*.swo
+
+# ── Artefactos de desarrollo interno (Kiro specs) ─────────────
+.kiro/

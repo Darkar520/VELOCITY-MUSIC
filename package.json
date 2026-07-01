@@ -1,0 +1,28 @@
+{
+  "name": "velocity-music",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-hosted music streaming player powered by YouTube Music + yt-dlp. Full-quality audio, synchronized lyrics, offline downloads, personal library and smart radio.",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "build": "cd frontend && npm install && npm run build",
+    "test": "node --test",
+    "db:init": "node src/db/init.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.12.0",
+    "ytmusic-api": "^5.3.1"
+  },
+  "devDependencies": {
+    "fast-check": "^3.22.0",
+    "supertest": "^7.0.0"
+  }
+}
