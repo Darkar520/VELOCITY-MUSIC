@@ -724,10 +724,10 @@ function LibraryTab({ ctx }) {
             {list.map(t => (
               <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T}
                 onClick={() => play(t, pl.trackIds)}
-                onFav={isLiked ? undefined : toggleFav} faved={favs.includes(t.id)} onMenu={onMenu}
+                onFav={toggleFav} faved={favs.includes(t.id)} onMenu={onMenu}
                 downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)}
                 selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect}
-                onRemove={isLiked ? (id => toggleFav(id)) : (id => removeFromPlaylist(pl.id, id))} />
+                onRemove={isLiked ? undefined : (id => removeFromPlaylist(pl.id, id))} />
             ))}
             {missing > 0 && <div style={{ fontSize:11, color:'var(--txt-3)', textAlign:'center', paddingTop:10 }}>{missing} pista(s) sin metadatos guardados en este dispositivo.</div>}
           </div>
@@ -1355,7 +1355,7 @@ function TrackMenu({ trackId, onClose, ctx }) {
     { icon: Icon.Plus,  label:'Añadir a playlist',action: () => { addToTarget(trackId); onClose(); } },
     { icon: Icon.Heart, label: faved ? 'Quitar de Me gusta' : 'Añadir a Me gusta', action: () => { toggleFav(trackId); onClose(); }, filled: faved },
     isDl
-      ? { icon: Icon.Check, label:'Descargada · quitar', action: () => { removeDownload(trackId); onClose(); }, hl: true }
+      ? { icon: Icon.Trash, label:'Eliminar descarga', action: () => { removeDownload(trackId); onClose(); } }
       : { icon: Icon.Down,  label:'Descargar (offline)', action: () => { download(tk); onClose(); } },
     { icon: Icon.Share, label:'Compartir enlace', action: () => { shareTrack(tk); onClose(); } },
   ];
@@ -1787,6 +1787,9 @@ export default function App() {
   const removeFromQueue = (id) => setQueue(q => q.filter(x => x !== id || x === track?.id));
 
   // ── Descargas offline (IndexedDB, sin diálogo de guardado) ──
+  // URL de streaming con la calidad actual: coincide con la clave de caché que
+  // usan reproducir/precargar, así una canción ya resuelta se descarga al instante.
+  const streamUrlQ = (t) => api.streamUrl({ artist: t.artist, title: t.title, id: t.id, quality: ({ HQ:'high', Standard:'medium', FLAC:'low' }[quality] || 'high') });
   const fetchBlobWithTimeout = async (url, ms = 60000) => {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), ms);
@@ -1802,7 +1805,7 @@ export default function App() {
     cacheTrack(tk); saveMeta(); pendingRef.current.add(tk.id); savePending();
     api.saveTracks([slimTrack(tk)]);
     try {
-      const blob = await fetchBlobWithTimeout(tk.url, 60000);
+      const blob = await fetchBlobWithTimeout(streamUrlQ(tk), 60000);
       await offline.saveTrack(tk, blob);
       setDownloaded(d => { const n = new Set(d); n.add(tk.id); return n; });
       showToast('Descargada · disponible sin conexión');
@@ -1824,7 +1827,7 @@ export default function App() {
     const worker = async (id) => {
       const tk = trackById(id);
       try {
-        const blob = await fetchBlobWithTimeout(tk.url, 60000);
+        const blob = await fetchBlobWithTimeout(streamUrlQ(tk), 60000);
         await offline.saveTrack(tk, blob);
         setDownloaded(d => { const n = new Set(d); n.add(id); return n; });
         ok++;
