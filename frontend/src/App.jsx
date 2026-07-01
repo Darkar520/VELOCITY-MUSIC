@@ -520,6 +520,32 @@ function AuthScreen({ onAuthed, T }) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// MIX CARD — tarjeta de mezcla/playlist (collage de carátulas)
+// ═══════════════════════════════════════════════════════════════
+function MixCard({ mix, T, onPlay }) {
+  const tracks = mix.tracks || [];
+  // Collage 2x2 con hasta 4 carátulas distintas.
+  let covers = [...new Set(tracks.map(t => t.cover).filter(c => c && !c.startsWith('data:')))].slice(0, 4);
+  if (!covers.length) covers = [FALLBACK_COVER];
+  while (covers.length < 4) covers.push(covers[covers.length - 1]);
+  const artists = [...new Set(tracks.map(t => t.artist).filter(Boolean))].slice(0, 3).join(' · ');
+  return (
+    <div className="card-hover media-card" style={{ flexShrink:0, width:150 }}>
+      <div onClick={onPlay} style={{ position:'relative', width:150, height:150, borderRadius:16, overflow:'hidden', marginBottom:9, cursor:'pointer', boxShadow:'0 8px 22px #0007' }}>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gridTemplateRows:'1fr 1fr', width:'100%', height:'100%', gap:1 }}>
+          {covers.map((c, i) => <img key={i} src={hiResCover(c)} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" style={{ width:'100%', height:'100%', objectFit:'cover', display:'block' }} />)}
+        </div>
+        <div style={{ position:'absolute', inset:0, background:'linear-gradient(180deg, transparent 40%, #000c)', pointerEvents:'none' }} />
+        <div style={{ position:'absolute', top:8, left:10, fontSize:8.5, fontWeight:900, letterSpacing:1.5, color:'#fff', textTransform:'uppercase', opacity:.9, textShadow:'0 1px 3px #000' }}>Mezcla</div>
+        <button aria-label="Reproducir mezcla" onClick={e => { e.stopPropagation(); onPlay(); }} className="btn-tap" style={{ position:'absolute', bottom:8, right:8, width:38, height:38, borderRadius:'50%', background:grad(T), border:'none', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', boxShadow:`0 4px 14px ${hex2rgba(T.accent,.6)}` }}><Icon.Play c="#04060a" sz={18} /></button>
+      </div>
+      <div onClick={onPlay} style={{ fontSize:12, fontWeight:800, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', cursor:'pointer' }}>{mix.label.replace(/^Mezcla · /, '')}</div>
+      <div style={{ fontSize:10, color:'var(--txt-2)', marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{artists || `${tracks.length} canciones`}</div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
 // HOME TAB
 // ═══════════════════════════════════════════════════════════════
 function HomeTab({ ctx }) {
@@ -567,9 +593,17 @@ function HomeTab({ ctx }) {
         </div>
       )}
 
-      {homeRows.map(row => (
-        <Row key={row.label} label={row.label} tracks={row.tracks} T={T} play={play} onFav={toggleFav} favs={favs} onMenu={onMenu} />
-      ))}
+      {homeRows.length > 0 && (
+        <>
+          <SectionHeader label="Hecho para ti" accent={T.accent} />
+          <div style={{ display:'flex', gap:15, overflowX:'auto', paddingBottom:6, paddingTop:2, marginBottom:8 }}>
+            {homeRows.map(row => (
+              <MixCard key={row.label} mix={row} T={T}
+                onPlay={() => { const ids = row.tracks.map(t => t.id); play(row.tracks[0], ids); }} />
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1459,7 +1493,7 @@ export default function App() {
   const [selection, setSelection] = useState(() => new Set());
   const [outputs, setOutputs] = useState([]);
   const [sinkId, setSinkId] = useState('default');
-  const [, setCatVer] = useState(0);
+  const [catVer, setCatVer] = useState(0);
   const toastTimer = useRef(null);
   const showToast = (m) => { setToast(m); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 2400); };
 
@@ -1589,7 +1623,7 @@ export default function App() {
       if (!cancel) { setHomeRows(rows); setHomeLoading(false); }
     })();
     return () => { cancel = true; };
-  }, [authed, recent, favs, downloaded]);
+  }, [authed, recent, favs, downloaded, catVer]);
 
   // ── Reanudar descargas pendientes al volver a la app ──
   useEffect(() => {
