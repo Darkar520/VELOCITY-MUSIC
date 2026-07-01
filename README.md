@@ -57,10 +57,16 @@ velocity-music/
 │       └── schema.sql     # Database schema
 ├── frontend/
 │   ├── src/
-│   │   ├── App.jsx        # Main React application (single-file component)
-│   │   ├── api.js         # Backend API client (fetch wrapper)
-│   │   ├── offline.js     # IndexedDB offline storage
-│   │   └── main.jsx       # React entry point
+│   │   ├── App.jsx        # Orquestador: estado del reproductor, hooks, handlers, layout
+│   │   ├── api.js         # Cliente del backend (fetch wrapper)
+│   │   ├── offline.js     # Almacenamiento offline en IndexedDB
+│   │   ├── constants.js   # CSS global, temas, semillas de descubrimiento
+│   │   ├── helpers.js     # Utilidades puras (formato, color, dedupe, LRC)
+│   │   ├── catalog.js     # Caché de metadatos + normalización de pistas
+│   │   ├── hooks.js        # usePersisted, useViewport, useDominantColor
+│   │   ├── Icons.jsx      # Íconos SVG
+│   │   ├── components.jsx # Componentes de UI reutilizables (cards, EQViz, etc.)
+│   │   └── main.jsx       # Punto de entrada de React
 │   ├── index.html
 │   ├── vite.config.js
 │   └── package.json
