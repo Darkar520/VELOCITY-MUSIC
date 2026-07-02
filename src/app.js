@@ -63,7 +63,7 @@ export function createApp(deps = {}) {
       exposedHeaders: ['Content-Length', 'Content-Range', 'Accept-Ranges'],
     }),
   );
-  app.use(express.json());
+  app.use(express.json({ limit: '2mb' }));
   if (staticDir) app.use(express.static(staticDir));
 
   const authService = userRepo ? createAuthService({ userRepo, jwtSecret }) : null;

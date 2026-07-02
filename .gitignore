@@ -16,7 +16,7 @@ data/
 bin/
 
 # ── Build del frontend (generado por npm run build) ───────────
-public/
+/public/
 
 # ── Logs ──────────────────────────────────────────────────────
 npm-debug.log*
