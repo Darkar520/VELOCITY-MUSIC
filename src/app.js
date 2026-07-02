@@ -67,6 +67,28 @@ export function createApp(deps = {}) {
   app.use(express.json({ limit: '2mb' }));
   if (staticDir) app.use(express.static(staticDir));
 
+  // ── Proxy de carátulas ──
+  // Sirve imágenes de portada remotas desde el MISMO origen. Esto evita el
+  // problema de CORS/caché que impedía mostrar la carátula en el reproductor
+  // grande (la extracción de color hace una 2ª petición con crossOrigin que
+  // envenenaba la caché), y permite que el service worker las cachee offline.
+  // Allowlist estricta de hosts de imágenes (previene SSRF / proxy abierto).
+  const COVER_HOSTS = /(^|\.)(googleusercontent\.com|ggpht\.com|ytimg\.com|mzstatic\.com)$/i;
+  app.get('/img', async (req, res) => {
+    let url;
+    try { url = new URL(String(req.query.u || '')); } catch { return res.status(400).end(); }
+    if (url.protocol !== 'https:' || !COVER_HOSTS.test(url.hostname)) return res.status(400).end();
+    try {
+      const r = await fetch(url, { headers: { 'User-Agent': 'VelocityMusic/1.0' } });
+      if (!r.ok) return res.status(502).end();
+      const type = r.headers.get('content-type') || 'image/jpeg';
+      if (!type.startsWith('image/')) return res.status(415).end();
+      res.setHeader('Content-Type', type);
+      res.setHeader('Cache-Control', 'public, max-age=2592000, immutable'); // 30 días
+      return res.end(Buffer.from(await r.arrayBuffer()));
+    } catch { return res.status(502).end(); }
+  });
+
   const authService = userRepo ? createAuthService({ userRepo, jwtSecret }) : null;
   const requireAuth = authService ? createRequireAuth(authService, userRepo) : null;
   const playlistService = playlistRepo
@@ -380,6 +402,11 @@ export function createApp(deps = {}) {
     }
   });
 
+  // ---- Configuración pública de auth (la consume el frontend) ----
+  app.get('/api/auth/config', (req, res) => {
+    res.json({ googleClientId: process.env.GOOGLE_CLIENT_ID || '' });
+  });
+
   // ---- Autenticación ----
   if (authService) {
     app.post('/api/auth/register', async (req, res) => {
@@ -399,6 +426,28 @@ export function createApp(deps = {}) {
       } catch (err) {
         if (err instanceof AuthError) return res.status(err.status).json({ error: err.message });
         return res.status(500).json({ error: 'Error de inicio de sesión.' });
+      }
+    });
+    // ---- Inicio de sesión con Google (verifica el ID token con Google) ----
+    app.post('/api/auth/google', async (req, res) => {
+      const clientId = process.env.GOOGLE_CLIENT_ID;
+      if (!clientId) return res.status(501).json({ error: 'Inicio con Google no está configurado.' });
+      const credential = (req.body || {}).credential;
+      if (!credential) return res.status(400).json({ error: 'Falta el token de Google.' });
+      try {
+        const r = await fetch('https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(credential));
+        if (!r.ok) return res.status(401).json({ error: 'Token de Google inválido.' });
+        const p = await r.json();
+        if (p.aud !== clientId) return res.status(401).json({ error: 'Token de Google no válido para esta app.' });
+        if (!(p.email_verified === true || p.email_verified === 'true')) return res.status(401).json({ error: 'El correo de Google no está verificado.' });
+        const email = String(p.email || '').trim().toLowerCase();
+        if (!email) return res.status(401).json({ error: 'Google no devolvió un correo.' });
+        const result = await authService.googleAuth({ email });
+        if (statsRepo) statsRepo.incr('logins').catch(() => {});
+        return res.json(result);
+      } catch (err) {
+        if (err instanceof AuthError) return res.status(err.status).json({ error: err.message });
+        return res.status(502).json({ error: 'No se pudo verificar con Google.' });
       }
     });
   }

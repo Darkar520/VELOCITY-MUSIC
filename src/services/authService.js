@@ -112,5 +112,26 @@ export function createAuthService({ userRepo, jwtSecret = process.env.JWT_SECRET
         return null;
       }
     },
+
+    /**
+     * Inicio de sesión con Google: el email ya viene verificado por Google
+     * (la ruta valida el ID token). Encuentra o crea la cuenta y emite un JWT.
+     * Las cuentas creadas por Google reciben una contraseña aleatoria no usable
+     * (solo entran por Google, salvo que restablezcan contraseña en el futuro).
+     */
+    async googleAuth({ email }) {
+      const normalizedEmail = String(email ?? '').trim().toLowerCase();
+      if (!normalizedEmail || !normalizedEmail.includes('@')) {
+        throw new AuthError(400, 'Email inválido.');
+      }
+      let user = await userRepo.findByEmail(normalizedEmail);
+      if (!user) {
+        const passwordHash = await hashPassword(randomBytes(24).toString('hex'));
+        user = await userRepo.insert({ email: normalizedEmail, passwordHash });
+      }
+      try { if (typeof userRepo.recordLogin === 'function') await userRepo.recordLogin(user.id); } catch {}
+      const token = jwt.sign({ sub: user.id }, jwtSecret, { expiresIn: TOKEN_TTL_SECONDS });
+      return { token, email: user.email };
+    },
   };
 }

@@ -27,7 +27,15 @@ export function loadPlayerState() {
 }
 
 export function saveMeta() {
-  try { localStorage.setItem('velocity.meta', JSON.stringify([..._catalog.values()].slice(-500))); } catch {}
+  try {
+    // No persistir carátulas pesadas (data:/blob:) en localStorage: rebasarían
+    // la cuota. Las descargadas se rehidratan desde IndexedDB en cada arranque.
+    const arr = [..._catalog.values()].slice(-500).map(t =>
+      (t && typeof t.cover === 'string' && (t.cover.startsWith('data:') || t.cover.startsWith('blob:')))
+        ? { ...t, cover: '' } : t
+    );
+    localStorage.setItem('velocity.meta', JSON.stringify(arr));
+  } catch {}
 }
 
 // Invalidación de caché: si subimos la versión, descartamos metadata/feed viejos

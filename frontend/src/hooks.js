@@ -1,7 +1,25 @@
 // ═══════════════════════════════════════════════════════════════
 // Hooks reutilizables.
 // ═══════════════════════════════════════════════════════════════
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+
+// Swipe horizontal (siguiente/anterior). Devuelve handlers táctiles y un ref
+// `moved` para suprimir el click si hubo deslizamiento.
+export function useHSwipe({ onLeft, onRight, threshold = 55 } = {}) {
+  const sx = useRef(0), sy = useRef(0), active = useRef(false), moved = useRef(false);
+  const onTouchStart = (e) => { const t = e.touches[0]; sx.current = t.clientX; sy.current = t.clientY; active.current = true; moved.current = false; };
+  const onTouchMove = (e) => {
+    if (!active.current) return;
+    const t = e.touches[0], dx = t.clientX - sx.current, dy = t.clientY - sy.current;
+    if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.3) moved.current = true;
+  };
+  const onTouchEnd = (e) => {
+    if (!active.current) return; active.current = false;
+    const t = e.changedTouches[0], dx = t.clientX - sx.current, dy = t.clientY - sy.current;
+    if (Math.abs(dx) > threshold && Math.abs(dx) > Math.abs(dy) * 1.3) { dx < 0 ? onLeft?.() : onRight?.(); }
+  };
+  return { moved, handlers: { onTouchStart, onTouchMove, onTouchEnd } };
+}
 
 // Estado persistido en localStorage.
 export function usePersisted(key, def) {
@@ -35,7 +53,8 @@ export function useDominantColor(src) {
     if (!src || src.startsWith('data:')) { setColor(null); return; }
     let cancelled = false;
     const img = new Image();
-    img.crossOrigin = 'anonymous';
+    // Servimos por nuestro proxy (mismo origen) → el canvas no queda "tainted"
+    // y podemos leer los píxeles sin CORS. No necesita crossOrigin.
     img.onload = () => {
       if (cancelled) return;
       try {

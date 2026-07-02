@@ -1,7 +1,7 @@
 // ═══════════════════════════════════════════════════════════════
 // Componentes presentacionales reutilizables.
 // ═══════════════════════════════════════════════════════════════
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Icon } from './Icons.jsx';
 import { hex2rgba, grad, hiResCover } from './helpers.js';
 import { FALLBACK_COVER } from './constants.js';
@@ -86,10 +86,10 @@ export const SectionHeader = ({ label, accent, action }) => (
   </div>
 );
 
-export function TrackRow({ track, active, playing, T, onClick, onFav, faved, onAdd, onRemove, onMenu, downloaded, downloading, selecting, selected, onSelect, onSwipeQueue }) {
+export function TrackRow({ track, active, playing, T, onClick, onFav, faved, onAdd, onRemove, onMenu, downloaded, downloading, selecting, selected, onSelect, onSwipeQueue, onSwipeRemove }) {
   const [dragX, setDragX] = useState(0);
   const sx = useRef(0), sy = useRef(0), swiping = useRef(false), moved = useRef(false);
-  const canSwipe = !!onSwipeQueue && !selecting;
+  const canSwipe = (!!onSwipeQueue || !!onSwipeRemove) && !selecting;
   const onTouchStart = (e) => { if (!canSwipe) return; sx.current = e.touches[0].clientX; sy.current = e.touches[0].clientY; swiping.current = false; moved.current = false; };
   const onTouchMove = (e) => {
     if (!canSwipe) return;
@@ -99,15 +99,18 @@ export function TrackRow({ track, active, playing, T, onClick, onFav, faved, onA
   };
   const onTouchEnd = () => {
     if (!canSwipe) return;
-    if (swiping.current && Math.abs(dragX) > 64) onSwipeQueue(track.id);
+    if (swiping.current && dragX > 64 && onSwipeQueue) onSwipeQueue(track.id);
+    else if (swiping.current && dragX < -64 && onSwipeRemove) onSwipeRemove(track.id);
     setDragX(0); swiping.current = false;
   };
   const handleClick = selecting ? () => onSelect(track.id) : (e) => { if (moved.current) { moved.current = false; return; } onClick && onClick(e); };
   return (
     <div style={{ position:'relative', borderRadius:16, overflow:'hidden' }}>
       {canSwipe && dragX !== 0 && (
-        <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent: dragX > 0 ? 'flex-start' : 'flex-end', padding:'0 22px', background: hex2rgba(T.accent, .16), borderRadius:16 }}>
-          <span style={{ display:'flex', alignItems:'center', gap:6, color:T.accent, fontSize:11, fontWeight:800 }}><Icon.Queue c={T.accent} sz={16} /> A la cola</span>
+        <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent: dragX > 0 ? 'flex-start' : 'flex-end', padding:'0 22px', background: dragX > 0 ? hex2rgba(T.accent, .16) : hex2rgba('#fb7185', .16), borderRadius:16 }}>
+          {dragX > 0
+            ? <span style={{ display:'flex', alignItems:'center', gap:6, color:T.accent, fontSize:11, fontWeight:800 }}><Icon.Queue c={T.accent} sz={16} /> A la cola</span>
+            : <span style={{ display:'flex', alignItems:'center', gap:6, color:'#fb7185', fontSize:11, fontWeight:800 }}><Icon.Trash c="#fb7185" sz={16} /> Quitar</span>}
         </div>
       )}
       <div onClick={handleClick} onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd} className="card-hover" style={{
@@ -223,6 +226,30 @@ export function ToggleRow({ label, desc, on, onToggle, T }) {
       <button aria-label={label} role="switch" aria-checked={on} onClick={onToggle} className="press" style={{ width:46, height:26, borderRadius:99, flexShrink:0, cursor:'pointer', position:'relative', background: on ? grad(T) : 'var(--surf-2)', border:'none', boxShadow: on ? `0 0 12px ${hex2rgba(T.accent,.5)}` : 'none', transition:'background .25s' }}>
         <div style={{ position:'absolute', top:3, left: on ? 23 : 3, width:20, height:20, borderRadius:'50%', background:'#fff', transition:'left .25s cubic-bezier(.22,1,.36,1)', boxShadow:'0 2px 5px #0007' }} />
       </button>
+    </div>
+  );
+}
+
+// Campo de selección de color con input nativo + valor hex editable.
+export function ColorField({ label, value, onChange, hint }) {
+  const [text, setText] = useState(value || '#000000');
+  // Sincronizar texto si el valor externo cambia (ej. al cambiar paleta activa).
+  useEffect(() => { setText(value || '#000000'); }, [value]);
+  const commit = (v) => { if (/^#[0-9a-fA-F]{6}$/.test(v)) onChange(v); };
+  return (
+    <div>
+      <div style={{ fontSize:10.5, fontWeight:800, color:'var(--txt-2)', textTransform:'uppercase', letterSpacing:1, marginBottom:6 }}>{label}</div>
+      <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+        <div style={{ position:'relative', flexShrink:0 }}>
+          <div style={{ width:40, height:40, borderRadius:11, background:(/^#[0-9a-fA-F]{6}$/.test(text) ? text : value), border:'1px solid var(--line)', boxShadow:`0 2px 10px ${hex2rgba(/^#[0-9a-fA-F]{6}$/.test(text)?text:value,.5)}` }} />
+          <input type="color" value={/^#[0-9a-fA-F]{6}$/.test(text)?text:value} onChange={e => { setText(e.target.value); onChange(e.target.value); }} style={{ position:'absolute', inset:0, opacity:0, cursor:'pointer', width:'100%', height:'100%' }} aria-label={label} />
+        </div>
+        <input type="text" value={text} maxLength={7}
+          onChange={e => { const v = e.target.value; setText(v); commit(v); }}
+          onBlur={e => { const v = e.target.value; if (!/^#[0-9a-fA-F]{6}$/.test(v)) setText(value||'#000000'); }}
+          style={{ flex:1, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:11, padding:'9px 12px', fontSize:13, color:'var(--txt-0)', fontFamily:'monospace', outline:'none', letterSpacing:1 }} />
+      </div>
+      {hint && <div style={{ fontSize:10, color:'var(--txt-2)', marginTop:6, lineHeight:1.5 }}>{hint}</div>}
     </div>
   );
 }

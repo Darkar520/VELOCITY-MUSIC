@@ -21,12 +21,74 @@ function openDB() {
 
 export async function saveTrack(meta, blob) {
   const db = await openDB();
-  return new Promise((resolve, reject) => {
+  // Cachear la carátula como data URL (vía proxy mismo-origen) para verla sin
+  // conexión. Best-effort: si falla, se guarda la meta con su URL original.
+  let m = meta;
+  try {
+    const dataUrl = await coverToDataUrl(meta && meta.cover);
+    if (dataUrl && dataUrl.startsWith('data:')) m = { ...meta, cover: dataUrl };
+  } catch {}
+  await new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite');
-    tx.objectStore(STORE).put({ id: meta.id, meta, blob, at: Date.now() });
+    tx.objectStore(STORE).put({ id: m.id, meta: m, blob, at: Date.now() });
     tx.oncomplete = () => resolve(true);
     tx.onerror = () => reject(tx.error);
   });
+  return m;
+}
+
+// Descarga la carátula (a través del proxy /img del mismo origen, que evita
+// problemas de CORS) y la convierte a data URL a resolución media.
+async function coverToDataUrl(coverUrl) {
+  if (!coverUrl || typeof coverUrl !== 'string' || coverUrl.startsWith('data:')) return coverUrl || null;
+  try {
+    const medium = coverUrl
+      .replace(/=w\d+-h\d+/, '=w544-h544')
+      .replace(/=s\d+/, '=s544')
+      .replace(/(\d+)x(\d+)bb\.(jpg|png)/i, '544x544bb.$3');
+    const r = await fetch('/img?u=' + encodeURIComponent(medium));
+    if (!r.ok) return null;
+    const blob = await r.blob();
+    if (!blob.type.startsWith('image/')) return null;
+    return await new Promise((resolve) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result);
+      fr.onerror = () => resolve(null);
+      fr.readAsDataURL(blob);
+    });
+  } catch { return null; }
+}
+
+// Rellena las carátulas (data URL) de descargas antiguas que aún tengan URL
+// remota. Se ejecuta una vez al iniciar con conexión. Devuelve las metas
+// actualizadas para refrescar la interfaz. Secuencial para no saturar la red.
+export async function backfillCovers() {
+  const db = await openDB();
+  const records = await new Promise((resolve) => {
+    const tx = db.transaction(STORE, 'readonly');
+    const rq = tx.objectStore(STORE).getAll();
+    rq.onsuccess = () => resolve(rq.result || []);
+    rq.onerror = () => resolve([]);
+  });
+  const updated = [];
+  for (const rec of records) {
+    if (!rec || !rec.meta) continue;
+    const cover = rec.meta.cover;
+    if (cover && typeof cover === 'string' && !cover.startsWith('data:')) {
+      const dataUrl = await coverToDataUrl(cover);
+      if (dataUrl && dataUrl.startsWith('data:')) {
+        rec.meta = { ...rec.meta, cover: dataUrl };
+        await new Promise((resolve) => {
+          const tx = db.transaction(STORE, 'readwrite');
+          tx.objectStore(STORE).put(rec);
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => resolve();
+        });
+        updated.push(rec.meta);
+      }
+    }
+  }
+  return updated;
 }
 
 export async function getRecord(id) {

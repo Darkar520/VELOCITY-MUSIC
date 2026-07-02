@@ -65,6 +65,18 @@ export const THEMES = {
   gold:    { name:'Oro',       accent:'#eab308', accent2:'#f59e0b' },
   ice:     { name:'Hielo',     accent:'#7dd3fc', accent2:'#e0f2fe' },
 
+  // ── Neón intenso (colores saturados que "brillan" sobre el fondo oscuro) ──
+  neonLime:   { name:'Neón Lima',    accent:'#39ff14', accent2:'#00ffa3' },
+  neonMagenta:{ name:'Neón Magenta', accent:'#ff10f0', accent2:'#ff5fd2' },
+  neonCyan:   { name:'Neón Cian',    accent:'#00fff7', accent2:'#18e0ff' },
+  neonPurple: { name:'Neón Púrpura', accent:'#b026ff', accent2:'#e000ff' },
+  neonOrange: { name:'Neón Fuego',   accent:'#ff6a00', accent2:'#ff2e00' },
+  neonPink:   { name:'Neón Rosa',    accent:'#ff2e88', accent2:'#ff0059' },
+  neonBlue:   { name:'Neón Azul',    accent:'#2d5bff', accent2:'#00d4ff' },
+  neonYellow: { name:'Neón Ácido',   accent:'#eaff00', accent2:'#aaff00' },
+  neonRed:    { name:'Neón Láser',   accent:'#ff073a', accent2:'#ff2e63' },
+  neonTeal:   { name:'Neón Menta',   accent:'#00ffc8', accent2:'#00e0ff' },
+
   // ── Skins completos (cambian todo el aspecto) ──
   matrix: {
     name:'Matrix', accent:'#22ff88', accent2:'#00cc66',
@@ -108,19 +120,79 @@ export const THEMES = {
   },
 };
 
-// Búsquedas semilla para poblar el inicio (no hay endpoint de catálogo/charts).
+// Búsquedas semilla para poblar la sección "Descubre" (rotan dinámicamente).
 export const SEED_ROWS = [
   { label:'Tendencias',        q:'top hits 2024' },
   { label:'Pop en Español',    q:'pop español' },
   { label:'Lo-Fi para Concentrarse', q:'lofi beats' },
   { label:'Rock Clásico',      q:'classic rock' },
   { label:'Electrónica',       q:'electronic dance' },
+  { label:'Virales Ahora',     q:'viral songs' },
+  { label:'En Ascenso',        q:'rising hits' },
+  { label:'Indie Fresco',      q:'indie fresh' },
+  { label:'Acústico',          q:'acoustic sessions' },
+  { label:'Covers',            q:'best covers' },
+  { label:'En Vivo',           q:'live performances' },
+  { label:'Bandas Sonoras',    q:'movie soundtracks' },
+  { label:'Joyas Ocultas',     q:'underrated songs' },
+  { label:'Éxitos Globales',   q:'global top songs' },
+  { label:'Remixes',           q:'best remixes' },
 ];
 
 export const GENRES = [
-  { label:'Reggaetón', color:'#a78bfa', q:'reggaeton' }, { label:'Pop', color:'#fb7185', q:'pop hits' },
-  { label:'Lo-Fi', color:'#fbbf24', q:'lofi' },          { label:'Rock', color:'#38bdf8', q:'rock' },
-  { label:'Hip-Hop', color:'#10d9a0', q:'hip hop' },     { label:'Electrónica', color:'#818cf8', q:'electronic' },
+  { label:'Reggaetón', color:'#a78bfa', q:'reggaeton' },   { label:'Pop', color:'#fb7185', q:'pop hits' },
+  { label:'Lo-Fi', color:'#fbbf24', q:'lofi' },            { label:'Rock', color:'#38bdf8', q:'rock' },
+  { label:'Hip-Hop', color:'#10d9a0', q:'hip hop' },       { label:'Electrónica', color:'#818cf8', q:'electronic' },
+  { label:'Indie', color:'#f472b6', q:'indie' },           { label:'R&B', color:'#c084fc', q:'r&b soul' },
+  { label:'Jazz', color:'#fbbf24', q:'jazz' },             { label:'Salsa', color:'#fb923c', q:'salsa' },
+  { label:'Trap', color:'#a3e635', q:'trap music' },       { label:'K-Pop', color:'#f9a8d4', q:'kpop' },
+  { label:'Metal', color:'#94a3b8', q:'metal' },           { label:'Reggae', color:'#4ade80', q:'reggae' },
+  { label:'Funk', color:'#facc15', q:'funk' },             { label:'House', color:'#22d3ee', q:'house music' },
+  { label:'Clásica', color:'#e2e8f0', q:'classical music' },{ label:'Bachata', color:'#fca5a5', q:'bachata' },
+];
+
+// Mixes por estado de ánimo / momento (se muestrean aleatoriamente cada vez).
+export const MOODS = [
+  { label:'Chill',          q:'chill music' },
+  { label:'Sad',            q:'sad songs' },
+  { label:'Synthwave',      q:'synthwave' },
+  { label:'Buen Rollo',     q:'feel good music' },
+  { label:'Fiesta',         q:'party hits' },
+  { label:'Concentración',  q:'deep focus music' },
+  { label:'Romántico',      q:'love songs' },
+  { label:'Entrenamiento',  q:'workout music' },
+  { label:'Para Dormir',    q:'calm sleep music' },
+  { label:'Nostalgia',      q:'throwback hits' },
+  { label:'Lluvia',         q:'rainy day music' },
+  { label:'Café',           q:'coffee shop music' },
+  { label:'Carretera',      q:'road trip songs' },
+  { label:'Verano',         q:'summer hits' },
+  { label:'Melancolía',     q:'melancholic songs' },
+  { label:'Energía',        q:'high energy music' },
+  { label:'Relax',          q:'relaxing music' },
+  { label:'Motivación',     q:'motivation music' },
+  { label:'Domingo',        q:'sunday chill' },
+  { label:'Madrugada',      q:'late night vibes' },
+  { label:'Desamor',        q:'heartbreak songs' },
+  { label:'Bailar',         q:'dance hits' },
+  { label:'Retro',          q:'retro classics' },
+  { label:'Estudiar',       q:'study music' },
+];
+
+// Épocas / décadas (se muestrean aleatoriamente en "Viaja en el tiempo").
+export const ERAS = [
+  { label:'Éxitos 2020s',        q:'top hits 2023' },
+  { label:'Lo mejor de los 2010s', q:'best songs 2010s' },
+  { label:'Clásicos de los 2000s', q:'top hits 2000s' },
+  { label:'Rock de los 90',      q:'best rock 90s' },
+  { label:'Éxitos de los 80',    q:'greatest hits 80s' },
+  { label:'Disco de los 70',     q:'70s disco hits' },
+  { label:'Grunge de los 90',    q:'90s grunge' },
+  { label:'Pop Y2K',             q:'y2k pop hits' },
+  { label:'Oldies de los 60',    q:'60s oldies' },
+  { label:'Latinos Clásicos',    q:'latin classics' },
+  { label:'Pop 2010s',           q:'2010s pop hits' },
+  { label:'Baladas de Antaño',   q:'classic ballads' },
 ];
 
 export const FALLBACK_COVER = 'data:image/svg+xml;utf8,' + encodeURIComponent(

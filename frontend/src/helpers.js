@@ -70,3 +70,24 @@ export function parseLRC(s) {
   }
   return out.sort((a, b) => a.t - b.t);
 }
+
+// Genera variables de superficie OSCURAS tintadas con un color, mezclándolo
+// dentro del negro base a baja intensidad. Mantiene el texto claro (no se
+// sobrescribe) para garantizar contraste/legibilidad con cualquier tinte.
+export function tintedVars(tintHex) {
+  if (!tintHex || typeof tintHex !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(tintHex)) return {};
+  const toRGB = (h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+  const toHex = (r, g, b) => '#' + [r, g, b].map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('');
+  const tint = toRGB(tintHex);
+  const mix = (baseHex, ratio) => {
+    const b = toRGB(baseHex);
+    return toHex(b[0] + (tint[0] - b[0]) * ratio, b[1] + (tint[1] - b[1]) * ratio, b[2] + (tint[2] - b[2]) * ratio);
+  };
+  return {
+    '--bg-0':   mix('#04060a', 0.10),
+    '--bg-1':   mix('#080c12', 0.13),
+    '--surf-0': mix('#0b0f16', 0.16),
+    '--surf-1': mix('#10151e', 0.18),
+    '--surf-2': mix('#161c27', 0.22),
+  };
+}

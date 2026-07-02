@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { api, isAuthed, setOnUnauthorized } from './api.js';
 import * as offline from './offline.js';
-import { CSS, THEMES, SEED_ROWS, GENRES, FALLBACK_COVER, BASE_VARS } from './constants.js';
-import { fmt, hex2rgba, grad, hiResCover, dedupeByTitle, capPerArtist, slimTrack, parseLRC } from './helpers.js';
+import { CSS, THEMES, SEED_ROWS, GENRES, MOODS, ERAS, FALLBACK_COVER, BASE_VARS } from './constants.js';
+import { fmt, hex2rgba, grad, hiResCover, dedupeByTitle, capPerArtist, slimTrack, parseLRC, tintedVars } from './helpers.js';
 import { cacheTrack, cacheTracks, trackById, allCached, loadMeta, loadPlayerState, saveMeta, normalizeTrack } from './catalog.js';
-import { usePersisted, useViewport, useDominantColor } from './hooks.js';
+import { usePersisted, useViewport, useDominantColor, useHSwipe } from './hooks.js';
 import { Icon } from './Icons.jsx';
-import { EQViz, Spinner, ProgressRing, DownloadAllButton, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider, SettingCard, ToggleRow } from './components.jsx';
+import { EQViz, Spinner, ProgressRing, DownloadAllButton, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider, SettingCard, ToggleRow, ColorField } from './components.jsx';
 
 
 // ═══════════════════════════════════════════════════════════════
@@ -19,6 +19,19 @@ function AuthScreen({ onAuthed, T }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [okMsg, setOkMsg] = useState('');
+  const [googleClientId, setGoogleClientId] = useState('');
+  useEffect(() => { api.authConfig().then(cfg => setGoogleClientId((cfg && cfg.googleClientId) || '')).catch(() => {}); }, []);
+  const googleLogin = () => {
+    if (!googleClientId) return;
+    setBusy(true); setErr('');
+    const redirect = window.location.origin + '/auth/google/callback';
+    const url = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=' + encodeURIComponent(googleClientId) + '&redirect_uri=' + encodeURIComponent(redirect) + '&response_type=id_token&scope=openid%20email%20profile&nonce=' + Date.now();
+    const w = 480, h = 600, left = (screen.width - w) / 2, top2 = (screen.height - h) / 2;
+    const popup = window.open(url, 'google-login', 'width=' + w + ',height=' + h + ',top=' + top2 + ',left=' + left);
+    const onMsg = async (e) => { if (!e.data || !e.data.idToken) return; window.removeEventListener('message', onMsg); try { const data = await api.googleLogin(e.data.idToken); onAuthed(data.email || ''); } catch (err2) { setErr(err2.message || 'No se pudo iniciar con Google.'); setBusy(false); } };
+    window.addEventListener('message', onMsg);
+    const check = setInterval(() => { if (popup && popup.closed) { clearInterval(check); window.removeEventListener('message', onMsg); setBusy(false); } }, 500);
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -63,6 +76,14 @@ function AuthScreen({ onAuthed, T }) {
           </button>
         </form>
 
+        {googleClientId && (<>
+          <div style={{ display:'flex', alignItems:'center', gap:10, margin:'18px 0 16px' }}><div style={{ flex:1, height:1, background:'var(--line)' }} /><span style={{ fontSize:11, color:'var(--txt-2)', fontWeight:700 }}>o</span><div style={{ flex:1, height:1, background:'var(--line)' }} /></div>
+          <button onClick={googleLogin} disabled={busy} className="btn-tap" style={{ width:'100%', display:'flex', alignItems:'center', justifyContent:'center', gap:10, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:14, padding:'12px 0', cursor:'pointer', opacity: busy?.7:1 }}>
+            <svg width="18" height="18" viewBox="0 0 24 24"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A10.99 10.99 0 0012 23z" fill="#34A853"/><path d="M5.84 14.09a6.6 6.6 0 010-4.18V7.07H2.18a10.99 10.99 0 000 9.86l3.66-2.84z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15A10.98 10.98 0 0012 1 10.99 10.99 0 002.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
+            <span style={{ fontSize:13, fontWeight:700, color:'var(--txt-0)' }}>Continuar con Google</span>
+          </button>
+        </>)}
+
         <div style={{ textAlign:'center', marginTop:20, fontSize:12.5, color:'var(--txt-2)' }}>
           {mode==='login' ? '¿No tienes cuenta?' : '¿Ya tienes cuenta?'}{' '}
           <button onClick={() => { setMode(mode==='login'?'register':'login'); setErr(''); }} style={{ background:'none', border:'none', cursor:'pointer', color:T.accent, fontWeight:800, fontSize:12.5 }}>
@@ -75,10 +96,41 @@ function AuthScreen({ onAuthed, T }) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// WRAPPED VIEW
+// ═══════════════════════════════════════════════════════════════
+function WrappedView({ ctx }) {
+  const { T, favs, setView, play, playStats } = ctx;
+  const stats = playStats || {};
+  const favSet = new Set(favs || []);
+  const entries = Object.entries(stats).map(([id, v]) => ({ id, ...v }));
+  const totalPlays = entries.reduce((s, e) => s + (e.count || 0), 0);
+  const topTracks = entries.slice().sort((a, b) => (b.count || 0) - (a.count || 0)).slice(0, 5);
+  const artistAgg = {};
+  entries.forEach(e => { const a = e.artist || '?'; if (!artistAgg[a]) artistAgg[a] = { plays: 0, tracks: 0, cover: e.cover }; artistAgg[a].plays += e.count || 0; artistAgg[a].tracks += 1; if (!artistAgg[a].cover) artistAgg[a].cover = e.cover; });
+  const topArtists = Object.entries(artistAgg).sort((a, b) => b[1].plays - a[1].plays).slice(0, 5);
+  const totalMin = Math.round(entries.reduce((s, e) => s + ((e.durationSeconds || 0) * (e.count || 0)), 0) / 60);
+  const stat = (n, l) => (<div style={{ flex:1, background:'var(--surf-0)', border:'1px solid var(--line-soft)', borderRadius:18, padding:'16px 10px', textAlign:'center' }}><div style={{ fontSize:26, fontWeight:900, background:grad(T), WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent', lineHeight:1 }}>{n}</div><div style={{ fontSize:9.5, color:'var(--txt-2)', fontWeight:800, letterSpacing:.8, textTransform:'uppercase', marginTop:6 }}>{l}</div></div>);
+  return (
+    <div className="fade-up" style={{ paddingBottom:8 }}>
+      <button onClick={() => setView(null)} className="press" style={{ display:'flex', alignItems:'center', gap:6, background:'none', border:'none', cursor:'pointer', color:'var(--txt-1)', marginBottom:16, paddingTop:4, fontSize:13, fontWeight:700 }}><Icon.ChevL c="var(--txt-1)" sz={18} /> Atras</button>
+      <div style={{ position:'relative', overflow:'hidden', borderRadius:26, padding:'28px 22px', marginBottom:18, background:`linear-gradient(135deg, ${T.accent}, ${T.accent2})`, color:'#04060a', boxShadow:`0 20px 48px ${hex2rgba(T.accent,.45)}` }}>
+        <div style={{ position:'absolute', top:-40, right:-30, width:150, height:150, borderRadius:'50%', background:'#ffffff55', filter:'blur(44px)', pointerEvents:'none' }} />
+        <div style={{ position:'relative' }}><div style={{ fontSize:10.5, fontWeight:900, letterSpacing:2.5, textTransform:'uppercase', opacity:.8 }}>Velocity</div><div style={{ fontSize:30, fontWeight:900, letterSpacing:-.8, marginTop:3, lineHeight:1 }}>Wrapped</div><div style={{ fontSize:12, fontWeight:700, opacity:.85, marginTop:9 }}>Todo lo que has escuchado.</div></div>
+      </div>
+      <div style={{ display:'flex', gap:10, marginBottom:22 }}>{stat(totalPlays, 'Reproducciones')}{stat(entries.length, 'Canciones')}{stat(totalMin > 0 ? totalMin : '—', 'Minutos')}</div>
+      {topArtists.length > 0 && (<><SectionHeader label="Tus Artistas Top" accent={T.accent} /><div style={{ display:'flex', flexDirection:'column', gap:6, marginBottom:22 }}>{topArtists.map(([a, info], i) => (<div key={a} style={{ display:'flex', alignItems:'center', gap:14, padding:'9px 12px', borderRadius:16, background:'var(--surf-0)', border:'1px solid var(--line-soft)' }}><div style={{ fontSize:17, fontWeight:900, color:T.accent, width:20, textAlign:'center' }}>{i+1}</div>{info.cover ? <CoverImg src={info.cover} alt="" radius={99} style={{ width:44, height:44, flexShrink:0 }} /> : <div style={{ width:44, height:44, borderRadius:'50%', background:grad(T), display:'flex', alignItems:'center', justifyContent:'center', fontWeight:900, color:'#04060a', flexShrink:0 }}>{(a[0]||'?').toUpperCase()}</div>}<div style={{ minWidth:0, flex:1 }}><div style={{ fontSize:14, fontWeight:800, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{a}</div><div style={{ fontSize:10, color:'var(--txt-2)', fontWeight:700, marginTop:2 }}>{info.plays} reproducciones</div></div></div>))}</div></>)}
+      {topTracks.length > 0 && (<><SectionHeader label="Tus Canciones Top" accent={T.accent} /><div style={{ display:'flex', flexDirection:'column', gap:6 }}>{topTracks.map((t, i) => (<div key={t.id} onClick={() => play(t, topTracks.map(x => x.id))} className="card-hover" style={{ display:'flex', alignItems:'center', gap:14, padding:'8px 12px', borderRadius:16, cursor:'pointer', background:'var(--surf-0)', border:'1px solid var(--line-soft)' }}><div style={{ fontSize:17, fontWeight:900, color:T.accent, width:20, textAlign:'center' }}>{i+1}</div><CoverImg src={t.cover} alt="" radius={11} style={{ width:44, height:44, flexShrink:0 }} /><div style={{ minWidth:0, flex:1 }}><div style={{ fontSize:13.5, fontWeight:700, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{t.title}</div><div style={{ fontSize:11, color:'var(--txt-2)', marginTop:2 }}>{t.artist}</div></div><span style={{ fontSize:9.5, fontWeight:800, color:T.accent, flexShrink:0 }}>{t.count}x</span></div>))}</div></>)}
+      {entries.length === 0 && <div style={{ textAlign:'center', color:'var(--txt-2)', fontSize:13, paddingTop:30 }}>Reproduce musica y aqui veras tu Wrapped.</div>}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
 // HOME TAB
 // ═══════════════════════════════════════════════════════════════
 function HomeTab({ ctx }) {
-  const { track, playing, play, T, recent, homeRows, homeLoading, favs, toggleFav, onMenu, goMix } = ctx;
+  const { track, playing, play, T, recent, homeRows, homeLoading, favs, toggleFav, onMenu, goMix, startAiDj } = ctx;
+  const [djBusy, setDjBusy] = useState(false);
   const recentTracks = dedupeByTitle(recent.map(trackById).filter(Boolean));
   const recentIds = recentTracks.map(t => t.id);
   const hour = new Date().getHours();
@@ -91,7 +143,10 @@ function HomeTab({ ctx }) {
           <div style={{ fontSize:24, fontWeight:900, color:'var(--txt-0)', letterSpacing:-.6 }}>{greet}</div>
           <div style={{ fontSize:12.5, color:'var(--txt-2)', marginTop:4 }}>¿Qué quieres escuchar hoy?</div>
         </div>
-        <div className="press" style={{ width:40, height:40, borderRadius:'50%', background:grad(T), display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, fontWeight:900, color:'#04060a', flexShrink:0, boxShadow:`0 4px 16px ${hex2rgba(T.accent,.5)}` }}>{(ctx.email||'V')[0].toUpperCase()}</div>
+        <div style={{ display:'flex', alignItems:'center', gap:9, flexShrink:0 }}>
+          <button aria-label="AI DJ" onClick={async () => { if (djBusy) return; setDjBusy(true); try { await startAiDj?.(); } finally { setDjBusy(false); } }} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:6, background:'var(--surf-1)', border:`1px solid ${hex2rgba(T.accent,.35)}`, borderRadius:99, padding:'7px 13px', cursor:'pointer', color:T.accent, fontSize:11, fontWeight:800 }}>{djBusy ? <Spinner c={T.accent} sz={13} /> : <Icon.Play c={T.accent} sz={13} />} AI DJ</button>
+          <div className="press" style={{ width:40, height:40, borderRadius:'50%', background:grad(T), display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, fontWeight:900, color:'#04060a', boxShadow:`0 4px 16px ${hex2rgba(T.accent,.5)}` }}>{(ctx.email||'V')[0].toUpperCase()}</div>
+        </div>
       </div>
 
       {track && (
@@ -142,7 +197,7 @@ function HomeTab({ ctx }) {
 // SEARCH TAB
 // ═══════════════════════════════════════════════════════════════
 function SearchTab({ ctx }) {
-  const { track, playing, play, T, favs, toggleFav, addToTarget, onMenu, recentSearches, addSearch, removeSearch, downloaded, downloading, goArtist, goAlbum, selecting, selection, toggleSelect, startSelection, addToQueue } = ctx;
+  const { track, playing, play, T, favs, toggleFav, addToTarget, onMenu, recentSearches, addSearch, removeSearch, downloaded, downloading, goArtist, goAlbum, selecting, selection, toggleSelect, startSelection, addToQueue, removeFromQueue } = ctx;
   const [q, setQ] = useState('');
   const [res, setRes] = useState({ songs: [], albums: [], artists: [] });
   const [loading, setLoading] = useState(false);
@@ -212,7 +267,7 @@ function SearchTab({ ctx }) {
           {res.songs.length > 0 && (<>
             <SectionHeader label="Canciones" accent={T.accent} action={!selecting && <button onClick={() => startSelection()} className="press" style={{ background:'none', border:'none', cursor:'pointer', color:T.accent, fontSize:11.5, fontWeight:800 }}>Seleccionar</button>} />
             <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-              {res.songs.map(t => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => { play(t, [t.id], { radio: true }); addSearch(q.trim()); }} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
+              {res.songs.map(t => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => { play(t, [t.id], { radio: true }); addSearch(q.trim()); }} onSwipeRemove={removeFromQueue} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
             </div>
           </>)}
         </>
@@ -252,7 +307,7 @@ function SearchTab({ ctx }) {
 // ═══════════════════════════════════════════════════════════════
 function LibraryTab({ ctx }) {
   const { track, playing, play, T, favs, toggleFav, playlists, createPlaylist,
-          removeFromPlaylist, deletePlaylist, openPlaylist, setOpenPlaylist, addToTarget, onMenu, downloaded, downloading, downloadMany, savedAlbums, goAlbum, selecting, selection, toggleSelect, startSelection, hydrateTracks, addToQueue } = ctx;
+          removeFromPlaylist, deletePlaylist, openPlaylist, setOpenPlaylist, addToTarget, onMenu, downloaded, downloading, downloadMany, savedAlbums, goAlbum, selecting, selection, toggleSelect, startSelection, hydrateTracks, addToQueue, removeFromQueue } = ctx;
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
 
@@ -297,7 +352,7 @@ function LibraryTab({ ctx }) {
                 onFav={toggleFav} faved={favs.includes(t.id)} onMenu={onMenu}
                 downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)}
                 selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect}
-                onRemove={isLiked ? undefined : (id => removeFromPlaylist(pl.id, id))} onSwipeQueue={addToQueue} />
+                onRemove={isLiked ? undefined : (id => removeFromPlaylist(pl.id, id))} onSwipeQueue={addToQueue} onSwipeRemove={removeFromQueue} />
             ))}
           </div>
         )}
@@ -358,7 +413,8 @@ function LibraryTab({ ctx }) {
 function ProfileTab({ ctx }) {
   const { T, themeKey, setThemeKey, quality, setQuality, glow, setGlow, eq, setEq,
           settings, setSettings, favs, setOpenPlaylist, setTab, email, onLogout,
-          installApp, canInstall, isIOS, isStandalone } = ctx;
+          installApp, canInstall, isIOS, isStandalone, goWrapped,
+          customPalettes, activeCustomId, setActiveCustomId, activePalette, addPalette, updatePalette, deletePalette } = ctx;
   const set = (k, v) => setSettings(s => ({ ...s, [k]: v }));
 
   return (
@@ -374,6 +430,11 @@ function ProfileTab({ ctx }) {
         </div>
       </div>
 
+      <button onClick={() => goWrapped?.()} className="btn-tap" style={{ width:'100%', position:'relative', overflow:'hidden', textAlign:'left', cursor:'pointer', borderRadius:20, padding:'16px 18px', marginBottom:14, background:`linear-gradient(135deg, ${T.accent}, ${T.accent2})`, color:'#04060a', border:'none', boxShadow:`0 12px 30px ${hex2rgba(T.accent,.4)}` }}>
+        <div style={{ position:'absolute', top:-30, right:-20, width:110, height:110, borderRadius:'50%', background:'#ffffff55', filter:'blur(38px)', pointerEvents:'none' }} />
+        <div style={{ position:'relative' }}><div style={{ fontSize:9, fontWeight:900, letterSpacing:2, textTransform:'uppercase', opacity:.8 }}>Velocity</div><div style={{ fontSize:19, fontWeight:900, letterSpacing:-.4, marginTop:2 }}>Wrapped</div><div style={{ fontSize:11, fontWeight:700, opacity:.85, marginTop:3 }}>Tus artistas, canciones y minutos</div></div>
+      </button>
+
       <SettingCard title="Color de Acento">
         <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:9 }}>
           {Object.entries(THEMES).map(([key, th]) => (
@@ -382,7 +443,39 @@ function ProfileTab({ ctx }) {
             </button>
           ))}
         </div>
-        <div style={{ fontSize:11, color:T.accent, fontWeight:800, textAlign:'center', marginTop:11 }}>{THEMES[themeKey].name}</div>
+        <div style={{ fontSize:11, color:T.accent, fontWeight:800, textAlign:'center', marginTop:11 }}>{(THEMES[themeKey] || { name: activePalette.name || 'Personalizado' }).name}</div>
+      </SettingCard>
+
+      <SettingCard title="Paleta personalizada">
+        <div style={{ display:'flex', gap:9, overflowX:'auto', paddingBottom:4, marginBottom: themeKey==='custom' ? 14 : 0 }}>
+          {customPalettes.map(p => {
+            const act = themeKey==='custom' && p.id===activeCustomId;
+            return (
+              <button key={p.id} onClick={() => { setActiveCustomId(p.id); setThemeKey('custom'); }} className="btn-tap" style={{ flexShrink:0, display:'flex', flexDirection:'column', alignItems:'center', gap:7, width:64, padding:'10px 6px', borderRadius:15, background: act ? hex2rgba(p.accent,.16) : 'var(--surf-1)', border:`2px solid ${act ? p.accent : 'var(--line-soft)'}`, cursor:'pointer' }}>
+                <div style={{ width:30, height:30, borderRadius:'50%', background:`linear-gradient(135deg, ${p.accent}, ${p.accent2})`, boxShadow: act ? `0 0 12px ${p.accent}` : 'none' }} />
+                <span style={{ fontSize:9, fontWeight:700, color: act ? p.accent : 'var(--txt-2)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', maxWidth:56 }}>{p.name}</span>
+              </button>
+            );
+          })}
+          <button onClick={addPalette} aria-label="Nueva paleta" className="btn-tap" style={{ flexShrink:0, width:64, borderRadius:15, background:'var(--surf-1)', border:'2px dashed var(--line)', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', color:'var(--txt-2)' }}><Icon.Plus c="var(--txt-1)" sz={22} /></button>
+        </div>
+
+        {themeKey==='custom' && (
+          <div className="fade-up" style={{ display:'flex', flexDirection:'column', gap:12 }}>
+            <div>
+              <div style={{ fontSize:10.5, fontWeight:800, color:'var(--txt-2)', textTransform:'uppercase', letterSpacing:1, marginBottom:6 }}>Nombre</div>
+              <input type="text" value={activePalette.name || ''} onChange={e => updatePalette({ name: e.target.value })} placeholder="Mi paleta" style={{ width:'100%', background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:12, padding:'10px 14px', fontSize:13, color:'var(--txt-0)', outline:'none', fontFamily:'Inter,sans-serif' }} />
+            </div>
+            <ColorField label="Acento" value={activePalette.accent || '#8b5cf6'} onChange={v => updatePalette({ accent: v })} />
+            <ColorField label="Acento 2" value={activePalette.accent2 || '#ec4899'} onChange={v => updatePalette({ accent2: v })} />
+            <ColorField label="Fondo (tono)" value={activePalette.bg || '#04060a'} onChange={v => updatePalette({ bg: v })} hint="Tiñe las superficies oscuras del reproductor." />
+            <div style={{ display:'flex', gap:9, alignItems:'center', marginTop:2 }}>
+              <div style={{ flex:1, height:56, borderRadius:14, background:`linear-gradient(135deg, ${activePalette.accent||'#8b5cf6'}, ${activePalette.accent2||'#ec4899'})`, boxShadow:`0 6px 20px ${hex2rgba(activePalette.accent||'#8b5cf6',.4)}`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, fontWeight:900, color:'#04060a', letterSpacing:1 }}>VISTA PREVIA</div>
+              {activePalette.bg && <button onClick={() => updatePalette({ bg: undefined })} className="btn-tap" title="Quitar tono de fondo" style={{ height:56, padding:'0 14px', borderRadius:14, background:'var(--surf-1)', border:'1px solid var(--line)', cursor:'pointer', color:'var(--txt-1)', fontSize:11, fontWeight:700 }}>Fondo neutro</button>}
+              <button onClick={deletePalette} aria-label="Eliminar paleta" className="btn-tap" style={{ height:56, width:56, borderRadius:14, background:hex2rgba('#fb7185',.12), border:`1px solid ${hex2rgba('#fb7185',.3)}`, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}><Icon.Trash c="#fb7185" sz={19} /></button>
+            </div>
+          </div>
+        )}
       </SettingCard>
 
       <SettingCard title="Calidad de Audio">
@@ -486,6 +579,39 @@ function AddToPlaylistModal({ trackId, onClose, playlists, createPlaylist, addTo
         )}
       </div>
     </>
+  );
+}
+
+// ── Mini reproductor con swipe para cambiar canción ──
+function MiniPlayerBar({ track, playing, togglePlay, loadingAudio, T, pct, setExpanded, setMenuTarget, next, prev }) {
+  const { handlers } = useHSwipe({ onLeft: next, onRight: prev, threshold: 60 });
+  return (
+    <div {...handlers} onClick={() => setExpanded(true)} className="glass" style={{ background:`linear-gradient(135deg, ${hex2rgba(T.accent,.1)}, var(--surf-0))`, border:`1px solid ${hex2rgba(T.accent,.28)}`, borderRadius:20, padding:'10px 12px', display:'flex', alignItems:'center', gap:12, cursor:'pointer', boxShadow:`0 8px 28px ${hex2rgba(T.accent,.16)}, 0 2px 8px #0006`, position:'relative', overflow:'hidden' }}>
+      <div style={{ position:'absolute', bottom:0, left:0, height:2.5, width:`${pct}%`, background:grad(T,90), borderRadius:99, boxShadow:`0 0 8px ${T.accent}`, transition:'width .15s linear' }} />
+      <img src={track.cover} alt="" style={{ width:42, height:42, borderRadius:11, objectFit:'cover', flexShrink:0, boxShadow:'0 4px 12px #0007' }} />
+      <div style={{ flex:1, minWidth:0 }}>
+        <div style={{ fontSize:12.5, fontWeight:700, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title}</div>
+        <div style={{ fontSize:10, color:T.accent, marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.artist}</div>
+      </div>
+      <button aria-label={playing?'Pausar':'Reproducir'} onClick={e=>{ e.stopPropagation(); togglePlay(); }} className="btn-tap" style={{ background:grad(T), border:'none', borderRadius:'50%', width:36, height:36, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0, boxShadow:`0 0 14px ${hex2rgba(T.accent,.55)}` }}>{loadingAudio ? <Spinner c="#04060a" sz={18} /> : (playing ? <Icon.Pause c="#04060a" sz={20} /> : <Icon.Play c="#04060a" sz={20} />)}</button>
+      <button aria-label="Más" onClick={e=>{ e.stopPropagation(); setMenuTarget(track.id); }} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer', padding:4 }}><Icon.Dots c="var(--txt-1)" sz={19} /></button>
+    </div>
+  );
+}
+
+// ── Portada con swipe para cambiar canción ──
+function CoverSwipe({ next, prev, playing, glowF, ambientRgba, art, track, loadingAudio }) {
+  const { handlers } = useHSwipe({ onLeft: next, onRight: prev, threshold: 55 });
+  return (
+    <div style={{ position:'relative', display:'flex', justifyContent:'center', marginBottom:22, flexShrink:0 }}>
+      <div className="breathe" style={{ position:'absolute', width:`calc(${art} * 1.45)`, height:`calc(${art} * 1.45)`, borderRadius:'50%', background:`radial-gradient(circle, ${ambientRgba(.9)}, ${ambientRgba(.45)} 45%, transparent 72%)`, filter:'blur(55px)', opacity: playing ? .45 + glowF*.55 : .22, top:'50%', left:'50%', transition:'opacity .6s ease, background 1.4s ease', pointerEvents:'none' }} />
+      <div {...handlers} style={{ position:'relative', width:art, height:art, borderRadius:28, boxShadow: playing ? `0 0 ${30+glowF*70}px ${ambientRgba(.4+glowF*.4)}, 0 30px 70px #000c` : '0 30px 70px #000c', transition:'box-shadow 1.4s ease, transform .55s ease', transform: playing ? 'scale(1)' : 'scale(.97)', overflow:'hidden', flexShrink:0 }}>
+        <CoverImg src={track.cover} alt={track.title} radius={28} style={{ width:'100%', height:'100%' }} />
+        <div style={{ position:'absolute', inset:0, borderRadius:28, boxShadow:'inset 0 1px 0 #ffffff22, inset 0 0 0 1px #ffffff10', background:'linear-gradient(160deg, #ffffff14 0%, transparent 28%)', pointerEvents:'none' }} />
+        <div style={{ position:'absolute', inset:0, borderRadius:28, background:'linear-gradient(180deg, transparent 55%, #000a)', pointerEvents:'none' }} />
+        {loadingAudio && <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', background:'#0006' }}><Spinner c="#fff" sz={32} /></div>}
+      </div>
+    </div>
   );
 }
 
@@ -623,17 +749,7 @@ function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next, prev,
         </div>
 
         {!showLyrics ? (
-          <div style={{ position:'relative', display:'flex', justifyContent:'center', marginBottom:22, flexShrink:0 }}>
-            {/* Halo de ambiente: color de la portada (o del tema si no hay), intensidad ligada al brillo */}
-            <div className="breathe" style={{ position:'absolute', width:`calc(${art} * 1.45)`, height:`calc(${art} * 1.45)`, borderRadius:'50%', background:`radial-gradient(circle, ${ambientRgba(.9)}, ${ambientRgba(.45)} 45%, transparent 72%)`, filter:'blur(55px)', opacity: playing ? .45 + glowF*.55 : .22, top:'50%', left:'50%', transition:'opacity .6s ease, background 1.4s ease', pointerEvents:'none' }} />
-            <div style={{ position:'relative', width:art, height:art, borderRadius:28, boxShadow: playing ? `0 0 ${30+glowF*70}px ${ambientRgba(.4+glowF*.4)}, 0 30px 70px #000c` : '0 30px 70px #000c', transition:'box-shadow 1.4s ease, transform .55s ease', transform: playing ? 'scale(1)' : 'scale(.97)', overflow:'hidden', flexShrink:0 }}>
-              <CoverImg src={track.cover} alt={track.title} radius={28} style={{ width:'100%', height:'100%' }} />
-              {/* brillo/cristal sutil — igual que antes */}
-              <div style={{ position:'absolute', inset:0, borderRadius:28, boxShadow:'inset 0 1px 0 #ffffff22, inset 0 0 0 1px #ffffff10', background:'linear-gradient(160deg, #ffffff14 0%, transparent 28%)', pointerEvents:'none' }} />
-              <div style={{ position:'absolute', inset:0, borderRadius:28, background:'linear-gradient(180deg, transparent 55%, #000a)', pointerEvents:'none' }} />
-              {loadingAudio && <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', background:'#0006' }}><Spinner c="#fff" sz={32} /></div>}
-            </div>
-          </div>
+          <CoverSwipe next={next} prev={prev} playing={playing} glowF={glowF} ambientRgba={ambientRgba} art={art} track={track} loadingAudio={loadingAudio} />
         ) : (
           <div ref={lyricBoxRef} style={{ position:'relative', height:art, overflowY:'auto', marginBottom:22, padding:'16px 6px', textAlign:'center', flexShrink:0 }}>
             {lyricState.status === 'loading' && <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:10, paddingTop:'28%', color:'var(--txt-2)' }}><Spinner c={T.accent} sz={22} /><span style={{ fontSize:13 }}>Buscando letra…</span></div>}
@@ -709,7 +825,7 @@ function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next, prev,
 // DETAIL VIEW — artista / álbum (metadatos reales de YouTube Music)
 // ═══════════════════════════════════════════════════════════════
 function DetailView({ view, ctx }) {
-  const { T, track, playing, play, favs, toggleFav, addToTarget, onMenu, goArtist, goAlbum, setView, detailLoading, detailData, downloaded, downloading, downloadMany, isAlbumSaved, saveAlbum, unsaveAlbum, selecting, selection, toggleSelect, startSelection, addToQueue } = ctx;
+  const { T, track, playing, play, favs, toggleFav, addToTarget, onMenu, goArtist, goAlbum, setView, detailLoading, detailData, downloaded, downloading, downloadMany, isAlbumSaved, saveAlbum, unsaveAlbum, selecting, selection, toggleSelect, startSelection, addToQueue, removeFromQueue } = ctx;
   const [showAll, setShowAll] = useState(false);
   useEffect(() => { setShowAll(false); }, [view]);
   const d = detailData && detailData.type === view.type ? detailData : null;
@@ -746,7 +862,7 @@ function DetailView({ view, ctx }) {
           </div>
         )}
         <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-          {songs.map(t => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => play(t, ids)} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
+          {songs.map(t => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => play(t, ids)} onSwipeRemove={removeFromQueue} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
         </div>
       </div>
     );
@@ -783,7 +899,7 @@ function DetailView({ view, ctx }) {
             </>}
             <SectionHeader label="Canciones populares" accent={T.accent} action={!selecting && <button onClick={() => startSelection()} className="press" style={{ background:'none', border:'none', cursor:'pointer', color:T.accent, fontSize:11.5, fontWeight:800 }}>Seleccionar</button>} />
             <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-              {songs.map(t => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => play(t, all.map(s=>s.id))} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
+              {songs.map(t => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => play(t, all.map(s=>s.id))} onSwipeRemove={removeFromQueue} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
             </div>
             {!showAll && all.length > 25 && (
               <button onClick={() => setShowAll(true)} className="press" style={{ display:'block', margin:'16px auto 0', background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:99, padding:'10px 22px', cursor:'pointer', color:'var(--txt-0)', fontSize:12.5, fontWeight:700 }}>Ver más canciones</button>
@@ -830,7 +946,7 @@ function DetailView({ view, ctx }) {
             </div>
           )}
           <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-            {songs.map((t, i) => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => play(t, songs.map(s=>s.id))} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
+            {songs.map((t, i) => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => play(t, songs.map(s=>s.id))} onSwipeRemove={removeFromQueue} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
           </div>
         </>
       )}
@@ -1016,10 +1132,18 @@ export default function App() {
   const pendingRef = useRef(null);
   if (!pendingRef.current) { pendingRef.current = new Set(); try { JSON.parse(localStorage.getItem('velocity.pendingDl') || '[]').forEach(x => pendingRef.current.add(x)); } catch {} }
   const resumedRef = useRef(false);
+  const playStatsRef = useRef(null);
+  if (!playStatsRef.current) { try { playStatsRef.current = JSON.parse(localStorage.getItem('velocity.playStats') || '{}') || {}; } catch { playStatsRef.current = {}; } }
+  const recordPlayStat = (t) => { if (!t || !t.id) return; try { const s = playStatsRef.current; const e = s[t.id] || {}; s[t.id] = { count: (e.count || 0) + 1, last: Date.now(), title: t.title || e.title || '', artist: t.artist || e.artist || '', cover: t.cover || e.cover || '', durationSeconds: t.durationSeconds || t.duration || e.durationSeconds || 0 }; localStorage.setItem('velocity.playStats', JSON.stringify(s)); } catch {} };
   const savePending = () => { try { localStorage.setItem('velocity.pendingDl', JSON.stringify([...pendingRef.current])); } catch {} };
 
   // preferencias persistentes
   const [themeKey, setThemeKey] = usePersisted('velocity.theme', 'emerald');
+  const [customPalettes, setCustomPalettes] = usePersisted('velocity.palettes', [
+    { id:'p1', name:'Neón Vice', accent:'#ff10f0', accent2:'#00fff7' },
+    { id:'p2', name:'Aurora',    accent:'#8b5cf6', accent2:'#ec4899' },
+  ]);
+  const [activeCustomId, setActiveCustomId] = usePersisted('velocity.paletteId', 'p1');
   const [quality, setQuality] = usePersisted('velocity.quality', 'high');
   const [glow, setGlow] = usePersisted('velocity.glow', 70);
   const [eq, setEq] = usePersisted('velocity.eq', 'waves');
@@ -1034,6 +1158,7 @@ export default function App() {
   const [savedAlbums, setSavedAlbums] = useState([]);
   const [homeRows, setHomeRows] = usePersisted('velocity.home', []);
   const [homeLoading, setHomeLoading] = useState(false);
+  const [feedNonce, setFeedNonce] = useState(0);
 
   // UI transitoria
   const [openPlaylist, setOpenPlaylist] = useState(null);
@@ -1053,6 +1178,7 @@ export default function App() {
   const showToast = (m) => { setToast(m); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 2400); };
 
   const audioRef = useRef(null);
+  const playingRef = useRef(false);
   // Web Audio para normalizar volumen (compresor de rango dinámico). Opt-in.
   const audioCtxRef = useRef(null);
   const compressorRef = useRef(null);
@@ -1083,7 +1209,13 @@ export default function App() {
       }
     } catch {}
   };
-  const T = THEMES[themeKey] || THEMES.emerald;
+  const activePalette = customPalettes.find(p => p.id === activeCustomId) || customPalettes[0] || { name:'Personalizado', accent:'#8b5cf6', accent2:'#ec4899' };
+  const T = themeKey === 'custom'
+    ? { name: activePalette.name || 'Personalizado', accent: activePalette.accent, accent2: activePalette.accent2, vars: activePalette.bg ? tintedVars(activePalette.bg) : undefined }
+    : (THEMES[themeKey] || THEMES.emerald);
+  const addPalette = () => { const id = 'p' + Date.now(); setCustomPalettes(ps => [...ps, { id, name:'Nueva paleta', accent:'#39ff14', accent2:'#00ffa3' }]); setActiveCustomId(id); setThemeKey('custom'); };
+  const updatePalette = (patch) => setCustomPalettes(ps => ps.map(p => p.id === activeCustomId ? { ...p, ...patch } : p));
+  const deletePalette = () => { const next = customPalettes.filter(p => p.id !== activeCustomId); const arr = next.length ? next : [{ id:'p' + Date.now(), name:'Mi paleta', accent:'#8b5cf6', accent2:'#ec4899' }]; setCustomPalettes(arr); setActiveCustomId(arr[0].id); };
 
   // Aplica la paleta del skin (o la base) a las variables CSS del :root.
   useEffect(() => {
@@ -1093,7 +1225,7 @@ export default function App() {
     // Color de la barra de estado del navegador/PWA acorde al fondo del tema.
     const tc = document.querySelector('meta[name="theme-color"]');
     if (tc) tc.setAttribute('content', vars['--bg-0']);
-  }, [themeKey]);
+  }, [themeKey, activeCustomId, activePalette.bg]);
   const { w: vw } = useViewport();
   const wide = vw >= 900;
 
@@ -1173,72 +1305,47 @@ export default function App() {
 
   // ── Feed personalizado (mixes según lo que escuchas, guardas y descargas) ──
   const feedSigRef = useRef('');
+  const feedTokenRef = useRef(0);
   useEffect(() => {
     if (!authed) return;
-    let cancel = false;
-    // Puntuar pistas según lo que más escuchas, das like y descargas.
     const score = {};
     recent.forEach((id, i) => { score[id] = (score[id] || 0) + Math.max(1, 12 - i * 0.4); });
     favs.forEach(id => { score[id] = (score[id] || 0) + 6; });
     [...downloaded].forEach(id => { score[id] = (score[id] || 0) + 4; });
-    // Semillas: pistas conocidas ordenadas por score, diversificadas por artista
-    // (una por artista) para que cada mezcla tenga una raíz distinta.
     const ranked = Object.keys(score).map(trackById).filter(Boolean).sort((a, b) => score[b.id] - score[a.id]);
     const seeds = []; const seenArtist = new Set();
-    for (const t of ranked) {
-      const a = (t.artist || '').toLowerCase();
-      if (seenArtist.has(a)) continue;
-      seenArtist.add(a); seeds.push(t);
-      if (seeds.length >= 5) break;
-    }
-    const sig = seeds.map(s => s.id).join('|');
-    if (sig === feedSigRef.current && homeRows.length) return; // sin cambios relevantes
+    for (const t of ranked) { const a = (t.artist || '').toLowerCase(); if (seenArtist.has(a)) continue; seenArtist.add(a); seeds.push(t); if (seeds.length >= 5) break; }
+    const sig = seeds.map(s => s.id).join('|') + '#' + feedNonce;
+    if (sig === feedSigRef.current && homeRows.length) return;
     feedSigRef.current = sig;
+    const myToken = ++feedTokenRef.current;
+    const alive = () => myToken === feedTokenRef.current;
     setHomeLoading(true);
     (async () => {
-      // Helpers para construir mezclas (cada una es una "playlist" con carátula collage).
-      const mixFromSeed = async (seed) => {
-        try {
-          const rel = await api.radio(seed.id);
-          const tracks = capPerArtist(dedupeByTitle([seed, ...rel.map(normalizeTrack)]), 3).filter(t => t.id).slice(0, 25);
-          return tracks.length >= 4 ? { label: seed.artist || 'Mezcla', tracks } : null;
-        } catch { return null; }
-      };
-      const mixFromSearch = async (label, q) => {
-        try {
-          const raw = await api.search(q);
-          const tracks = dedupeByTitle(raw.slice(0, 22).map(normalizeTrack)).filter(t => t.id);
-          return tracks.length >= 4 ? { label, tracks } : null;
-        } catch { return null; }
-      };
+      const mixFromSeed = async (seed) => { try { const rel = await api.radio(seed.id); const tracks = capPerArtist(dedupeByTitle([seed, ...rel.map(normalizeTrack)]), 3).filter(t => t.id).slice(0, 25); return tracks.length >= 4 ? { label: seed.artist || 'Mezcla', tracks } : null; } catch { return null; } };
+      const mixFromSearch = async (label, q) => { try { const raw = await api.search(q); const tracks = dedupeByTitle(raw.slice(0, 22).map(normalizeTrack)).filter(t => t.id); return tracks.length >= 4 ? { label, tracks } : null; } catch { return null; } };
       const clean = (arr) => arr.filter(Boolean);
-
+      const pick = (arr, n) => { const a = [...arr]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a.slice(0, n); };
+      const oneOf = (arr) => arr[Math.floor(Math.random() * arr.length)];
+      const buildDiscovery = async () => { if (!seeds.length) return null; const known = new Set([...recent, ...favs, ...downloaded, ...seeds.map(s => s.id)]); try { const rels = await Promise.all(seeds.slice(0, 5).map(s => api.radio(s.id).catch(() => []))); let tracks = capPerArtist(dedupeByTitle(rels.flat().map(normalizeTrack)), 2).filter(t => t.id && !known.has(t.id)); if (tracks.length < 12 && seeds[0]) { try { const raw = await api.search(seeds[0].artist || 'mix'); tracks = capPerArtist(dedupeByTitle([...tracks, ...raw.map(normalizeTrack).filter(t => t.id && !known.has(t.id))]), 2); } catch {} } for (let i = tracks.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [tracks[i], tracks[j]] = [tracks[j], tracks[i]]; } return tracks.slice(0, 30).length >= 6 ? { label: 'Descubrimiento Semanal', tracks: tracks.slice(0, 30) } : null; } catch { return null; } };
       const sections = [];
-      const pushSection = (section, mixes) => {
-        if (!mixes.length || cancel) return;
-        sections.push({ section, mixes });
-        setHomeRows([...sections]);
-        setHomeLoading(false);
-      };
-
-      // 1) Hecho para ti — mezclas personalizadas por artista semilla.
+      const pushSection = (section, mixes) => { if (!mixes.length || !alive()) return; sections.push({ section, mixes }); setHomeRows([...sections]); setHomeLoading(false); };
       pushSection('Hecho para ti', clean(await Promise.all(seeds.map(mixFromSeed))));
-      // 2) Mezclas por género.
-      pushSection('Mezclas por género', clean(await Promise.all(GENRES.map(g => mixFromSearch(g.label, g.q)))));
-      // 3) Viaja en el tiempo — por década.
-      const decades = [
-        ['Éxitos 2020s', 'top hits 2023'], ['Lo mejor de los 2010s', 'best songs 2010s'],
-        ['Clásicos de los 2000s', 'top hits 2000s'], ['Rock de los 90', 'best rock 90s'],
-        ['Éxitos de los 80', 'greatest hits 80s'],
+      { const disc = await buildDiscovery(); pushSection('Tu descubrimiento', disc ? [disc] : []); }
+      const themed = [
+        { title: oneOf(['Para cada momento', 'Según tu vibra', 'Estados de ánimo']), build: () => Promise.all(pick(MOODS, 8).map(m => mixFromSearch('Mix ' + m.label, m.q))) },
+        { title: oneOf(['Mezclas por género', 'Explora géneros', 'Por estilo']), build: () => Promise.all(pick(GENRES, 6).map(g => mixFromSearch(g.label, g.q))) },
+        { title: oneOf(['Viaja en el tiempo', 'Máquina del tiempo', 'Décadas']), build: () => Promise.all(pick(ERAS, 5).map(e => mixFromSearch(e.label, e.q))) },
+        { title: oneOf(['Descubre', 'Explorar', 'Algo nuevo']), build: () => Promise.all(pick(SEED_ROWS, 5).map(s => mixFromSearch(s.label, s.q))) },
       ];
-      pushSection('Viaja en el tiempo', clean(await Promise.all(decades.map(([l, q]) => mixFromSearch(l, q)))));
-      // 4) Descubre — recomendaciones generales.
-      pushSection('Descubre', clean(await Promise.all(SEED_ROWS.map(s => mixFromSearch(s.label, s.q)))));
-
-      if (!cancel) setHomeLoading(false);
+      for (let i = themed.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [themed[i], themed[j]] = [themed[j], themed[i]]; }
+      for (const sec of themed) { if (!alive()) break; pushSection(sec.title, clean(await sec.build())); }
+      if (alive()) setHomeLoading(false);
     })();
-    return () => { cancel = true; };
-  }, [authed, recent, favs, downloaded, catVer]);
+  }, [authed, recent, favs, downloaded, feedNonce]);
+
+  // Refresco dinámico del feed al volver tras un rato.
+  useEffect(() => { let h = 0; const v = () => { if (document.visibilityState === 'hidden') h = Date.now(); else if (h && Date.now() - h > 720000) { h = 0; setFeedNonce(n => n + 1); } }; document.addEventListener('visibilitychange', v); return () => document.removeEventListener('visibilitychange', v); }, []);
 
   // ── Reanudar descargas pendientes al volver a la app ──
   useEffect(() => {
@@ -1279,6 +1386,21 @@ export default function App() {
     if (ctx) { ctx.resume?.().catch(() => {}); applyNormalize(true); }
   }, [settings.normalize]);
   useEffect(() => { if (audioRef.current) audioRef.current.volume = vol; }, [vol]);
+
+  // Sincronizar playingRef con la intención.
+  useEffect(() => { playingRef.current = playing; }, [playing]);
+
+  // Reanudación al volver a la app (si la intención era reproducir y otra app la pausó).
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (audioCtxRef.current) audioCtxRef.current.resume?.().catch(() => {});
+      const a = audioRef.current;
+      if (a && playingRef.current && a.paused && !a.ended) a.play().catch(() => {});
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, []);
 
   // ── Precargar la(s) siguiente(s) pista(s) al cambiar la actual o la cola ──
   // Cubre el modo radio (la cola se llena después de play()) y garantiza que
@@ -1322,6 +1444,7 @@ export default function App() {
   const fadeRafRef = useRef(null);
   const fadeSafetyRef = useRef(null);
   const pendingFadeRef = useRef(false);
+  const selfPauseRef = useRef(false);
   const fadeInAudio = () => {
     const a = audioRef.current;
     if (!a) return;
@@ -1399,7 +1522,7 @@ export default function App() {
     // Detener limpiamente la pista anterior para evitar el "clic" al cortar la onda.
     const a = audioRef.current;
     const visible = typeof document === 'undefined' || document.visibilityState === 'visible';
-    if (a) { try { cancelAnimationFrame(fadeRafRef.current); clearTimeout(fadeSafetyRef.current); a.pause(); } catch {} }
+    if (a) { try { cancelAnimationFrame(fadeRafRef.current); clearTimeout(fadeSafetyRef.current); selfPauseRef.current = true; a.pause(); } catch {} }
     if (a && visible) { a.volume = 0; pendingFadeRef.current = true; }  // fundido al arrancar
     else { if (a) a.volume = vol; pendingFadeRef.current = false; }      // segundo plano: sin fundido
     const initialQueue = list && list.length ? list : [t.id];
@@ -1416,6 +1539,7 @@ export default function App() {
       offline.getBlob(t.id).then(b => { if (b) { const u = URL.createObjectURL(b); objUrlRef.current = u; setPlaySrc(u); } else setPlaySrc(trackWithQuality.url); }).catch(() => setPlaySrc(trackWithQuality.url));
     } else { setPlaySrc(trackWithQuality.url); }
     setRecent(r => [t.id, ...r.filter(x => x !== t.id)].slice(0, 30));
+    recordPlayStat(t);
     api.recordHistory(t.id).catch(() => {});
     api.saveTracks([slimTrack(t)]); // sincronizar metadatos entre dispositivos
     try { localStorage.setItem('velocity.player', JSON.stringify({ track: trackWithQuality, queue: initialQueue, t: 0 })); } catch {}
@@ -1459,6 +1583,12 @@ export default function App() {
   };
   const reorderQueue = (from, to) => setQueue(q => { const a = [...q]; const [m] = a.splice(from, 1); a.splice(to, 0, m); return a; });
   const removeFromQueue = (id) => setQueue(q => q.filter(x => x !== id || x === track?.id));
+  // Quitar de la cola con feedback (usado por el swipe a la izquierda).
+  const removeFromQueueToast = (id) => {
+    const inQueue = queue.includes(id) && id !== track?.id;
+    removeFromQueue(id);
+    showToast(inQueue ? 'Eliminada de la cola' : 'No estaba en la cola');
+  };
 
   // ── Descargas offline (IndexedDB, sin diálogo de guardado) ──
   // URL de streaming con la calidad actual: coincide con la clave de caché que
@@ -1604,6 +1734,26 @@ export default function App() {
     mix.tracks.forEach(cacheTrack);
     setExpanded(false);
     setView({ type:'mix', label: mix.label, tracks: mix.tracks });
+  };
+  const goWrapped = () => { setExpanded(false); setOpenPlaylist(null); setView({ type:'wrapped' }); };
+  const startAiDj = async () => {
+    showToast('AI DJ preparando tu estacion...');
+    const score = {};
+    recent.forEach((id, i) => { score[id] = (score[id] || 0) + Math.max(1, 12 - i * 0.4); });
+    favs.forEach(id => { score[id] = (score[id] || 0) + 6; });
+    [...downloaded].forEach(id => { score[id] = (score[id] || 0) + 4; });
+    const ranked = Object.keys(score).map(trackById).filter(Boolean).sort((a, b) => score[b.id] - score[a.id]);
+    const top = ranked.slice(0, 3);
+    let pool = [];
+    try {
+      if (top.length) { const rels = await Promise.all(top.map(s => api.radio(s.id).catch(() => []))); pool = capPerArtist(dedupeByTitle([...top, ...rels.flat().map(normalizeTrack)]), 2).filter(t => t.id); }
+      else { const raw = await api.search('top hits 2024'); pool = dedupeByTitle(raw.map(normalizeTrack)).filter(t => t.id); }
+    } catch {}
+    for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
+    if (!pool.length) { showToast('No se pudo iniciar el AI DJ'); return; }
+    pool.forEach(cacheTrack);
+    play(pool[0], pool.map(t => t.id), { radio: true });
+    showToast('AI DJ sonando tu estacion personalizada');
   };
   // Recupera del backend los metadatos de pistas que no estén en caché local.
   const hydrateTracks = async (ids) => {
@@ -1776,12 +1926,13 @@ export default function App() {
     recent, recentSearches, addSearch, removeSearch, homeRows, homeLoading, detailLoading,
     openPlaylist, setOpenPlaylist, setTab, addToTarget: setAddTarget, onMenu: setMenuTarget,
     themeKey, setThemeKey, quality, setQuality, glow, setGlow, eq, setEq, settings, setSettings,
-    view, setView, goArtist, goAlbum, goMix, shareTrack, email, onLogout, detailData,
+    view, setView, goArtist, goAlbum, goMix, goWrapped, startAiDj, shareTrack, email, onLogout, detailData,
     installApp, canInstall: !!installEvt, isIOS, isStandalone,
-    addToQueue, download, removeDownload, downloadMany, downloaded, downloading, openQueue: () => setShowQueue(true),
+    addToQueue, removeFromQueue: removeFromQueueToast, download, removeDownload, downloadMany, downloaded, downloading, openQueue: () => setShowQueue(true),
     savedAlbums, saveAlbum, unsaveAlbum, isAlbumSaved,
     selecting, selection, toggleSelect, startSelection, clearSelection,
-    hydrateTracks,
+    hydrateTracks, playStats: playStatsRef.current,
+    customPalettes, activeCustomId, setActiveCustomId, activePalette, addPalette, updatePalette, deletePalette,
   };
 
   const playerProps = { track, playing, togglePlay, next, prev, time, dur, seek, vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved: track ? favs.includes(track.id) : false, toggleFav, T, loadingAudio };
@@ -1794,10 +1945,10 @@ export default function App() {
       {tab === 'profile' && <ProfileTab ctx={ctx} />}
     </>
   );
-  const Content = view ? <DetailView view={view} ctx={ctx} /> : TabContent;
+  const Content = view ? (view.type === 'wrapped' ? <WrappedView ctx={ctx} /> : <DetailView view={view} ctx={ctx} />) : TabContent;
 
   const audioEl = (
-    <audio ref={audioRef} src={playSrc || (track ? track.url : undefined)} preload="metadata"
+    <audio ref={audioRef} src={playSrc || (track ? track.url : undefined)} preload="auto"
       onTimeUpdate={() => {
         const a = audioRef.current; if (!a) return;
         const ct = a.currentTime || 0; setTime(ct);
@@ -1813,11 +1964,20 @@ export default function App() {
       }}
       onLoadedMetadata={() => { setDur(audioRef.current?.duration||0); if (resumeRef.current != null && audioRef.current) { try { audioRef.current.currentTime = resumeRef.current; } catch {} setTime(resumeRef.current); resumeRef.current = null; } }}
       onCanPlay={() => setLoadingAudio(false)}
-      onPlay={() => setLoadingAudio(false)}
-      onPlaying={() => { setLoadingAudio(false); if (pendingFadeRef.current) { pendingFadeRef.current = false; fadeInAudio(); } }}
+      onPlay={() => { selfPauseRef.current = false; setLoadingAudio(false); }}
+      onPlaying={() => { selfPauseRef.current = false; setLoadingAudio(false); if (pendingFadeRef.current) { pendingFadeRef.current = false; fadeInAudio(); } }}
       onStalled={() => setLoadingAudio(true)}
       onWaiting={() => setLoadingAudio(true)}
-      onError={() => { setLoadingAudio(false); setPlaying(false); showToast('No se pudo reproducir esta pista'); }}
+      onPause={() => {
+        if (selfPauseRef.current) return;
+        if (pendingFadeRef.current) return;
+        const a = audioRef.current;
+        if (!a || a.ended) return;
+        if (!playingRef.current) return;
+        if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+        setPlaying(false);
+      }}
+      onError={() => { selfPauseRef.current = false; setLoadingAudio(false); setPlaying(false); showToast('No se pudo reproducir esta pista'); }}
       onEnded={onEnded}
     />
   );
@@ -1868,16 +2028,7 @@ export default function App() {
 
         {track && (
           <div style={{ padding:'8px 14px 6px' }}>
-            <div onClick={() => setExpanded(true)} className="glass" style={{ background:`linear-gradient(135deg, ${hex2rgba(T.accent,.1)}, var(--surf-0))`, border:`1px solid ${hex2rgba(T.accent,.28)}`, borderRadius:20, padding:'10px 12px', display:'flex', alignItems:'center', gap:12, cursor:'pointer', boxShadow:`0 8px 28px ${hex2rgba(T.accent,.16)}, 0 2px 8px #0006`, position:'relative', overflow:'hidden' }}>
-              <div style={{ position:'absolute', bottom:0, left:0, height:2.5, width:`${pct}%`, background:grad(T,90), borderRadius:99, boxShadow:`0 0 8px ${T.accent}`, transition:'width .15s linear' }} />
-              <img src={track.cover} alt="" style={{ width:42, height:42, borderRadius:11, objectFit:'cover', flexShrink:0, boxShadow:'0 4px 12px #0007' }} />
-              <div style={{ flex:1, minWidth:0 }}>
-                <div style={{ fontSize:12.5, fontWeight:700, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title}</div>
-                <div style={{ fontSize:10, color:T.accent, marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.artist}</div>
-              </div>
-              <button aria-label={playing?'Pausar':'Reproducir'} onClick={e=>{ e.stopPropagation(); togglePlay(); }} className="btn-tap" style={{ background:grad(T), border:'none', borderRadius:'50%', width:36, height:36, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0, boxShadow:`0 0 14px ${hex2rgba(T.accent,.55)}` }}>{loadingAudio ? <Spinner c="#04060a" sz={18} /> : (playing ? <Icon.Pause c="#04060a" sz={20} /> : <Icon.Play c="#04060a" sz={20} />)}</button>
-              <button aria-label="Más" onClick={e=>{ e.stopPropagation(); setMenuTarget(track.id); }} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer', padding:4 }}><Icon.Dots c="var(--txt-1)" sz={19} /></button>
-            </div>
+            <MiniPlayerBar track={track} playing={playing} togglePlay={togglePlay} loadingAudio={loadingAudio} T={T} pct={pct} setExpanded={setExpanded} setMenuTarget={setMenuTarget} next={next} prev={prev} />
           </div>
         )}
 

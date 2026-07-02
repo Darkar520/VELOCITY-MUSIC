@@ -109,6 +109,19 @@ export const api = {
   },
   logout() { setToken(null); },
 
+  // ── Inicio de sesión con Google ──
+  async authConfig() {
+    try { return await jsonOrThrow(await fetch('/api/auth/config')); } catch { return {}; }
+  },
+  async googleLogin(credential) {
+    const data = await jsonOrThrow(await fetch('/api/auth/google', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credential }),
+    }));
+    if (data.token) setToken(data.token);
+    return data;
+  },
+
   // ── Favoritos ──
   async favorites() {
     const d = await jsonOrThrow(await fetch('/api/favorites', { headers: authHeaders() }));
