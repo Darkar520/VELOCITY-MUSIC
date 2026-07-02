@@ -142,7 +142,7 @@ function HomeTab({ ctx }) {
 // SEARCH TAB
 // ═══════════════════════════════════════════════════════════════
 function SearchTab({ ctx }) {
-  const { track, playing, play, T, favs, toggleFav, addToTarget, onMenu, recentSearches, addSearch, removeSearch, downloaded, downloading, goArtist, goAlbum, selecting, selection, toggleSelect, startSelection } = ctx;
+  const { track, playing, play, T, favs, toggleFav, addToTarget, onMenu, recentSearches, addSearch, removeSearch, downloaded, downloading, goArtist, goAlbum, selecting, selection, toggleSelect, startSelection, addToQueue } = ctx;
   const [q, setQ] = useState('');
   const [res, setRes] = useState({ songs: [], albums: [], artists: [] });
   const [loading, setLoading] = useState(false);
@@ -212,7 +212,7 @@ function SearchTab({ ctx }) {
           {res.songs.length > 0 && (<>
             <SectionHeader label="Canciones" accent={T.accent} action={!selecting && <button onClick={() => startSelection()} className="press" style={{ background:'none', border:'none', cursor:'pointer', color:T.accent, fontSize:11.5, fontWeight:800 }}>Seleccionar</button>} />
             <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-              {res.songs.map(t => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => { play(t, [t.id], { radio: true }); addSearch(q.trim()); }} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} />)}
+              {res.songs.map(t => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => { play(t, [t.id], { radio: true }); addSearch(q.trim()); }} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
             </div>
           </>)}
         </>
@@ -252,7 +252,7 @@ function SearchTab({ ctx }) {
 // ═══════════════════════════════════════════════════════════════
 function LibraryTab({ ctx }) {
   const { track, playing, play, T, favs, toggleFav, playlists, createPlaylist,
-          removeFromPlaylist, deletePlaylist, openPlaylist, setOpenPlaylist, addToTarget, onMenu, downloaded, downloading, downloadMany, savedAlbums, goAlbum, selecting, selection, toggleSelect, startSelection, hydrateTracks } = ctx;
+          removeFromPlaylist, deletePlaylist, openPlaylist, setOpenPlaylist, addToTarget, onMenu, downloaded, downloading, downloadMany, savedAlbums, goAlbum, selecting, selection, toggleSelect, startSelection, hydrateTracks, addToQueue } = ctx;
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
 
@@ -297,7 +297,7 @@ function LibraryTab({ ctx }) {
                 onFav={toggleFav} faved={favs.includes(t.id)} onMenu={onMenu}
                 downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)}
                 selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect}
-                onRemove={isLiked ? undefined : (id => removeFromPlaylist(pl.id, id))} />
+                onRemove={isLiked ? undefined : (id => removeFromPlaylist(pl.id, id))} onSwipeQueue={addToQueue} />
             ))}
           </div>
         )}
@@ -495,6 +495,19 @@ function AddToPlaylistModal({ trackId, onClose, playlists, createPlaylist, addTo
 function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next, prev, time, dur, seek,
   vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved, toggleFav, T, quality, glow, compact, desktop, onAdd, onMenu, loadingAudio, onQueue, outputs, sinkId, setOutput, lyricOffset = 0, setLyricOffset, audioRef }) {
   const [showLyrics, setShowLyrics] = useState(false);
+  // iOS no permite controlar el volumen por software (solo botones físicos).
+  const isIOS = typeof navigator !== 'undefined' && /iphone|ipad|ipod/i.test(navigator.userAgent) && !/crios|fxios/i.test(navigator.userAgent);
+  // Deslizar hacia abajo para minimizar (solo móvil, si el panel está arriba del todo).
+  const swipeStartY = useRef(null);
+  const swipeScrollTop = useRef(0);
+  const onPanelTouchStart = (e) => { swipeStartY.current = e.touches[0].clientY; swipeScrollTop.current = e.currentTarget.scrollTop || 0; };
+  const onPanelTouchEnd = (e) => {
+    if (swipeStartY.current == null) return;
+    const dy = e.changedTouches[0].clientY - swipeStartY.current;
+    const startedAtTop = swipeScrollTop.current <= 4;
+    swipeStartY.current = null;
+    if (!desktop && startedAtTop && dy > 90) onClose();
+  };
   const [lyricState, setLyricState] = useState({ status:'idle', synced:[], plain:[] });
   const lyricBoxRef = useRef(null);
   // Tiempo de alta frecuencia para la sincronía de la letra.
@@ -590,7 +603,8 @@ function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next, prev,
   return (
     <>
       {desktop && <div onClick={onClose} style={{ position:'fixed', inset:0, background:'#04060ad9', backdropFilter:'blur(10px)', WebkitBackdropFilter:'blur(10px)', opacity: open?1:0, pointerEvents: open?'auto':'none', transition:'opacity .3s ease', zIndex:89 }} />}
-      <div style={panelStyle}>
+      <div style={panelStyle} onTouchStart={!desktop ? onPanelTouchStart : undefined} onTouchEnd={!desktop ? onPanelTouchEnd : undefined}>
+        {!desktop && <div style={{ width:44, height:5, borderRadius:99, background:'var(--surf-2)', margin:'0 auto 12px', flexShrink:0 }} />}
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16, flexShrink:0 }}>
           <button aria-label="Cerrar" onClick={onClose} className="btn-tap glass" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:38, height:38, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}><Icon.ChevD c="var(--txt-1)" sz={18} /></button>
           <div style={{ textAlign:'center' }}>
@@ -672,8 +686,12 @@ function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next, prev,
 
         <div className="glass" style={{ display:'flex', alignItems:'center', gap:13, background:'var(--surf-0)', border:'1px solid var(--line-soft)', borderRadius:16, padding:'12px 16px', flexShrink:0 }}>
           <Icon.Vol c="var(--txt-2)" sz={16} />
-          <div style={{ flex:1 }}><RangeSlider value={vol} min={0} max={1} step={0.01} onChange={setVol} accent={T.accent} ariaLabel="Volumen" /></div>
-          <span style={{ fontSize:10, color:'var(--txt-2)', fontFamily:'monospace', fontWeight:700, width:34, textAlign:'right' }}>{Math.round(vol*100)}%</span>
+          {isIOS ? (
+            <div style={{ flex:1, fontSize:11, color:'var(--txt-2)' }}>Usa los botones de volumen del teléfono</div>
+          ) : (
+            <div style={{ flex:1 }}><RangeSlider value={vol} min={0} max={1} step={0.01} onChange={setVol} accent={T.accent} ariaLabel="Volumen" /></div>
+          )}
+          {!isIOS && <span style={{ fontSize:10, color:'var(--txt-2)', fontFamily:'monospace', fontWeight:700, width:34, textAlign:'right' }}>{Math.round(vol*100)}%</span>}
         </div>
 
         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:10, marginTop:12, flexShrink:0 }}>
@@ -691,7 +709,7 @@ function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next, prev,
 // DETAIL VIEW — artista / álbum (metadatos reales de YouTube Music)
 // ═══════════════════════════════════════════════════════════════
 function DetailView({ view, ctx }) {
-  const { T, track, playing, play, favs, toggleFav, addToTarget, onMenu, goArtist, goAlbum, setView, detailLoading, detailData, downloaded, downloading, downloadMany, isAlbumSaved, saveAlbum, unsaveAlbum, selecting, selection, toggleSelect, startSelection } = ctx;
+  const { T, track, playing, play, favs, toggleFav, addToTarget, onMenu, goArtist, goAlbum, setView, detailLoading, detailData, downloaded, downloading, downloadMany, isAlbumSaved, saveAlbum, unsaveAlbum, selecting, selection, toggleSelect, startSelection, addToQueue } = ctx;
   const [showAll, setShowAll] = useState(false);
   useEffect(() => { setShowAll(false); }, [view]);
   const d = detailData && detailData.type === view.type ? detailData : null;
@@ -728,7 +746,7 @@ function DetailView({ view, ctx }) {
           </div>
         )}
         <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-          {songs.map(t => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => play(t, ids)} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} />)}
+          {songs.map(t => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => play(t, ids)} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
         </div>
       </div>
     );
@@ -765,7 +783,7 @@ function DetailView({ view, ctx }) {
             </>}
             <SectionHeader label="Canciones populares" accent={T.accent} action={!selecting && <button onClick={() => startSelection()} className="press" style={{ background:'none', border:'none', cursor:'pointer', color:T.accent, fontSize:11.5, fontWeight:800 }}>Seleccionar</button>} />
             <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-              {songs.map(t => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => play(t, all.map(s=>s.id))} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} />)}
+              {songs.map(t => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => play(t, all.map(s=>s.id))} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
             </div>
             {!showAll && all.length > 25 && (
               <button onClick={() => setShowAll(true)} className="press" style={{ display:'block', margin:'16px auto 0', background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:99, padding:'10px 22px', cursor:'pointer', color:'var(--txt-0)', fontSize:12.5, fontWeight:700 }}>Ver más canciones</button>
@@ -812,7 +830,7 @@ function DetailView({ view, ctx }) {
             </div>
           )}
           <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-            {songs.map((t, i) => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => play(t, songs.map(s=>s.id))} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} />)}
+            {songs.map((t, i) => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => play(t, songs.map(s=>s.id))} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
           </div>
         </>
       )}
@@ -1423,7 +1441,7 @@ export default function App() {
     const i = orderIds.indexOf(track.id);
     const t = trackById(orderIds[(i-1+orderIds.length) % orderIds.length]); if (t) play(t, orderIds);
   };
-  const seek = (v) => { if (audioRef.current) audioRef.current.currentTime = v; setTime(v); };
+  const seek = (v) => { if (audioRef.current) { audioRef.current.currentTime = v; if (audioRef.current.volume < vol && !pendingFadeRef.current) audioRef.current.volume = vol; } setTime(v); };
 
   // ── Cola ──
   const addToQueue = (id) => {
@@ -1661,13 +1679,6 @@ export default function App() {
   const pct = dur > 0 ? (time/dur)*100 : 0;
   persistRef.current = { track: track || null, queue, t: time };
 
-  // reloj
-  const [clockStr, setClockStr] = useState('');
-  useEffect(() => {
-    const tick = () => { const d = new Date(); let h = d.getHours()%12||12; setClockStr(`${h}:${String(d.getMinutes()).padStart(2,'0')} ${d.getHours()>=12?'PM':'AM'}`); };
-    tick(); const id = setInterval(tick, 30000); return () => clearInterval(id);
-  }, []);
-
   // ── Media Session API: controles de pantalla de bloqueo y notificación del OS ──
   // (Debe declararse ANTES de cualquier return condicional para no romper el
   //  orden de los hooks de React.)
@@ -1765,10 +1776,12 @@ export default function App() {
         const ct = a.currentTime || 0; setTime(ct);
         if (ct > 0 && loadingAudio) setLoadingAudio(false);
         // Crossfade: desvanecer el volumen en los últimos N segundos de la pista.
-        const cf = Math.min(settings.crossfade || 0, (a.duration || 0) / 2);
-        if (cf > 0 && a.duration && isFinite(a.duration) && !pendingFadeRef.current) {
-          const remaining = a.duration - ct;
-          if (remaining < cf) a.volume = Math.max(0, vol * (remaining / cf));
+        // Usamos `dur` (duración fiable mostrada en la barra), no a.duration.
+        const total = dur || a.duration || 0;
+        const cf = Math.min(settings.crossfade || 0, total / 2);
+        if (cf > 0 && total > 0 && !pendingFadeRef.current) {
+          const remaining = total - ct;
+          if (remaining <= cf) a.volume = Math.max(0, vol * (remaining / cf));
         }
       }}
       onLoadedMetadata={() => { setDur(audioRef.current?.duration||0); if (resumeRef.current != null && audioRef.current) { try { audioRef.current.currentTime = resumeRef.current; } catch {} setTime(resumeRef.current); resumeRef.current = null; } }}
@@ -1823,10 +1836,7 @@ export default function App() {
     <div style={{ position:'relative', height:'100dvh', overflow:'hidden', background:'radial-gradient(circle at 30% 0%, #0d1320, #04060a 60%)', display:'flex', flexDirection:'column', fontFamily:'Inter,-apple-system,sans-serif' }}>
       {audioEl}
       <div style={{ position:'absolute', top:-60, left:'50%', transform:'translateX(-50%)', width:300, height:200, background:grad(T), filter:'blur(70px)', opacity:.16, pointerEvents:'none', zIndex:0 }} />
-      <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', paddingTop:'calc(env(safe-area-inset-top, 12px) + 12px)', position:'relative', zIndex:1 }}>
-        <div style={{ display:'flex', justifyContent:'space-between', padding:'0 22px 6px', fontSize:12, fontWeight:700, color:'var(--txt-1)', userSelect:'none' }}>
-          <span>{clockStr}</span>
-        </div>
+      <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', paddingTop:'calc(env(safe-area-inset-top, 12px) + 8px)', position:'relative', zIndex:1 }}>
         <div style={{ flex:1, overflowY:'auto', padding:'4px 18px 0' }}>{Content}</div>
 
         {track && (

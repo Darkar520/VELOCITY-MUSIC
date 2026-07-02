@@ -1,7 +1,7 @@
 // ═══════════════════════════════════════════════════════════════
 // Componentes presentacionales reutilizables.
 // ═══════════════════════════════════════════════════════════════
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Icon } from './Icons.jsx';
 import { hex2rgba, grad, hiResCover } from './helpers.js';
 import { FALLBACK_COVER } from './constants.js';
@@ -86,15 +86,37 @@ export const SectionHeader = ({ label, accent, action }) => (
   </div>
 );
 
-export function TrackRow({ track, active, playing, T, onClick, onFav, faved, onAdd, onRemove, onMenu, downloaded, downloading, selecting, selected, onSelect }) {
-  const handleClick = selecting ? () => onSelect(track.id) : onClick;
+export function TrackRow({ track, active, playing, T, onClick, onFav, faved, onAdd, onRemove, onMenu, downloaded, downloading, selecting, selected, onSelect, onSwipeQueue }) {
+  const [dragX, setDragX] = useState(0);
+  const sx = useRef(0), sy = useRef(0), swiping = useRef(false), moved = useRef(false);
+  const canSwipe = !!onSwipeQueue && !selecting;
+  const onTouchStart = (e) => { if (!canSwipe) return; sx.current = e.touches[0].clientX; sy.current = e.touches[0].clientY; swiping.current = false; moved.current = false; };
+  const onTouchMove = (e) => {
+    if (!canSwipe) return;
+    const dx = e.touches[0].clientX - sx.current, dy = e.touches[0].clientY - sy.current;
+    if (!swiping.current && Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.4) swiping.current = true;
+    if (swiping.current) { moved.current = true; setDragX(Math.max(-100, Math.min(100, dx))); }
+  };
+  const onTouchEnd = () => {
+    if (!canSwipe) return;
+    if (swiping.current && Math.abs(dragX) > 64) onSwipeQueue(track.id);
+    setDragX(0); swiping.current = false;
+  };
+  const handleClick = selecting ? () => onSelect(track.id) : (e) => { if (moved.current) { moved.current = false; return; } onClick && onClick(e); };
   return (
-    <div onClick={handleClick} className="card-hover" style={{
-      display:'flex', alignItems:'center', gap:13, padding:'10px 12px', borderRadius:16, cursor:'pointer',
-      background: (selected) ? hex2rgba(T.accent,.14) : active ? `linear-gradient(135deg, ${hex2rgba(T.accent,.14)}, ${hex2rgba(T.accent2,.05)})` : 'transparent',
-      border: `1px solid ${(active||selected) ? hex2rgba(T.accent,.32) : 'transparent'}`,
-      boxShadow: active ? `0 6px 20px ${hex2rgba(T.accent,.16)}` : 'none',
-    }}>
+    <div style={{ position:'relative', borderRadius:16, overflow:'hidden' }}>
+      {canSwipe && dragX !== 0 && (
+        <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent: dragX > 0 ? 'flex-start' : 'flex-end', padding:'0 22px', background: hex2rgba(T.accent, .16), borderRadius:16 }}>
+          <span style={{ display:'flex', alignItems:'center', gap:6, color:T.accent, fontSize:11, fontWeight:800 }}><Icon.Queue c={T.accent} sz={16} /> A la cola</span>
+        </div>
+      )}
+      <div onClick={handleClick} onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd} className="card-hover" style={{
+        display:'flex', alignItems:'center', gap:13, padding:'10px 12px', borderRadius:16, cursor:'pointer',
+        transform: dragX ? `translateX(${dragX}px)` : 'none', transition: dragX ? 'none' : 'transform .2s ease',
+        background: (selected) ? hex2rgba(T.accent,.14) : active ? `linear-gradient(135deg, ${hex2rgba(T.accent,.14)}, ${hex2rgba(T.accent2,.05)})` : 'var(--bg-0)',
+        border: `1px solid ${(active||selected) ? hex2rgba(T.accent,.32) : 'transparent'}`,
+        boxShadow: active ? `0 6px 20px ${hex2rgba(T.accent,.16)}` : 'none',
+      }}>
       {selecting && (
         <div style={{ width:22, height:22, borderRadius:'50%', border:`2px solid ${selected ? T.accent : 'var(--txt-3)'}`, background: selected ? T.accent : 'transparent', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
           {selected && <Icon.Check c="#04060a" sz={13} />}
@@ -118,6 +140,7 @@ export function TrackRow({ track, active, playing, T, onClick, onFav, faved, onA
       {!selecting && onFav && <button aria-label={faved?'Quitar de Me gusta':'Añadir a Me gusta'} onClick={e => { e.stopPropagation(); onFav(track.id); }} className="press" style={{ background:'none', border:'none', cursor:'pointer', padding:4, flexShrink:0 }}><Icon.Heart c={faved ? T.accent : '#3a4150'} filled={faved} sz={19} /></button>}
       {!selecting && onRemove && <button aria-label="Quitar" onClick={e => { e.stopPropagation(); onRemove(track.id); }} className="press" style={{ background:'none', border:'none', cursor:'pointer', padding:4, flexShrink:0 }}><Icon.Trash c="var(--txt-2)" sz={17} /></button>}
       {!selecting && onMenu && <button aria-label="Más opciones" onClick={e => { e.stopPropagation(); onMenu(track.id); }} className="press" style={{ background:'none', border:'none', cursor:'pointer', padding:4, flexShrink:0 }}><Icon.Dots c="var(--txt-2)" sz={18} /></button>}
+      </div>
     </div>
   );
 }
