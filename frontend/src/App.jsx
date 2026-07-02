@@ -1001,25 +1001,6 @@ export default function App() {
   const [dur, setDur] = useState(0);
   const [vol, setVol] = useState(0.85);
   const [expanded, setExpanded] = useState(false);
-  const expandedHistRef = useRef(false);
-
-  // Intercepta el botón "retroceder" del sistema (Android/iOS) cuando el
-  // reproductor expandido está abierto, para que lo cierre en vez de salir.
-  useEffect(() => {
-    if (expanded) {
-      window.history.pushState({ velocity: 'expanded' }, '');
-      expandedHistRef.current = true;
-      const onPop = (e) => {
-        // Si el navegador retrocedió desde nuestra entrada ficticia, cerrar el panel.
-        if (expandedHistRef.current) { expandedHistRef.current = false; setExpanded(false); }
-      };
-      window.addEventListener('popstate', onPop);
-      return () => window.removeEventListener('popstate', onPop);
-    } else {
-      // Se cerró programáticamente — si la entrada ficticia sigue en el stack, sacarla.
-      if (expandedHistRef.current) { expandedHistRef.current = false; window.history.back(); }
-    }
-  }, [expanded]);
   const [shuffle, setShuffle] = useState(false);
   const [repeat, setRepeat] = useState(false);
   const [queue, setQueue] = useState(() => { const s = loadPlayerState(); return s ? (Array.isArray(s.queue) && s.queue.length ? s.queue : [s.track.id]) : []; });
@@ -1697,6 +1678,33 @@ export default function App() {
 
   const pct = dur > 0 ? (time/dur)*100 : 0;
   persistRef.current = { track: track || null, queue, t: time };
+
+  // Estado de UI actual para el manejador global del botón "retroceder".
+  const uiStateRef = useRef({});
+  uiStateRef.current = { expanded, showQueue, view, openPlaylist, menuTarget, addTarget, hasTrack: !!track };
+
+  // ── Interceptar el botón/gesto "retroceder" del sistema (Android/iOS) ──
+  // Sin esto, retroceder descarga la app (PWA) y DETIENE la música. Con esto,
+  // retroceder cierra el overlay abierto (menú, cola, reproductor, vista) y, si
+  // no hay nada que cerrar pero hay música, mantiene la app viva (no sale).
+  useEffect(() => {
+    window.history.pushState({ vg: 1 }, '');
+    const onPop = () => {
+      const s = uiStateRef.current;
+      let handled = true;
+      if (s.menuTarget != null) setMenuTarget(null);
+      else if (s.addTarget != null) setAddTarget(null);
+      else if (s.showQueue) setShowQueue(false);
+      else if (s.expanded) setExpanded(false);
+      else if (s.view) setView(null);
+      else if (s.openPlaylist) setOpenPlaylist(null);
+      else handled = false;
+      // Reponer el "guardia" si cerramos algo o si hay música sonando (no salir).
+      if (handled || s.hasTrack) window.history.pushState({ vg: 1 }, '');
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
 
   // ── Media Session API: controles de pantalla de bloqueo y notificación del OS ──
   // (Debe declararse ANTES de cualquier return condicional para no romper el
