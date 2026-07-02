@@ -57,10 +57,22 @@ export function useDominantColor(src) {
           rSum += r; gSum += g; bSum += b; count++;
         }
         if (!count) { setColor(null); return; }
-        const useVibrant = bestSat > 0.35;
-        const r = useVibrant ? bestR : Math.round(rSum / count);
-        const g = useVibrant ? bestG : Math.round(gSum / count);
-        const b = useVibrant ? bestB : Math.round(bSum / count);
+        const useVibrant = bestSat > 0.3;
+        let r = useVibrant ? bestR : Math.round(rSum / count);
+        let g = useVibrant ? bestG : Math.round(gSum / count);
+        let b = useVibrant ? bestB : Math.round(bSum / count);
+        const brightness0 = (r + g + b) / 3;
+        const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+        const sat = mx === 0 ? 0 : (mx - mn) / mx;
+        // Carátula muy oscura y sin color (negra/gris) → sin color (usa el tema).
+        if (brightness0 < 28 && sat < 0.22) { setColor(null); return; }
+        // Carátula oscura pero con color → subir brillo para que el fondo se note.
+        if (brightness0 < 110 && sat >= 0.22) {
+          const boost = 110 / Math.max(1, brightness0);
+          r = Math.min(255, Math.round(r * boost));
+          g = Math.min(255, Math.round(g * boost));
+          b = Math.min(255, Math.round(b * boost));
+        }
         const brightness = (r + g + b) / 3;
         const isDark = brightness < 128;
         const hex = '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');

@@ -252,16 +252,22 @@ function SearchTab({ ctx }) {
 // ═══════════════════════════════════════════════════════════════
 function LibraryTab({ ctx }) {
   const { track, playing, play, T, favs, toggleFav, playlists, createPlaylist,
-          removeFromPlaylist, deletePlaylist, openPlaylist, setOpenPlaylist, addToTarget, onMenu, downloaded, downloading, downloadMany, savedAlbums, goAlbum, selecting, selection, toggleSelect, startSelection } = ctx;
+          removeFromPlaylist, deletePlaylist, openPlaylist, setOpenPlaylist, addToTarget, onMenu, downloaded, downloading, downloadMany, savedAlbums, goAlbum, selecting, selection, toggleSelect, startSelection, hydrateTracks } = ctx;
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
+
+  // Al abrir una playlist / Me gusta, recuperar metadatos faltantes del backend.
+  useEffect(() => {
+    if (!openPlaylist || !hydrateTracks) return;
+    const ids = openPlaylist === 'liked' ? favs : (playlists.find(p => p.id === openPlaylist)?.trackIds || []);
+    hydrateTracks(ids);
+  }, [openPlaylist]);
 
   if (openPlaylist) {
     const isLiked = openPlaylist === 'liked';
     const pl = isLiked ? { name:'Me gusta', trackIds:favs } : playlists.find(p => p.id === openPlaylist);
     if (!pl) { setOpenPlaylist(null); return null; }
     const list = pl.trackIds.map(trackById).filter(Boolean);
-    const missing = pl.trackIds.length - list.length;
     return (
       <div className="fade-up" style={{ paddingBottom:8 }}>
         <button onClick={() => setOpenPlaylist(null)} className="press" style={{ display:'flex', alignItems:'center', gap:6, background:'none', border:'none', cursor:'pointer', color:'var(--txt-1)', marginBottom:16, paddingTop:4, fontSize:13, fontWeight:700 }}>
@@ -273,7 +279,7 @@ function LibraryTab({ ctx }) {
           </div>
           <div style={{ minWidth:0 }}>
             <div style={{ fontSize:22, fontWeight:900, color:'var(--txt-0)', letterSpacing:-.5 }}>{pl.name}</div>
-            <div style={{ fontSize:11.5, color:'var(--txt-2)', marginTop:4 }}>{pl.trackIds.length} {pl.trackIds.length===1?'canción':'canciones'}</div>
+            <div style={{ fontSize:11.5, color:'var(--txt-2)', marginTop:4 }}>{list.length} {list.length===1?'canción':'canciones'}</div>
             <div style={{ display:'flex', gap:8, marginTop:12 }}>
               {list.length > 0 && <button onClick={() => play(list[0], pl.trackIds)} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:8, background:grad(T), border:'none', borderRadius:99, padding:'9px 20px', cursor:'pointer', color:'#04060a', fontSize:12.5, fontWeight:800, boxShadow:`0 6px 18px ${hex2rgba(T.accent,.45)}` }}><Icon.Play c="#04060a" sz={16} /> Reproducir</button>}
               {pl.trackIds.length > 0 && <DownloadAllButton ids={pl.trackIds} downloaded={downloaded} downloading={downloading} onClick={() => downloadMany(pl.trackIds)} T={T} />}
@@ -293,7 +299,6 @@ function LibraryTab({ ctx }) {
                 selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect}
                 onRemove={isLiked ? undefined : (id => removeFromPlaylist(pl.id, id))} />
             ))}
-            {missing > 0 && <div style={{ fontSize:11, color:'var(--txt-3)', textAlign:'center', paddingTop:10 }}>{missing} pista(s) sin metadatos guardados en este dispositivo.</div>}
           </div>
         )}
       </div>
@@ -388,11 +393,11 @@ function ProfileTab({ ctx }) {
             </button>
           ))}
         </div>
-        <div style={{ fontSize:9.5, color:'var(--txt-3)', textAlign:'center', marginTop:9 }}>YouTube no ofrece audio sin pérdida (FLAC); Opus ~160 kbps es la máxima calidad disponible.</div>
       </SettingCard>
 
-      <SettingCard title="Intensidad de Glow" badge={`${glow}%`} accent={T.accent}>
-        <RangeSlider value={glow} min={10} max={100} onChange={setGlow} accent={T.accent} ariaLabel="Glow" />
+      <SettingCard title="Intensidad del brillo" badge={`${glow}%`} accent={T.accent}>
+        <RangeSlider value={glow} min={10} max={100} onChange={setGlow} accent={T.accent} ariaLabel="Brillo" />
+        <div style={{ fontSize:10, color:'var(--txt-2)', marginTop:9, lineHeight:1.5 }}>Controla el resplandor de color detrás de la portada en el reproductor a pantalla completa y en el mini-reproductor. Súbelo para un ambiente más intenso.</div>
       </SettingCard>
 
       <SettingCard title="Reproducción">
@@ -565,8 +570,8 @@ function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next, prev,
   const pad = compact ? 'calc(env(safe-area-inset-top, 14px) + 18px) 22px calc(env(safe-area-inset-bottom, 16px) + 26px)' : '52px 26px 36px';
 
   const panelBg = desktop
-    ? `radial-gradient(120% 80% at 50% 0%, ${ambientRgba(.16)}, transparent 60%), var(--surf-0)`
-    : `radial-gradient(120% 80% at 50% 0%, ${ambientRgba(.12)}, transparent 60%), var(--bg-0)`;
+    ? `radial-gradient(130% 85% at 50% 0%, ${ambientRgba(.18 + glowF * .25)}, transparent 62%), var(--surf-0)`
+    : `radial-gradient(130% 80% at 50% 0%, ${ambientRgba(.16 + glowF * .28)}, transparent 60%), var(--bg-0)`;
 
   const panelStyle = desktop ? {
     position:'fixed', top:'50%', left:'50%', transform:`translate(-50%,-50%) scale(${open?1:.95})`,
@@ -605,9 +610,9 @@ function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next, prev,
 
         {!showLyrics ? (
           <div style={{ position:'relative', display:'flex', justifyContent:'center', marginBottom:22, flexShrink:0 }}>
-            {/* Halo de ambiente: color de la portada, animación breathe original */}
-            <div className="breathe" style={{ position:'absolute', width:`calc(${art} * 1.25)`, height:`calc(${art} * 1.25)`, borderRadius:'50%', background: dominantColor ? `radial-gradient(circle, ${ambientRgba(.7)}, ${ambientRgba(.3)} 50%, transparent 75%)` : grad(T), filter:'blur(70px)', opacity: playing ? .25 + glowF*.35 : .1, top:'50%', left:'50%', transition:'opacity .6s ease, background 1.4s ease', pointerEvents:'none' }} />
-            <div style={{ position:'relative', width:art, height:art, borderRadius:28, boxShadow: playing ? `0 0 ${24+glowF*44}px ${ambientRgba(.28+glowF*.3)}, 0 30px 70px #000c` : '0 30px 70px #000c', transition:'box-shadow 1.4s ease, transform .55s ease', transform: playing ? 'scale(1)' : 'scale(.97)', overflow:'hidden', flexShrink:0 }}>
+            {/* Halo de ambiente: color de la portada (o del tema si no hay), intensidad ligada al brillo */}
+            <div className="breathe" style={{ position:'absolute', width:`calc(${art} * 1.45)`, height:`calc(${art} * 1.45)`, borderRadius:'50%', background:`radial-gradient(circle, ${ambientRgba(.9)}, ${ambientRgba(.45)} 45%, transparent 72%)`, filter:'blur(55px)', opacity: playing ? .45 + glowF*.55 : .22, top:'50%', left:'50%', transition:'opacity .6s ease, background 1.4s ease', pointerEvents:'none' }} />
+            <div style={{ position:'relative', width:art, height:art, borderRadius:28, boxShadow: playing ? `0 0 ${30+glowF*70}px ${ambientRgba(.4+glowF*.4)}, 0 30px 70px #000c` : '0 30px 70px #000c', transition:'box-shadow 1.4s ease, transform .55s ease', transform: playing ? 'scale(1)' : 'scale(.97)', overflow:'hidden', flexShrink:0 }}>
               <CoverImg src={track.cover} alt={track.title} radius={28} style={{ width:'100%', height:'100%' }} />
               {/* brillo/cristal sutil — igual que antes */}
               <div style={{ position:'absolute', inset:0, borderRadius:28, boxShadow:'inset 0 1px 0 #ffffff22, inset 0 0 0 1px #ffffff10', background:'linear-gradient(160deg, #ffffff14 0%, transparent 28%)', pointerEvents:'none' }} />
@@ -1582,6 +1587,18 @@ export default function App() {
     setExpanded(false);
     setView({ type:'mix', label: mix.label, tracks: mix.tracks });
   };
+  // Recupera del backend los metadatos de pistas que no estén en caché local.
+  const hydrateTracks = async (ids) => {
+    const missing = (ids || []).filter(id => id && !trackById(id));
+    if (!missing.length) return;
+    try {
+      for (let i = 0; i < missing.length; i += 300) {
+        const metas = await api.getTracks(missing.slice(i, i + 300));
+        metas.forEach(normalizeTrack);
+      }
+      saveMeta(); setCatVer(v => v + 1);
+    } catch {}
+  };
   const goArtist = (artistId, name) => {
     setExpanded(false); setView({ type:'artist', artistId, name });
     setDetailData(null); setDetailLoading(true);
@@ -1726,6 +1743,7 @@ export default function App() {
     addToQueue, download, removeDownload, downloadMany, downloaded, downloading, openQueue: () => setShowQueue(true),
     savedAlbums, saveAlbum, unsaveAlbum, isAlbumSaved,
     selecting, selection, toggleSelect, startSelection, clearSelection,
+    hydrateTracks,
   };
 
   const playerProps = { track, playing, togglePlay, next, prev, time, dur, seek, vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved: track ? favs.includes(track.id) : false, toggleFav, T, loadingAudio };
