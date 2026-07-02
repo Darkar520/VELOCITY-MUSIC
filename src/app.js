@@ -49,6 +49,7 @@ export function createApp(deps = {}) {
     savedAlbumsRepo,
     trackMetaRepo,
     songByIdImpl = null,
+    statsRepo,
     trackRepo,
     jwtSecret,
     staticDir = path.join(__dirname, '..', 'public'),
@@ -116,6 +117,7 @@ export function createApp(deps = {}) {
       });
       const deduped = dedupeTracks(results);
       searchCacheSet(cacheKey, { results: deduped, at: Date.now() });
+      if (statsRepo) statsRepo.incr('searches').catch(() => {});
       res.setHeader('X-Cache', 'MISS');
       return res.json({ results: deduped });
     } catch (err) {
@@ -392,6 +394,7 @@ export function createApp(deps = {}) {
     app.post('/api/auth/login', async (req, res) => {
       try {
         const result = await authService.login(req.body || {});
+        if (statsRepo) statsRepo.incr('logins').catch(() => {});
         return res.json(result);
       } catch (err) {
         if (err instanceof AuthError) return res.status(err.status).json({ error: err.message });
@@ -443,6 +446,8 @@ export function createApp(deps = {}) {
       res.json({ history: await historyService.list(req.userId) });
     }, HistoryError));
     app.post('/api/history', requireAuth, wrap(async (req, res) => {
+      if (statsRepo) statsRepo.incr('plays').catch(() => {});
+      if (userRepo && typeof userRepo.recordPlay === 'function') userRepo.recordPlay(req.userId).catch(() => {});
       res.status(201).json(await historyService.record(req.userId, (req.body || {}).trackId));
     }, HistoryError));
   }
@@ -487,6 +492,39 @@ export function createApp(deps = {}) {
         if (ok.length) { await trackMetaRepo.upsertMany(ok); found.push(...ok); }
       }
       res.json({ tracks: found });
+    }));
+  }
+
+  // ---- Panel de trazabilidad / métricas (protegido por clave) ----
+  // Uso: GET /api/admin/stats?key=TU_ADMIN_KEY
+  // La clave se define con la variable de entorno ADMIN_KEY (por defecto 'velocity-admin').
+  if (statsRepo) {
+    const ADMIN_KEY = process.env.ADMIN_KEY || 'velocity-admin';
+    app.get('/api/admin/stats', wrap(async (req, res) => {
+      if (String(req.query.key || '') !== ADMIN_KEY) {
+        return res.status(401).json({ error: 'Clave de administrador inválida.' });
+      }
+      const data = await statsRepo.summary();
+      // Si el navegador lo pide, devolver un panel HTML legible; si no, JSON.
+      const wantsHtml = String(req.query.html || '') === '1' || (req.headers.accept || '').includes('text/html');
+      if (!wantsHtml) return res.json(data);
+      const fmtDate = (t) => t ? new Date(t).toLocaleString('es') : '—';
+      const rows = data.users.map((u) => `<tr><td>${u.email}</td><td>${u.loginCount}</td><td>${u.playCount}</td><td>${fmtDate(u.lastActive || u.lastLogin)}</td><td>${new Date(u.createdAt).toLocaleDateString('es')}</td></tr>`).join('');
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      return res.send(`<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Velocity · Métricas</title>
+        <style>body{font-family:system-ui,sans-serif;background:#04060a;color:#f4f7fb;margin:0;padding:24px}h1{font-size:20px;margin:0 0 4px}p{color:#8b97a8;margin:0 0 20px;font-size:13px}
+        .cards{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:24px}.card{background:#10151e;border:1px solid #ffffff14;border-radius:14px;padding:16px 20px;min-width:120px}
+        .card .n{font-size:28px;font-weight:800;color:#10d9a0}.card .l{font-size:11px;color:#8b97a8;text-transform:uppercase;letter-spacing:1px;margin-top:4px}
+        table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:10px 12px;border-bottom:1px solid #ffffff10}th{color:#8b97a8;font-size:11px;text-transform:uppercase;letter-spacing:1px}</style></head>
+        <body><h1>VELOCITY MUSIC · Trazabilidad</h1><p>Actualizado: ${new Date().toLocaleString('es')}</p>
+        <div class="cards">
+          <div class="card"><div class="n">${data.totals.registeredUsers}</div><div class="l">Usuarios</div></div>
+          <div class="card"><div class="n">${data.totals.logins}</div><div class="l">Inicios de sesión</div></div>
+          <div class="card"><div class="n">${data.totals.plays}</div><div class="l">Reproducciones</div></div>
+          <div class="card"><div class="n">${data.totals.searches}</div><div class="l">Búsquedas</div></div>
+        </div>
+        <table><thead><tr><th>Email</th><th>Logins</th><th>Reproducciones</th><th>Última actividad</th><th>Registrado</th></tr></thead><tbody>${rows || '<tr><td colspan="5">Sin usuarios aún.</td></tr>'}</tbody></table>
+        </body></html>`);
     }));
   }
 

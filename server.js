@@ -20,6 +20,7 @@ import {
   createJsonHistoryRepo,
   createJsonSavedAlbumsRepo,
   createJsonTrackMetaRepo,
+  createJsonStatsRepo,
 } from './src/repositories/jsondb.js';
 import { query } from './src/db/pool.js';
 import {
@@ -65,6 +66,7 @@ async function bootstrap() {
         historyRepo: createJsonHistoryRepo(),
         savedAlbumsRepo: createJsonSavedAlbumsRepo(),
         trackMetaRepo: createJsonTrackMetaRepo(),
+        statsRepo: createJsonStatsRepo(),
         // trackRepo en null: el catálogo es YouTube Music (IDs dinámicos), por lo que
         // no validamos existencia local de pista al guardar favoritos/listas/historial.
         trackRepo: null,

@@ -97,6 +97,8 @@ export function createAuthService({ userRepo, jwtSecret = process.env.JWT_SECRET
       if (!ok) {
         throw new AuthError(401, 'Credenciales inválidas.');
       }
+      // Trazabilidad: registrar el inicio de sesión (best-effort).
+      try { if (typeof userRepo.recordLogin === 'function') await userRepo.recordLogin(user.id); } catch {}
       const token = jwt.sign({ sub: user.id }, jwtSecret, { expiresIn: TOKEN_TTL_SECONDS });
       return { token };
     },

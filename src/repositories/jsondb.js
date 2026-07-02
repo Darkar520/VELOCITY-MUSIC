@@ -19,7 +19,7 @@ const DATA_DIR = path.join(__dirname, '..', '..', 'data');
 const DB_FILE = path.join(DATA_DIR, 'velocity-db.json');
 
 function emptyStore() {
-  return { users: {}, emailIndex: {}, playlists: {}, favorites: {}, history: [], savedAlbums: {}, tracks: {}, seq: 0 };
+  return { users: {}, emailIndex: {}, playlists: {}, favorites: {}, history: [], savedAlbums: {}, tracks: {}, stats: { logins: 0, plays: 0, searches: 0 }, seq: 0 };
 }
 
 let store = emptyStore();
@@ -111,6 +111,49 @@ export function createJsonUserRepo() {
       store.emailIndex[email] = user.id;
       save();
       return user;
+    },
+    // Trazabilidad: registra el último inicio de sesión y cuenta acumulada.
+    async recordLogin(id) {
+      const u = store.users[id];
+      if (u) { u.lastLogin = Date.now(); u.loginCount = (u.loginCount || 0) + 1; save(); }
+    },
+    // Trazabilidad: cuenta acumulada de reproducciones por usuario.
+    async recordPlay(id) {
+      const u = store.users[id];
+      if (u) { u.playCount = (u.playCount || 0) + 1; u.lastActive = Date.now(); save(); }
+    },
+  };
+}
+
+/**
+ * Métricas / trazabilidad de uso (contadores globales + resumen por usuario).
+ */
+export function createJsonStatsRepo() {
+  return {
+    async incr(metric, n = 1) {
+      if (!store.stats) store.stats = {};
+      store.stats[metric] = (store.stats[metric] || 0) + n;
+      save();
+    },
+    async summary() {
+      const users = Object.values(store.users || {}).map((u) => ({
+        email: u.email,
+        createdAt: u.createdAt,
+        lastLogin: u.lastLogin || null,
+        lastActive: u.lastActive || null,
+        loginCount: u.loginCount || 0,
+        playCount: u.playCount || 0,
+      })).sort((a, b) => (b.lastActive || b.lastLogin || 0) - (a.lastActive || a.lastLogin || 0));
+      const s = store.stats || {};
+      return {
+        totals: {
+          registeredUsers: users.length,
+          logins: s.logins || 0,
+          plays: s.plays || 0,
+          searches: s.searches || 0,
+        },
+        users,
+      };
     },
   };
 }

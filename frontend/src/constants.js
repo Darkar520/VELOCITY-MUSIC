@@ -47,12 +47,65 @@ export const CSS = `
   @media (hover: none) { .media-actions, .track-row .row-extra { opacity:1; transform:none; } }
 `;
 
+// Paleta base (tema oscuro por defecto). Los skins pueden sobrescribir estas
+// variables CSS para cambiar por completo el aspecto del reproductor.
+export const BASE_VARS = {
+  '--bg-0':'#04060a', '--bg-1':'#080c12', '--surf-0':'#0b0f16', '--surf-1':'#10151e', '--surf-2':'#161c27',
+  '--line':'#ffffff10', '--line-soft':'#ffffff08',
+  '--txt-0':'#f4f7fb', '--txt-1':'#aab4c2', '--txt-2':'#5b6675', '--txt-3':'#3a4150',
+};
+
 export const THEMES = {
+  // ── Acentos sobre el tema oscuro base ──
   emerald: { name:'Esmeralda', accent:'#10d9a0', accent2:'#06b6d4' },
   violet:  { name:'Violeta',   accent:'#a78bfa', accent2:'#ec4899' },
   ocean:   { name:'Océano',    accent:'#38bdf8', accent2:'#6366f1' },
   solar:   { name:'Solar',     accent:'#fbbf24', accent2:'#f97316' },
   rose:    { name:'Rosa',      accent:'#fb7185', accent2:'#f43f5e' },
+  gold:    { name:'Oro',       accent:'#eab308', accent2:'#f59e0b' },
+  ice:     { name:'Hielo',     accent:'#7dd3fc', accent2:'#e0f2fe' },
+
+  // ── Skins completos (cambian todo el aspecto) ──
+  matrix: {
+    name:'Matrix', accent:'#22ff88', accent2:'#00cc66',
+    vars: {
+      '--bg-0':'#000500', '--bg-1':'#001200', '--surf-0':'#021705', '--surf-1':'#04240a', '--surf-2':'#063311',
+      '--line':'#22ff8820', '--line-soft':'#22ff8810',
+      '--txt-0':'#c8ffd8', '--txt-1':'#5fdc8a', '--txt-2':'#2f8a55', '--txt-3':'#1c5636',
+    },
+  },
+  cyberpunk: {
+    name:'Cyberpunk', accent:'#ff2bd6', accent2:'#00e5ff',
+    vars: {
+      '--bg-0':'#0a0014', '--bg-1':'#12001f', '--surf-0':'#160a24', '--surf-1':'#1f1030', '--surf-2':'#2a163f',
+      '--line':'#ff2bd620', '--line-soft':'#00e5ff10',
+      '--txt-0':'#fdeaff', '--txt-1':'#c39ad6', '--txt-2':'#7c5a92', '--txt-3':'#4d3a5e',
+    },
+  },
+  vapor: {
+    name:'Vaporwave', accent:'#ff71ce', accent2:'#01cdfe',
+    vars: {
+      '--bg-0':'#12082a', '--bg-1':'#1a0f3a', '--surf-0':'#1d1140', '--surf-1':'#271650', '--surf-2':'#331e63',
+      '--line':'#ff71ce22', '--line-soft':'#01cdfe12',
+      '--txt-0':'#fdf0ff', '--txt-1':'#c4a8e8', '--txt-2':'#8268b0', '--txt-3':'#544080',
+    },
+  },
+  crimson: {
+    name:'Carmesí', accent:'#ff3b3b', accent2:'#ff7849',
+    vars: {
+      '--bg-0':'#0d0303', '--bg-1':'#160505', '--surf-0':'#1a0808', '--surf-1':'#240c0c', '--surf-2':'#331313',
+      '--line':'#ff3b3b1e', '--line-soft':'#ff3b3b0e',
+      '--txt-0':'#ffecec', '--txt-1':'#d6a3a3', '--txt-2':'#8a5b5b', '--txt-3':'#563a3a',
+    },
+  },
+  mono: {
+    name:'Mono', accent:'#e5e7eb', accent2:'#9ca3af',
+    vars: {
+      '--bg-0':'#000000', '--bg-1':'#050505', '--surf-0':'#0c0c0c', '--surf-1':'#141414', '--surf-2':'#1e1e1e',
+      '--line':'#ffffff14', '--line-soft':'#ffffff0a',
+      '--txt-0':'#fafafa', '--txt-1':'#b4b4b4', '--txt-2':'#6b6b6b', '--txt-3':'#3f3f3f',
+    },
+  },
 };
 
 // Búsquedas semilla para poblar el inicio (no hay endpoint de catálogo/charts).

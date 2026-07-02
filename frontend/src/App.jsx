@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { api, isAuthed, setOnUnauthorized } from './api.js';
 import * as offline from './offline.js';
-import { CSS, THEMES, SEED_ROWS, GENRES, FALLBACK_COVER } from './constants.js';
+import { CSS, THEMES, SEED_ROWS, GENRES, FALLBACK_COVER, BASE_VARS } from './constants.js';
 import { fmt, hex2rgba, grad, hiResCover, dedupeByTitle, capPerArtist, slimTrack, parseLRC } from './helpers.js';
 import { cacheTrack, cacheTracks, trackById, allCached, loadMeta, loadPlayerState, saveMeta, normalizeTrack } from './catalog.js';
 import { usePersisted, useViewport, useDominantColor } from './hooks.js';
@@ -382,10 +382,13 @@ function ProfileTab({ ctx }) {
 
       <SettingCard title="Calidad de Audio">
         <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:9 }}>
-          {['Standard','HQ','FLAC'].map(qz => (
-            <button key={qz} onClick={() => setQuality(qz)} className="btn-tap" style={{ padding:'10px 0', borderRadius:13, fontSize:11, fontWeight:800, background: qz===quality ? grad(T) : 'var(--surf-1)', color: qz===quality ? '#04060a' : 'var(--txt-2)', border: `1px solid ${qz===quality ? 'transparent' : 'var(--line-soft)'}`, cursor:'pointer', boxShadow: qz===quality ? `0 4px 14px ${hex2rgba(T.accent,.4)}` : 'none' }}>{qz}</button>
+          {[['high','Alta','Opus ~160k'],['medium','Media','AAC ~128k'],['low','Baja','~96k · ahorro']].map(([val,label,desc]) => (
+            <button key={val} onClick={() => setQuality(val)} className="btn-tap" style={{ padding:'9px 0', borderRadius:13, fontSize:11.5, fontWeight:800, background: val===quality ? grad(T) : 'var(--surf-1)', color: val===quality ? '#04060a' : 'var(--txt-2)', border: `1px solid ${val===quality ? 'transparent' : 'var(--line-soft)'}`, cursor:'pointer', boxShadow: val===quality ? `0 4px 14px ${hex2rgba(T.accent,.4)}` : 'none', display:'flex', flexDirection:'column', alignItems:'center', gap:3 }}>
+              {label}<span style={{ fontSize:8.5, fontWeight:700, opacity:.8 }}>{desc}</span>
+            </button>
           ))}
         </div>
+        <div style={{ fontSize:9.5, color:'var(--txt-3)', textAlign:'center', marginTop:9 }}>YouTube no ofrece audio sin pérdida (FLAC); Opus ~160 kbps es la máxima calidad disponible.</div>
       </SettingCard>
 
       <SettingCard title="Intensidad de Glow" badge={`${glow}%`} accent={T.accent}>
@@ -994,7 +997,7 @@ export default function App() {
 
   // preferencias persistentes
   const [themeKey, setThemeKey] = usePersisted('velocity.theme', 'emerald');
-  const [quality, setQuality] = usePersisted('velocity.quality', 'HQ');
+  const [quality, setQuality] = usePersisted('velocity.quality', 'high');
   const [glow, setGlow] = usePersisted('velocity.glow', 70);
   const [eq, setEq] = usePersisted('velocity.eq', 'waves');
   const [lyricOffset, setLyricOffset] = usePersisted('velocity.lyricOffset', 0);
@@ -1027,7 +1030,47 @@ export default function App() {
   const showToast = (m) => { setToast(m); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 2400); };
 
   const audioRef = useRef(null);
+  // Web Audio para normalizar volumen (compresor de rango dinámico). Opt-in.
+  const audioCtxRef = useRef(null);
+  const compressorRef = useRef(null);
+  const ensureAudioGraph = () => {
+    if (audioCtxRef.current) return audioCtxRef.current;
+    if (!audioRef.current) return null;
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return null;
+      const ctx = new Ctx();
+      const src = ctx.createMediaElementSource(audioRef.current);
+      const comp = ctx.createDynamicsCompressor();
+      src.connect(comp); comp.connect(ctx.destination);
+      audioCtxRef.current = ctx; compressorRef.current = comp;
+      return ctx;
+    } catch { return null; }
+  };
+  const applyNormalize = (on) => {
+    const comp = compressorRef.current, ctx = audioCtxRef.current;
+    if (!comp || !ctx) return;
+    const now = ctx.currentTime;
+    try {
+      if (on) {
+        comp.threshold.setValueAtTime(-26, now); comp.knee.setValueAtTime(30, now);
+        comp.ratio.setValueAtTime(12, now); comp.attack.setValueAtTime(0.003, now); comp.release.setValueAtTime(0.25, now);
+      } else {
+        comp.threshold.setValueAtTime(0, now); comp.ratio.setValueAtTime(1, now); comp.knee.setValueAtTime(0, now);
+      }
+    } catch {}
+  };
   const T = THEMES[themeKey] || THEMES.emerald;
+
+  // Aplica la paleta del skin (o la base) a las variables CSS del :root.
+  useEffect(() => {
+    const root = document.documentElement;
+    const vars = { ...BASE_VARS, ...(T.vars || {}) };
+    for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
+    // Color de la barra de estado del navegador/PWA acorde al fondo del tema.
+    const tc = document.querySelector('meta[name="theme-color"]');
+    if (tc) tc.setAttribute('content', vars['--bg-0']);
+  }, [themeKey]);
   const { w: vw } = useViewport();
   const wide = vw >= 900;
 
@@ -1199,10 +1242,19 @@ export default function App() {
           }
         });
       }
+      // Reanudar el contexto de Web Audio (normalización) si está activo.
+      if (audioCtxRef.current) audioCtxRef.current.resume?.().catch(() => {});
     } else {
       a.pause();
     }
   }, [playing, track, playSrc]);
+
+  // ── Normalizar volumen (Web Audio, opt-in) ──
+  useEffect(() => {
+    if (!settings.normalize) { if (compressorRef.current) applyNormalize(false); return; }
+    const ctx = ensureAudioGraph();
+    if (ctx) { ctx.resume?.().catch(() => {}); applyNormalize(true); }
+  }, [settings.normalize]);
   useEffect(() => { if (audioRef.current) audioRef.current.volume = vol; }, [vol]);
 
   // ── Precargar la(s) siguiente(s) pista(s) al cambiar la actual o la cola ──
@@ -1210,7 +1262,7 @@ export default function App() {
   // el cambio a la siguiente sea instantáneo (URL ya resuelta en el backend).
   useEffect(() => {
     if (!track) return;
-    const qualityMap = { HQ: 'high', Standard: 'medium', FLAC: 'low' };
+    const qualityMap = { high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' };
     const qParam = qualityMap[quality] || 'high';
     const ids = queue.length ? queue : [track.id];
     prefetchNext(track.id, ids, qParam);
@@ -1330,7 +1382,7 @@ export default function App() {
     const initialQueue = list && list.length ? list : [t.id];
     setQueue(initialQueue);
     // Mapear preferencia de calidad de la UI al ID del backend.
-    const qualityMap = { HQ: 'high', Standard: 'medium', FLAC: 'low' };
+    const qualityMap = { high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' };
     const qParam = qualityMap[quality] || 'high';
     // Reconstruir URL con la calidad actual en el momento de reproducir.
     const trackWithQuality = { ...t, url: api.streamUrl({ artist: t.artist, title: t.title, id: t.id, quality: qParam }) };
@@ -1388,7 +1440,7 @@ export default function App() {
   // ── Descargas offline (IndexedDB, sin diálogo de guardado) ──
   // URL de streaming con la calidad actual: coincide con la clave de caché que
   // usan reproducir/precargar, así una canción ya resuelta se descarga al instante.
-  const streamUrlQ = (t) => api.streamUrl({ artist: t.artist, title: t.title, id: t.id, quality: ({ HQ:'high', Standard:'medium', FLAC:'low' }[quality] || 'high') });
+  const streamUrlQ = (t) => api.streamUrl({ artist: t.artist, title: t.title, id: t.id, quality: ({ high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' }[quality] || 'high') });
   const fetchBlobWithTimeout = async (url, ms = 60000) => {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), ms);
@@ -1457,7 +1509,7 @@ export default function App() {
     const currentQueue = queueRef.current;
     const currentSettings = settingsRef.current;
 
-    if (repeat && audioRef.current) { audioRef.current.currentTime = 0; audioRef.current.play().catch(() => {}); return; }
+    if (repeat && audioRef.current) { audioRef.current.currentTime = 0; audioRef.current.volume = vol; audioRef.current.play().catch(() => {}); return; }
     if (!currentSettings.autoplay) { setPlaying(false); return; }
 
     const ids = currentQueue.length ? currentQueue : (currentTrack ? [currentTrack.id] : []);
@@ -1690,7 +1742,17 @@ export default function App() {
 
   const audioEl = (
     <audio ref={audioRef} src={playSrc || (track ? track.url : undefined)} preload="metadata"
-      onTimeUpdate={() => { const ct = audioRef.current?.currentTime || 0; setTime(ct); if (ct > 0 && loadingAudio) setLoadingAudio(false); }}
+      onTimeUpdate={() => {
+        const a = audioRef.current; if (!a) return;
+        const ct = a.currentTime || 0; setTime(ct);
+        if (ct > 0 && loadingAudio) setLoadingAudio(false);
+        // Crossfade: desvanecer el volumen en los últimos N segundos de la pista.
+        const cf = Math.min(settings.crossfade || 0, (a.duration || 0) / 2);
+        if (cf > 0 && a.duration && isFinite(a.duration) && !pendingFadeRef.current) {
+          const remaining = a.duration - ct;
+          if (remaining < cf) a.volume = Math.max(0, vol * (remaining / cf));
+        }
+      }}
       onLoadedMetadata={() => { setDur(audioRef.current?.duration||0); if (resumeRef.current != null && audioRef.current) { try { audioRef.current.currentTime = resumeRef.current; } catch {} setTime(resumeRef.current); resumeRef.current = null; } }}
       onCanPlay={() => setLoadingAudio(false)}
       onPlay={() => setLoadingAudio(false)}
