@@ -1001,6 +1001,25 @@ export default function App() {
   const [dur, setDur] = useState(0);
   const [vol, setVol] = useState(0.85);
   const [expanded, setExpanded] = useState(false);
+  const expandedHistRef = useRef(false);
+
+  // Intercepta el botón "retroceder" del sistema (Android/iOS) cuando el
+  // reproductor expandido está abierto, para que lo cierre en vez de salir.
+  useEffect(() => {
+    if (expanded) {
+      window.history.pushState({ velocity: 'expanded' }, '');
+      expandedHistRef.current = true;
+      const onPop = (e) => {
+        // Si el navegador retrocedió desde nuestra entrada ficticia, cerrar el panel.
+        if (expandedHistRef.current) { expandedHistRef.current = false; setExpanded(false); }
+      };
+      window.addEventListener('popstate', onPop);
+      return () => window.removeEventListener('popstate', onPop);
+    } else {
+      // Se cerró programáticamente — si la entrada ficticia sigue en el stack, sacarla.
+      if (expandedHistRef.current) { expandedHistRef.current = false; window.history.back(); }
+    }
+  }, [expanded]);
   const [shuffle, setShuffle] = useState(false);
   const [repeat, setRepeat] = useState(false);
   const [queue, setQueue] = useState(() => { const s = loadPlayerState(); return s ? (Array.isArray(s.queue) && s.queue.length ? s.queue : [s.track.id]) : []; });
