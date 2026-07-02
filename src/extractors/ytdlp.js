@@ -77,33 +77,64 @@ export function createYtDlpExtractor() {
   };
 }
 
-function runForUrl(args) {
+// ───────────────────────────────────────────────────────────────
+// Control de concurrencia de procesos yt-dlp.
+// Cada reproducción/búsqueda lanza un proceso yt-dlp. Sin límite, muchos
+// usuarios simultáneos saturarían CPU/memoria y tumbarían el backend.
+// Semáforo: como máximo MAX_CONCURRENT procesos a la vez; el resto hace cola.
+// Además, cada proceso se MATA al expirar para no dejar procesos zombie.
+// ───────────────────────────────────────────────────────────────
+const MAX_CONCURRENT = Number(process.env.YTDLP_MAX_CONCURRENT || 4);
+let _active = 0;
+const _waiters = [];
+
+function acquireSlot() {
+  if (_active < MAX_CONCURRENT) { _active++; return Promise.resolve(); }
+  return new Promise((res) => _waiters.push(res));
+}
+function releaseSlot() {
+  const next = _waiters.shift();
+  if (next) next();       // el slot pasa directo al siguiente en cola
+  else _active--;
+}
+
+/**
+ * Ejecuta yt-dlp con límite de concurrencia y timeout que MATA el proceso.
+ * @param {string[]} args
+ * @param {{ mode?: 'url'|'lines', timeoutMs?: number }} opts
+ */
+function runYtDlp(args, { mode = 'url', timeoutMs = 30000 } = {}) {
+  const empty = mode === 'lines' ? [] : null;
   return new Promise((resolve) => {
-    let out = '';
-    let settled = false;
-    const done = (v) => {
-      if (!settled) {
+    acquireSlot().then(() => {
+      let out = '';
+      let settled = false;
+      let proc = null;
+      let timer = null;
+      const finish = (v) => {
+        if (settled) return;
         settled = true;
+        clearTimeout(timer);
+        try { if (proc && !proc.killed) proc.kill('SIGKILL'); } catch {}
+        releaseSlot();
         resolve(v);
-      }
-    };
-    try {
-      const proc = spawn(resolveYtDlpBin(), args);
-      proc.stdout.on('data', (d) => {
-        out += d.toString();
-      });
-      proc.on('close', (code) => {
-        if (code === 0 && out.trim()) {
-          done(out.trim().split('\n')[0]); // primera URL directa
-        } else {
-          done(null);
-        }
-      });
-      proc.on('error', () => done(null));
-    } catch {
-      done(null);
-    }
+      };
+      try {
+        proc = spawn(resolveYtDlpBin(), args);
+        timer = setTimeout(() => finish(empty), timeoutMs);   // mata el proceso colgado
+        proc.stdout.on('data', (d) => { out += d.toString(); });
+        proc.on('close', (code) => {
+          if (mode === 'lines') finish(out.trim() ? out.trim().split('\n') : []);
+          else finish(code === 0 && out.trim() ? out.trim().split('\n')[0] : null);
+        });
+        proc.on('error', () => finish(empty));
+      } catch { finish(empty); }
+    });
   });
+}
+
+function runForUrl(args) {
+  return runYtDlp(args, { mode: 'url', timeoutMs: 30000 });
 }
 
 /**
@@ -174,26 +205,7 @@ function cleanArtist(artist) {
 }
 
 function runForLines(args) {
-  return new Promise((resolve) => {
-    let out = '';
-    let settled = false;
-    const done = (v) => {
-      if (!settled) {
-        settled = true;
-        resolve(v);
-      }
-    };
-    try {
-      const proc = spawn(resolveYtDlpBin(), args);
-      proc.stdout.on('data', (d) => {
-        out += d.toString();
-      });
-      proc.on('close', () => done(out.trim() ? out.trim().split('\n') : []));
-      proc.on('error', () => done([]));
-    } catch {
-      done([]);
-    }
-  });
+  return runYtDlp(args, { mode: 'lines', timeoutMs: 15000 });
 }
 
 function safeParse(line) {
