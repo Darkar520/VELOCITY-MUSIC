@@ -352,7 +352,8 @@ function LibraryTab({ ctx }) {
 // ═══════════════════════════════════════════════════════════════
 function ProfileTab({ ctx }) {
   const { T, themeKey, setThemeKey, quality, setQuality, glow, setGlow, eq, setEq,
-          settings, setSettings, favs, setOpenPlaylist, setTab, email, onLogout } = ctx;
+          settings, setSettings, favs, setOpenPlaylist, setTab, email, onLogout,
+          installApp, canInstall, isIOS, isStandalone } = ctx;
   const set = (k, v) => setSettings(s => ({ ...s, [k]: v }));
 
   return (
@@ -402,6 +403,24 @@ function ProfileTab({ ctx }) {
           <RangeSlider value={settings.crossfade} min={0} max={12} onChange={v => set('crossfade', v)} accent={T.accent} ariaLabel="Crossfade" />
         </div>
       </SettingCard>
+
+      {!isStandalone && (
+        <SettingCard title="Aplicación">
+          {canInstall ? (
+            <button onClick={installApp} className="btn-tap" style={{ width:'100%', display:'flex', alignItems:'center', justifyContent:'center', gap:10, background:grad(T), border:'none', borderRadius:14, padding:'13px 0', cursor:'pointer', color:'#04060a', fontSize:13, fontWeight:800, boxShadow:`0 6px 18px ${hex2rgba(T.accent,.4)}` }}>
+              <Icon.Down c="#04060a" sz={18} /> Instalar en pantalla de inicio
+            </button>
+          ) : isIOS ? (
+            <div style={{ fontSize:12, color:'var(--txt-1)', lineHeight:1.6 }}>
+              Para instalar en tu iPhone: toca el botón <b>Compartir</b> de Safari y luego <b>“Agregar a inicio”</b>. La app aparecerá con su ícono en la pantalla de inicio.
+            </div>
+          ) : (
+            <div style={{ fontSize:12, color:'var(--txt-2)', lineHeight:1.6 }}>
+              Abre esta página en Chrome y usa el menú <b>⋮ → “Instalar app”</b> (o “Agregar a pantalla de inicio”) para instalarla como aplicación.
+            </div>
+          )}
+        </SettingCard>
+      )}
 
       <button onClick={onLogout} className="btn-tap" style={{ width:'100%', display:'flex', alignItems:'center', justifyContent:'center', gap:10, background:'var(--surf-0)', border:'1px solid var(--line)', borderRadius:16, padding:'14px 0', cursor:'pointer', color:'#fb7185', fontSize:13, fontWeight:800, marginTop:6 }}>
         <Icon.Out c="#fb7185" sz={17} /> Cerrar sesión
@@ -1595,14 +1614,21 @@ export default function App() {
         ] : [],
       });
     }
-    navigator.mediaSession.setActionHandler('play',     () => { if (audioRef.current) { audioRef.current.play(); setPlaying(true); } });
-    navigator.mediaSession.setActionHandler('pause',    () => { if (audioRef.current) { audioRef.current.pause(); setPlaying(false); } });
+    const a = () => audioRef.current;
+    const doPlay = () => { const el = a(); if (el) { if (el.volume === 0) el.volume = vol; el.play().catch(() => {}); setPlaying(true); } };
+    const doPause = () => { const el = a(); if (el) { el.pause(); setPlaying(false); } };
+    navigator.mediaSession.setActionHandler('play', doPlay);
+    navigator.mediaSession.setActionHandler('pause', doPause);
     navigator.mediaSession.setActionHandler('previoustrack', () => prev());
-    navigator.mediaSession.setActionHandler('nexttrack',     () => next());
-    navigator.mediaSession.setActionHandler('seekto', (e) => { if (e.seekTime != null) seek(e.seekTime); });
+    navigator.mediaSession.setActionHandler('nexttrack', () => next());
+    try { navigator.mediaSession.setActionHandler('seekto', (e) => { if (e.seekTime != null) seek(e.seekTime); }); } catch {}
+    // Algunos audífonos envían seekforward/seekbackward en vez de next/prev.
+    try { navigator.mediaSession.setActionHandler('seekforward', () => next()); } catch {}
+    try { navigator.mediaSession.setActionHandler('seekbackward', () => prev()); } catch {}
+    try { navigator.mediaSession.setActionHandler('stop', () => doPause()); } catch {}
     return () => {
-      ['play','pause','previoustrack','nexttrack','seekto'].forEach(a => {
-        try { navigator.mediaSession.setActionHandler(a, null); } catch {}
+      ['play','pause','previoustrack','nexttrack','seekto','seekforward','seekbackward','stop'].forEach(act => {
+        try { navigator.mediaSession.setActionHandler(act, null); } catch {}
       });
     };
   }, [track, playing]);
@@ -1612,6 +1638,24 @@ export default function App() {
     if (!('mediaSession' in navigator)) return;
     navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
   }, [playing]);
+
+  // ── Instalación de la PWA (pantalla de inicio) ──
+  const [installEvt, setInstallEvt] = useState(null);
+  useEffect(() => {
+    const onBIP = (e) => { e.preventDefault(); setInstallEvt(e); };
+    const onInstalled = () => setInstallEvt(null);
+    window.addEventListener('beforeinstallprompt', onBIP);
+    window.addEventListener('appinstalled', onInstalled);
+    return () => { window.removeEventListener('beforeinstallprompt', onBIP); window.removeEventListener('appinstalled', onInstalled); };
+  }, []);
+  const isIOS = typeof navigator !== 'undefined' && /iphone|ipad|ipod/i.test(navigator.userAgent) && !/crios|fxios/i.test(navigator.userAgent);
+  const isStandalone = typeof window !== 'undefined' && ((window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone === true);
+  const installApp = async () => {
+    if (!installEvt) return;
+    installEvt.prompt();
+    try { await installEvt.userChoice; } catch {}
+    setInstallEvt(null);
+  };
 
   if (!authed) return <AuthScreen onAuthed={handleAuthed} T={T} />;
 
@@ -1626,6 +1670,7 @@ export default function App() {
     openPlaylist, setOpenPlaylist, setTab, addToTarget: setAddTarget, onMenu: setMenuTarget,
     themeKey, setThemeKey, quality, setQuality, glow, setGlow, eq, setEq, settings, setSettings,
     view, setView, goArtist, goAlbum, goMix, shareTrack, email, onLogout, detailData,
+    installApp, canInstall: !!installEvt, isIOS, isStandalone,
     addToQueue, download, removeDownload, downloadMany, downloaded, downloading, openQueue: () => setShowQueue(true),
     savedAlbums, saveAlbum, unsaveAlbum, isAlbumSaved,
     selecting, selection, toggleSelect, startSelection, clearSelection,
