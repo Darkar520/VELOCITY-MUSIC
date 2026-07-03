@@ -7,6 +7,7 @@ import { cacheTrack, cacheTracks, trackById, allCached, loadMeta, loadPlayerStat
 import { usePersisted, useViewport, useDominantColor, useHSwipe } from './hooks.js';
 import { Icon } from './Icons.jsx';
 import { EQViz, Spinner, ProgressRing, DownloadAllButton, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider, SettingCard, ToggleRow, ColorField } from './components.jsx';
+import { Avatar, PixelAvatar, AVATARS } from './avatars.jsx';
 
 
 // ═══════════════════════════════════════════════════════════════
@@ -161,7 +162,7 @@ function HomeTab({ ctx }) {
         </div>
         <div style={{ display:'flex', alignItems:'center', gap:9, flexShrink:0 }}>
           <button aria-label="AI DJ" onClick={async () => { if (djBusy) return; setDjBusy(true); try { await startAiDj?.(); } finally { setDjBusy(false); } }} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:6, background:'var(--surf-1)', border:`1px solid ${hex2rgba(T.accent,.35)}`, borderRadius:99, padding:'7px 13px', cursor:'pointer', color:T.accent, fontSize:11, fontWeight:800 }}>{djBusy ? <Spinner c={T.accent} sz={13} /> : <Icon.Play c={T.accent} sz={13} />} AI DJ</button>
-          <div className="press" style={{ width:40, height:40, borderRadius:'50%', background:grad(T), display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, fontWeight:900, color:'#04060a', boxShadow:`0 4px 16px ${hex2rgba(T.accent,.5)}` }}>{(ctx.email||'V')[0].toUpperCase()}</div>
+          <button onClick={() => ctx.setTab('profile')} className="press" aria-label="Perfil" style={{ background:'none', border:'none', padding:0, cursor:'pointer' }}><Avatar avatar={ctx.avatar} name={ctx.displayName} email={ctx.email} T={T} size={40} /></button>
         </div>
       </div>
 
@@ -431,8 +432,9 @@ function ProfileTab({ ctx }) {
           settings, setSettings, favs, setOpenPlaylist, setTab, email, onLogout,
           installApp, canInstall, isIOS, isStandalone, goWrapped,
           customPalettes, activeCustomId, setActiveCustomId, activePalette, addPalette, updatePalette, deletePalette,
-          displayName, saveProfileName, deleteAccount } = ctx;
+          displayName, saveProfileName, deleteAccount, avatar, saveAvatar } = ctx;
   const set = (k, v) => setSettings(s => ({ ...s, [k]: v }));
+  const [avatarPicker, setAvatarPicker] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const doDelete = async () => { setDeleting(true); try { await deleteAccount(); } finally { setDeleting(false); } };
@@ -450,11 +452,14 @@ function ProfileTab({ ctx }) {
 
   return (
     <div className="fade-up" style={{ paddingBottom:8 }}>
-      <div style={{ fontSize:24, fontWeight:900, color:'var(--txt-0)', letterSpacing:-.6, marginBottom:20, paddingTop:4 }}>Yo</div>
+      <div style={{ fontSize:24, fontWeight:900, color:'var(--txt-0)', letterSpacing:-.6, marginBottom:20, paddingTop:4 }}>Perfil</div>
 
       <div style={{ position:'relative', background:`linear-gradient(135deg, ${hex2rgba(T.accent,.18)}, ${hex2rgba(T.accent2,.05)}), var(--surf-0)`, border:`1px solid ${hex2rgba(T.accent,.24)}`, borderRadius:22, padding:19, marginBottom:14, display:'flex', alignItems:'center', gap:15, overflow:'hidden', boxShadow:`0 12px 30px ${hex2rgba(T.accent,.14)}` }}>
         <div style={{ position:'absolute', top:-30, right:-10, width:110, height:110, borderRadius:'50%', background:grad(T), filter:'blur(40px)', opacity:.3 }} />
-        <div style={{ width:52, height:52, borderRadius:'50%', background:grad(T), display:'flex', alignItems:'center', justifyContent:'center', fontSize:20, fontWeight:900, color:'#04060a', flexShrink:0, boxShadow:`0 4px 18px ${hex2rgba(T.accent,.5)}`, position:'relative' }}>{(shownName||'V')[0].toUpperCase()}</div>
+        <button onClick={() => setAvatarPicker(true)} className="btn-tap" aria-label="Cambiar foto de perfil" style={{ position:'relative', background:'none', border:'none', padding:0, cursor:'pointer', flexShrink:0 }}>
+          <Avatar avatar={avatar} name={shownName} email={email} T={T} size={54} />
+          <div style={{ position:'absolute', bottom:-2, right:-2, width:20, height:20, borderRadius:'50%', background:grad(T), border:'2px solid var(--surf-0)', display:'flex', alignItems:'center', justifyContent:'center' }}><Icon.Edit c="#04060a" sz={10} /></div>
+        </button>
         <div style={{ position:'relative', minWidth:0, flex:1 }}>
           {editingName ? (
             <div style={{ display:'flex', gap:8, alignItems:'center' }}>
@@ -471,6 +476,35 @@ function ProfileTab({ ctx }) {
           <span style={{ display:'inline-block', marginTop:8, fontSize:8.5, fontWeight:900, color:'#04060a', background:grad(T), borderRadius:20, padding:'3px 11px', letterSpacing:1.5, textTransform:'uppercase' }}>PRO MEMBER</span>
         </div>
       </div>
+
+      {avatarPicker && (
+        <>
+          <div onClick={() => setAvatarPicker(false)} style={{ position:'fixed', inset:0, background:'#04060acc', backdropFilter:'blur(10px)', WebkitBackdropFilter:'blur(10px)', zIndex:130 }} />
+          <div className="fade-up" style={{ position:'fixed', left:0, right:0, bottom:0, margin:'0 auto', width:'100%', maxWidth:460, maxHeight:'82dvh', overflowY:'auto', background:'linear-gradient(180deg, var(--surf-1), var(--surf-0))', border:'1px solid var(--line)', borderRadius:'26px 26px 0 0', padding:'10px 18px calc(env(safe-area-inset-bottom, 16px) + 20px)', zIndex:131, boxShadow:'0 -30px 80px #000d' }}>
+            <div style={{ width:40, height:4, borderRadius:99, background:'var(--surf-2)', margin:'6px auto 14px' }} />
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+              <div style={{ fontSize:16, fontWeight:900, color:'var(--txt-0)' }}>Elige tu avatar</div>
+              <button aria-label="Cerrar" onClick={() => setAvatarPicker(false)} className="press" style={{ background:'none', border:'none', cursor:'pointer' }}><Icon.X c="var(--txt-1)" sz={20} /></button>
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(72px, 1fr))', gap:12 }}>
+              <button onClick={() => { saveAvatar(''); }} className="btn-tap" style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:6, background:'none', border:'none', cursor:'pointer' }}>
+                <div style={{ position:'relative', borderRadius:'50%', padding:3, background: !avatar ? grad(T) : 'transparent' }}>
+                  <Avatar avatar="" name={shownName} email={email} T={T} size={58} />
+                </div>
+                <span style={{ fontSize:9.5, fontWeight:700, color: !avatar ? T.accent : 'var(--txt-2)' }}>Inicial</span>
+              </button>
+              {AVATARS.map(av => (
+                <button key={av.id} onClick={() => { saveAvatar(av.id); }} className="btn-tap" style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:6, background:'none', border:'none', cursor:'pointer' }}>
+                  <div style={{ position:'relative', borderRadius:'50%', padding:3, background: avatar===av.id ? grad(T) : 'transparent' }}>
+                    <PixelAvatar av={av} size={58} />
+                  </div>
+                  <span style={{ fontSize:9.5, fontWeight:700, color: avatar===av.id ? T.accent : 'var(--txt-2)' }}>{av.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
 
       <button onClick={() => goWrapped?.()} className="btn-tap" style={{ width:'100%', position:'relative', overflow:'hidden', textAlign:'left', cursor:'pointer', borderRadius:20, padding:'16px 18px', marginBottom:14, background:`linear-gradient(135deg, ${T.accent}, ${T.accent2})`, color:'#04060a', border:'none', boxShadow:`0 12px 30px ${hex2rgba(T.accent,.4)}` }}>
         <div style={{ position:'absolute', top:-30, right:-20, width:110, height:110, borderRadius:'50%', background:'#ffffff55', filter:'blur(38px)', pointerEvents:'none' }} />
@@ -671,51 +705,66 @@ function MiniPlayerBar({ track, playing, togglePlay, loadingAudio, T, pct, setEx
 }
 
 // ── Portada con swipe para cambiar canción ──
-function CoverSwipe({ next, prev, playing, glowF, ambientRgba, art, track, loadingAudio }) {
-  const [slideDir, setSlideDir] = useState(0); // -1 izq, 1 der, 0 estático
-  const [coverKey, setCoverKey] = useState(0);
-  const prevTrackId = useRef(track?.id);
+function CoverSwipe({ next, prev, playing, glowF, ambientRgba, art, track, loadingAudio, nextCover, prevCover }) {
+  const [dragX, setDragX] = useState(0);
+  const [slideTo, setSlideTo] = useState(null); // null | 'next' | 'prev' | 'back'
+  const sx = useRef(0), sy = useRef(0), lock = useRef(null), wRef = useRef(0);
+  const boxRef = useRef(null);
 
-  // Detectar cambio de canción para animar entrada
-  useEffect(() => {
-    if (track?.id !== prevTrackId.current) {
-      prevTrackId.current = track?.id;
-      setCoverKey(k => k + 1);
-    }
-  }, [track?.id]);
+  // Al cambiar de pista, recentrar al instante (sin animación).
+  useEffect(() => { setSlideTo(null); setDragX(0); lock.current = null; }, [track?.id]);
 
-  const handleLeft  = () => { setSlideDir(-1); next(); };
-  const handleRight = () => { setSlideDir(1);  prev(); };
-  const { dragX, handlers } = useHSwipe({ onLeft: handleLeft, onRight: handleRight, threshold: 55 });
+  const clamp = (v, w) => Math.max(-w, Math.min(w, v));
+  const onTouchStart = (e) => { const t = e.touches[0]; sx.current = t.clientX; sy.current = t.clientY; lock.current = null; setSlideTo(null); if (boxRef.current) wRef.current = boxRef.current.clientWidth; };
+  const onTouchMove = (e) => {
+    const t = e.touches[0]; const dx = t.clientX - sx.current, dy = t.clientY - sy.current;
+    if (!lock.current && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) lock.current = Math.abs(dx) > Math.abs(dy) * 1.2 ? 'h' : 'v';
+    if (lock.current === 'h') { e.preventDefault(); setDragX(clamp(dx, wRef.current || 320)); }
+  };
+  const onTouchEnd = (e) => {
+    if (lock.current !== 'h') { lock.current = null; return; }
+    lock.current = null;
+    const dx = e.changedTouches[0].clientX - sx.current;
+    const w = wRef.current || 320;
+    const th = Math.min(80, w * 0.22);
+    if (dx < -th && nextCover) setSlideTo('next');
+    else if (dx > th && prevCover) setSlideTo('prev');
+    else setSlideTo('back');
+  };
+  const onTransitionEnd = () => {
+    if (slideTo === 'next') next();
+    else if (slideTo === 'prev') prev();
+    else if (slideTo === 'back') { setSlideTo(null); setDragX(0); }
+  };
 
-  // Calcular transformación: durante drag seguir el dedo, al soltar animación de entrada
-  const isSliding = Math.abs(dragX) > 0;
-  const tx = isSliding ? dragX : 0;
+  const w = wRef.current || 0;
+  const transition = slideTo ? 'transform .34s cubic-bezier(.22,1,.36,1)' : 'none';
+  const groupTx = slideTo === 'next' ? -w : slideTo === 'prev' ? w : (slideTo === 'back' ? 0 : dragX);
+
+  const coverFace = (src, alt) => (
+    <div style={{ position:'relative', width:'100%', height:'100%', borderRadius:28, overflow:'hidden', boxShadow:`0 24px 70px ${ambientRgba(.30)}` }}>
+      <CoverImg src={src} alt={alt || ''} radius={28} style={{ width:'100%', height:'100%' }} />
+      <div style={{ position:'absolute', inset:0, borderRadius:28, boxShadow:'inset 0 1px 0 #ffffff22, inset 0 0 0 1px #ffffff10', pointerEvents:'none' }} />
+    </div>
+  );
 
   return (
     <div style={{ position:'relative', display:'flex', justifyContent:'center', alignItems:'center', marginBottom:22, flexShrink:0, touchAction:'pan-y' }}>
-      {/* Halo de ambiente — NO se recorta (queda redondo detrás de la portada) */}
-      <div className="breathe" style={{ position:'absolute', width:`calc(${art} * 1.5)`, height:`calc(${art} * 1.5)`, borderRadius:'50%', background:`radial-gradient(circle, ${ambientRgba(.85)}, ${ambientRgba(.4)} 42%, transparent 70%)`, filter:'blur(60px)', opacity: playing ? .45 + glowF*.55 : .22, top:'50%', left:'50%', transition:'opacity .6s ease, background 1.4s ease', pointerEvents:'none', zIndex:0 }} />
-      {/* Pista de deslizamiento — recorta solo el movimiento de la portada */}
-      <div style={{ position:'relative', width:'100%', display:'flex', justifyContent:'center', overflow:'hidden', zIndex:1 }}>
-        <div
-          {...handlers}
-          key={coverKey}
-          style={{
-            position:'relative', width:art, height:art, borderRadius:28,
-            boxShadow: playing ? `0 0 ${30+glowF*70}px ${ambientRgba(.4+glowF*.4)}, 0 30px 70px #000c` : '0 30px 70px #000c',
-            transform: isSliding
-              ? `scale(${playing ? 1 : .97}) translateX(${tx}px)`
-              : `scale(${playing ? 1 : .97})`,
-            transition: isSliding ? 'none' : 'transform .42s cubic-bezier(.22,1,.36,1), box-shadow 1.4s ease',
-            overflow:'hidden', flexShrink:0,
-            animation: !isSliding ? `coverIn${slideDir < 0 ? 'Right' : slideDir > 0 ? 'Left' : ''} .4s cubic-bezier(.22,1,.36,1) both` : 'none',
-          }}
-        >
-          <CoverImg src={track.cover} alt={track.title} radius={28} style={{ width:'100%', height:'100%' }} />
-          <div style={{ position:'absolute', inset:0, borderRadius:28, boxShadow:'inset 0 1px 0 #ffffff22, inset 0 0 0 1px #ffffff10', background:'linear-gradient(160deg, #ffffff14 0%, transparent 28%)', pointerEvents:'none' }} />
-          <div style={{ position:'absolute', inset:0, borderRadius:28, background:'linear-gradient(180deg, transparent 55%, #000a)', pointerEvents:'none' }} />
-          {loadingAudio && <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', background:'#0006' }}><Spinner c="#fff" sz={32} /></div>}
+      {/* Fondo difuminado suave (edge-to-edge, radial, sin bordes) */}
+      <div aria-hidden className="breathe" style={{ position:'absolute', width:`calc(${art} * 1.9)`, height:`calc(${art} * 1.9)`, top:'50%', left:'50%', borderRadius:'50%', background:`radial-gradient(circle, ${ambientRgba(.8)}, ${ambientRgba(.34)} 46%, transparent 72%)`, filter:'blur(90px)', opacity: playing ? .55 + glowF*.45 : .3, transition:'opacity .6s ease, background 1.4s ease', pointerEvents:'none', zIndex:0 }} />
+      {/* Carrusel: portada actual + vecinas para el peek al deslizar */}
+      <div
+        ref={boxRef}
+        onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
+        style={{ position:'relative', width:art, height:art, borderRadius:28, overflow:'hidden', zIndex:1, flexShrink:0, touchAction:'pan-y', transform:`scale(${playing ? 1 : .97})`, transition:'transform .5s cubic-bezier(.22,1,.36,1)' }}
+      >
+        <div onTransitionEnd={onTransitionEnd} style={{ position:'absolute', inset:0, transform:`translateX(${groupTx}px)`, transition, willChange:'transform' }}>
+          {prevCover && <div style={{ position:'absolute', top:0, left:'-104%', width:'100%', height:'100%' }}>{coverFace(prevCover)}</div>}
+          <div style={{ position:'absolute', inset:0 }}>
+            {coverFace(track.cover, track.title)}
+            {loadingAudio && <div style={{ position:'absolute', inset:0, borderRadius:28, display:'flex', alignItems:'center', justifyContent:'center', background:'#0006' }}><Spinner c="#fff" sz={32} /></div>}
+          </div>
+          {nextCover && <div style={{ position:'absolute', top:0, left:'104%', width:'100%', height:'100%' }}>{coverFace(nextCover)}</div>}
         </div>
       </div>
     </div>
@@ -726,7 +775,7 @@ function CoverSwipe({ next, prev, playing, glowF, ambientRgba, art, track, loadi
 // EXPANDED PLAYER
 // ═══════════════════════════════════════════════════════════════
 function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next, prev, time, dur, seek,
-  vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved, toggleFav, T, quality, glow, compact, desktop, onAdd, onMenu, loadingAudio, onQueue, outputs, sinkId, setOutput, lyricOffset = 0, setLyricOffset, audioRef }) {
+  vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved, toggleFav, T, quality, glow, compact, desktop, onAdd, onMenu, loadingAudio, onQueue, outputs, sinkId, setOutput, lyricOffset = 0, setLyricOffset, audioRef, nextCover, prevCover }) {
   const [showLyrics, setShowLyrics] = useState(false);
   // iOS no permite controlar el volumen por software (solo botones físicos).
   const isIOS = typeof navigator !== 'undefined' && /iphone|ipad|ipod/i.test(navigator.userAgent) && !/crios|fxios/i.test(navigator.userAgent);
@@ -857,11 +906,11 @@ function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next, prev,
           <button aria-label="Cola de reproducción" onClick={onQueue} className="btn-tap glass" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:42, height:42, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}><Icon.Queue c={T.accent} sz={19} /></button>
         </div>
 
-        {/* Cuerpo: portada + letra */}
-        <div style={{ flex:1, minHeight:0, display:'grid', gridTemplateColumns:'1fr 1fr', gap:'clamp(24px,5vw,72px)', padding:'0 clamp(24px,5vw,64px)', alignItems:'center' }}>
+        {/* Cuerpo: portada + letra (bloque centrado con ancho máximo) */}
+        <div style={{ flex:1, minHeight:0, display:'grid', gridTemplateColumns:'minmax(0,1fr) minmax(0,1fr)', gap:'clamp(24px,4vw,56px)', padding:'0 clamp(20px,4vw,48px)', alignItems:'center', justifyContent:'center', width:'100%', maxWidth:1120, margin:'0 auto' }}>
           {/* Columna izquierda: portada + info */}
           <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', minWidth:0 }}>
-            <CoverSwipe next={next} prev={prev} playing={playing} glowF={glowF} ambientRgba={ambientRgba} art={dArt} track={track} loadingAudio={loadingAudio} />
+            <CoverSwipe next={next} prev={prev} playing={playing} glowF={glowF} ambientRgba={ambientRgba} art={dArt} track={track} loadingAudio={loadingAudio} nextCover={nextCover} prevCover={prevCover} />
             <div style={{ width:dArt, maxWidth:'100%', display:'flex', alignItems:'center', gap:14, marginTop:6 }}>
               <div style={{ flex:1, minWidth:0 }}>
                 <div style={{ fontSize:26, fontWeight:900, color:'var(--txt-0)', letterSpacing:-.6, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title}</div>
@@ -954,7 +1003,7 @@ function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next, prev,
         </div>
 
         {!showLyrics ? (
-          <CoverSwipe next={next} prev={prev} playing={playing} glowF={glowF} ambientRgba={ambientRgba} art={art} track={track} loadingAudio={loadingAudio} />
+          <CoverSwipe next={next} prev={prev} playing={playing} glowF={glowF} ambientRgba={ambientRgba} art={art} track={track} loadingAudio={loadingAudio} nextCover={nextCover} prevCover={prevCover} />
         ) : (
           <div ref={lyricBoxRef} style={{ position:'relative', height:art, overflowY:'auto', marginBottom:22, padding:'16px 6px', textAlign:'center', flexShrink:0 }}>
             {lyricState.status === 'loading' && <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:10, paddingTop:'28%', color:'var(--txt-2)' }}><Spinner c={T.accent} sz={22} /><span style={{ fontSize:13 }}>Buscando letra…</span></div>}
@@ -1314,13 +1363,18 @@ export default function App() {
   const [authed, setAuthed] = useState(isAuthed());
   const [email, setEmail] = useState(() => localStorage.getItem('velocity.email') || '');
   const [displayName, setDisplayName] = useState(() => localStorage.getItem('velocity.name') || '');
-  // Sincronizar el nombre visible desde el backend al abrir sesión.
-  useEffect(() => { if (!authed) return; api.me().then(p => { if (p) { setDisplayName(p.displayName || ''); localStorage.setItem('velocity.name', p.displayName || ''); if (p.email) { setEmail(p.email); localStorage.setItem('velocity.email', p.email); } } }).catch(() => {}); }, [authed]);
+  const [avatar, setAvatar] = useState(() => localStorage.getItem('velocity.avatar') || '');
+  // Sincronizar el perfil (nombre + avatar) desde el backend al abrir sesión.
+  useEffect(() => { if (!authed) return; api.me().then(p => { if (p) { setDisplayName(p.displayName || ''); localStorage.setItem('velocity.name', p.displayName || ''); setAvatar(p.avatar || ''); localStorage.setItem('velocity.avatar', p.avatar || ''); if (p.email) { setEmail(p.email); localStorage.setItem('velocity.email', p.email); } } }).catch(() => {}); }, [authed]);
   const saveProfileName = async (newName) => {
-    const p = await api.updateProfile(newName);
+    const p = await api.updateProfile({ displayName: newName });
     setDisplayName(p.displayName || '');
     localStorage.setItem('velocity.name', p.displayName || '');
     return p;
+  };
+  const saveAvatar = async (id) => {
+    setAvatar(id); localStorage.setItem('velocity.avatar', id); // optimista
+    try { const p = await api.updateProfile({ avatar: id }); setAvatar(p.avatar || ''); localStorage.setItem('velocity.avatar', p.avatar || ''); } catch {}
   };
 
   // reproducción
@@ -1806,6 +1860,10 @@ export default function App() {
     const t = trackById(orderIds[(i-1+orderIds.length) % orderIds.length]); if (t) play(t, orderIds);
   };
   const seek = (v) => { if (audioRef.current) { audioRef.current.currentTime = v; if (audioRef.current.volume < vol && !pendingFadeRef.current) audioRef.current.volume = vol; } setTime(v); };
+  // Carátulas vecinas (para el carrusel tipo Spotify en el reproductor).
+  const _curIdx = orderIds.indexOf(track?.id);
+  const nextCover = orderIds.length > 1 ? (trackById(orderIds[(_curIdx + 1) % orderIds.length]) || {}).cover : null;
+  const prevCover = orderIds.length > 1 ? (trackById(orderIds[(_curIdx - 1 + orderIds.length) % orderIds.length]) || {}).cover : null;
 
   // ── Cola ──
   const addToQueue = (id) => {
@@ -2055,8 +2113,8 @@ export default function App() {
   };
 
   const onLogout = () => {
-    api.logout(); localStorage.removeItem('velocity.email'); localStorage.removeItem('velocity.name');
-    setAuthed(false); setEmail(''); setDisplayName(''); setFavs([]); setPlaylists([]); setRecent([]); setHomeRows([]); setSavedAlbums([]);
+    api.logout(); localStorage.removeItem('velocity.email'); localStorage.removeItem('velocity.name'); localStorage.removeItem('velocity.avatar');
+    setAuthed(false); setEmail(''); setDisplayName(''); setAvatar(''); setFavs([]); setPlaylists([]); setRecent([]); setHomeRows([]); setSavedAlbums([]);
     setTrack(null); setPlaying(false); setView(null); setOpenPlaylist(null); setTab('home');
   };
   const handleAuthed = (em, name) => { if (em) { setEmail(em); localStorage.setItem('velocity.email', em); } if (name != null) { setDisplayName(name); localStorage.setItem('velocity.name', name); } setAuthed(true); };
@@ -2159,7 +2217,7 @@ export default function App() {
 
   const NAV = [
     { id:'home', label:'Inicio', I: Icon.Home }, { id:'search', label:'Buscar', I: Icon.Search },
-    { id:'library', label:'Biblioteca', I: Icon.Lib }, { id:'profile', label:'Yo', I: Icon.User },
+    { id:'library', label:'Biblioteca', I: Icon.Lib }, { id:'profile', label:'Perfil', I: Icon.User },
   ];
 
   const ctx = {
@@ -2174,10 +2232,10 @@ export default function App() {
     selecting, selection, toggleSelect, startSelection, clearSelection,
     hydrateTracks, playStats: playStatsRef.current,
     customPalettes, activeCustomId, setActiveCustomId, activePalette, addPalette, updatePalette, deletePalette,
-    displayName, saveProfileName, deleteAccount,
+    displayName, saveProfileName, deleteAccount, avatar, saveAvatar,
   };
 
-  const playerProps = { track, playing, togglePlay, next, prev, time, dur, seek, vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved: track ? favs.includes(track.id) : false, toggleFav, T, loadingAudio };
+  const playerProps = { track, playing, togglePlay, next, prev, time, dur, seek, vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved: track ? favs.includes(track.id) : false, toggleFav, T, loadingAudio, nextCover, prevCover };
 
   const TabContent = (
     <>

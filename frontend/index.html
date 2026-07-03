@@ -22,11 +22,28 @@
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
 
-    <!-- Registro del Service Worker (PWA offline) -->
+    <!-- Registro del Service Worker (PWA offline) + auto-actualización -->
     <script>
       if ('serviceWorker' in navigator) {
+        let refreshing = false;
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          if (refreshing) return; refreshing = true; window.location.reload();
+        });
         window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js').catch(() => {});
+          navigator.serviceWorker.register('/sw.js').then((reg) => {
+            // Buscar actualizaciones al abrir.
+            reg.update().catch(() => {});
+            reg.addEventListener('updatefound', () => {
+              const nw = reg.installing;
+              if (!nw) return;
+              nw.addEventListener('statechange', () => {
+                // Nueva versión lista y ya hay una controlando → activarla y recargar.
+                if (nw.state === 'installed' && navigator.serviceWorker.controller) {
+                  nw.postMessage('SKIP_WAITING');
+                }
+              });
+            });
+          }).catch(() => {});
         });
       }
     </script>

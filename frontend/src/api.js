@@ -115,10 +115,11 @@ export const api = {
   async me() {
     return jsonOrThrow(await fetch('/api/me', { headers: authHeaders() }));
   },
-  async updateProfile(displayName) {
+  async updateProfile(patch) {
+    const body = typeof patch === 'string' ? { displayName: patch } : (patch || {});
     return jsonOrThrow(await fetch('/api/me', {
       method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ displayName }),
+      body: JSON.stringify(body),
     }));
   },
   async deleteAccount() {

@@ -123,15 +123,15 @@ export function createAuthService({ userRepo, jwtSecret = process.env.JWT_SECRET
     async getProfile(userId) {
       const u = await userRepo.findById(userId);
       if (!u) throw new AuthError(401, 'Sesión inválida.');
-      return { email: u.email, displayName: u.displayName || '', guest: !!u.isGuest };
+      return { email: u.email, displayName: u.displayName || '', avatar: u.avatar || '', guest: !!u.isGuest };
     },
 
-    /** Actualiza el perfil editable (nombre visible). */
-    async updateProfile(userId, { displayName }) {
+    /** Actualiza el perfil editable (nombre visible y avatar). */
+    async updateProfile(userId, { displayName, avatar }) {
       if (typeof userRepo.updateProfile !== 'function') throw new AuthError(501, 'No disponible.');
-      const u = await userRepo.updateProfile(userId, { displayName });
+      const u = await userRepo.updateProfile(userId, { displayName, avatar });
       if (!u) throw new AuthError(401, 'Sesión inválida.');
-      return { email: u.email, displayName: u.displayName || '', guest: !!u.isGuest };
+      return { email: u.email, displayName: u.displayName || '', avatar: u.avatar || '', guest: !!u.isGuest };
     },
 
     /** Elimina la cuenta del usuario y todos sus datos (cascada). */

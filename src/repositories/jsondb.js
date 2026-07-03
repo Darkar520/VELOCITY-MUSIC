@@ -106,17 +106,18 @@ export function createJsonUserRepo() {
       return store.users[id] || null;
     },
     async insert({ email, passwordHash, displayName = '', isGuest = false }) {
-      const user = { id: randomUUID(), email, passwordHash, displayName: displayName || '', isGuest: !!isGuest, createdAt: new Date().toISOString() };
+      const user = { id: randomUUID(), email, passwordHash, displayName: displayName || '', avatar: '', isGuest: !!isGuest, createdAt: new Date().toISOString() };
       store.users[user.id] = user;
       store.emailIndex[email] = user.id;
       save();
       return user;
     },
-    // Actualiza el perfil editable (por ahora, el nombre visible).
-    async updateProfile(id, { displayName }) {
+    // Actualiza el perfil editable (nombre visible y avatar).
+    async updateProfile(id, { displayName, avatar }) {
       const u = store.users[id];
       if (!u) return null;
       if (typeof displayName === 'string') u.displayName = displayName.trim().slice(0, 40);
+      if (typeof avatar === 'string') u.avatar = avatar.slice(0, 24);
       save();
       return u;
     },
