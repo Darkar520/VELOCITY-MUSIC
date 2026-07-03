@@ -122,35 +122,62 @@ export const THEMES = {
   },
 };
 
-// Búsquedas semilla para poblar la sección "Descubre" (rotan dinámicamente).
+// Búsquedas semilla actuales y relevantes (rotan dinámicamente).
 export const SEED_ROWS = [
-  { label:'Tendencias',        q:'top hits 2024' },
-  { label:'Pop en Español',    q:'pop español' },
-  { label:'Lo-Fi para Concentrarse', q:'lofi beats' },
-  { label:'Rock Clásico',      q:'classic rock' },
-  { label:'Electrónica',       q:'electronic dance' },
-  { label:'Virales Ahora',     q:'viral songs' },
-  { label:'En Ascenso',        q:'rising hits' },
-  { label:'Indie Fresco',      q:'indie fresh' },
-  { label:'Acústico',          q:'acoustic sessions' },
-  { label:'Covers',            q:'best covers' },
-  { label:'En Vivo',           q:'live performances' },
-  { label:'Bandas Sonoras',    q:'movie soundtracks' },
-  { label:'Joyas Ocultas',     q:'underrated songs' },
-  { label:'Éxitos Globales',   q:'global top songs' },
-  { label:'Remixes',           q:'best remixes' },
+  { label:'Éxitos del Momento', q:'top hits 2025' },
+  { label:'Virales Ahora',      q:'viral hits 2025' },
+  { label:'Novedades',          q:'new music this week' },
+  { label:'En Ascenso',         q:'rising hits 2025' },
+  { label:'Indie Fresco',       q:'indie 2025' },
+  { label:'Acústico',           q:'acoustic sessions' },
+  { label:'En Vivo',            q:'live sessions' },
+  { label:'Joyas Ocultas',      q:'underrated 2025' },
+  { label:'Remixes',            q:'best remixes 2025' },
+  { label:'Éxitos Globales',    q:'global top 50' },
+];
+
+// Lo que suena en Latinoamérica (foco regional, actual).
+export const LATIN_ROWS = [
+  { label:'Reggaetón Ahora',    q:'reggaeton 2025' },
+  { label:'Corridos Tumbados',  q:'corridos tumbados 2025' },
+  { label:'Regional Mexicano',  q:'regional mexicano 2025' },
+  { label:'Pop Latino',         q:'pop latino 2025' },
+  { label:'Trap Latino',        q:'trap latino 2025' },
+  { label:'Salsa y Timba',      q:'salsa hits' },
+  { label:'Bachata',            q:'bachata 2025' },
+  { label:'Cumbia',             q:'cumbia hits' },
+  { label:'Rock en Español',    q:'rock en español' },
+  { label:'Baladas en Español', q:'baladas romanticas español' },
+  { label:'Perreo',             q:'perreo intenso 2025' },
+  { label:'Éxitos Latinos',     q:'latino top hits 2025' },
+];
+
+// Descubrimiento "fuera de la burbuja": escenas y estilos para expandir el gusto.
+export const DISCOVERY = [
+  { label:'Afrobeats',        q:'afrobeats 2025' },
+  { label:'Amapiano',         q:'amapiano hits' },
+  { label:'Neo Soul',         q:'neo soul' },
+  { label:'Jazz Moderno',     q:'modern jazz' },
+  { label:'Bossa Nova',       q:'bossa nova classics' },
+  { label:'Funk Brasileño',   q:'funk brasileiro' },
+  { label:'Flamenco Fusión',  q:'flamenco fusion' },
+  { label:'Dream Pop',        q:'dream pop' },
+  { label:'City Pop',         q:'japanese city pop' },
+  { label:'Soul Clásico',     q:'classic soul motown' },
+  { label:'Afro House',       q:'afro house' },
+  { label:'Indie Latino',     q:'indie latino' },
 ];
 
 export const GENRES = [
-  { label:'Reggaetón', color:'#a78bfa', q:'reggaeton' },   { label:'Pop', color:'#fb7185', q:'pop hits' },
-  { label:'Lo-Fi', color:'#fbbf24', q:'lofi' },            { label:'Rock', color:'#38bdf8', q:'rock' },
-  { label:'Hip-Hop', color:'#10d9a0', q:'hip hop' },       { label:'Electrónica', color:'#818cf8', q:'electronic' },
-  { label:'Indie', color:'#f472b6', q:'indie' },           { label:'R&B', color:'#c084fc', q:'r&b soul' },
-  { label:'Jazz', color:'#fbbf24', q:'jazz' },             { label:'Salsa', color:'#fb923c', q:'salsa' },
-  { label:'Trap', color:'#a3e635', q:'trap music' },       { label:'K-Pop', color:'#f9a8d4', q:'kpop' },
-  { label:'Metal', color:'#94a3b8', q:'metal' },           { label:'Reggae', color:'#4ade80', q:'reggae' },
-  { label:'Funk', color:'#facc15', q:'funk' },             { label:'House', color:'#22d3ee', q:'house music' },
-  { label:'Clásica', color:'#e2e8f0', q:'classical music' },{ label:'Bachata', color:'#fca5a5', q:'bachata' },
+  { label:'Reggaetón', color:'#a78bfa', q:'reggaeton 2025' },        { label:'Regional Mexicano', color:'#fb923c', q:'regional mexicano 2025' },
+  { label:'Pop Latino', color:'#fb7185', q:'pop latino' },           { label:'Trap Latino', color:'#a3e635', q:'trap latino' },
+  { label:'Salsa', color:'#f97316', q:'salsa' },                     { label:'Bachata', color:'#fca5a5', q:'bachata' },
+  { label:'Cumbia', color:'#f59e0b', q:'cumbia' },                   { label:'Pop', color:'#f472b6', q:'pop hits 2025' },
+  { label:'Hip-Hop', color:'#10d9a0', q:'hip hop' },                 { label:'Rock', color:'#38bdf8', q:'rock' },
+  { label:'Rock en Español', color:'#60a5fa', q:'rock en español' }, { label:'Electrónica', color:'#818cf8', q:'electronic' },
+  { label:'R&B', color:'#c084fc', q:'r&b soul' },                    { label:'Indie', color:'#f9a8d4', q:'indie' },
+  { label:'Lo-Fi', color:'#fbbf24', q:'lofi' },                      { label:'Baladas', color:'#e2e8f0', q:'baladas' },
+  { label:'Trap', color:'#94a3b8', q:'trap music' },                 { label:'House', color:'#22d3ee', q:'house music' },
 ];
 
 // Mixes por estado de ánimo / momento (se muestrean aleatoriamente cada vez).

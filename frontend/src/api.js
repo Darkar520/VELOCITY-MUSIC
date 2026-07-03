@@ -121,6 +121,11 @@ export const api = {
       body: JSON.stringify({ displayName }),
     }));
   },
+  async deleteAccount() {
+    const data = await jsonOrThrow(await fetch('/api/me', { method: 'DELETE', headers: authHeaders() }));
+    setToken(null);
+    return data;
+  },
   logout() { setToken(null); },
 
   // ── Inicio de sesión con Google ──

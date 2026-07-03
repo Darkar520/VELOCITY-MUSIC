@@ -10,6 +10,7 @@ import { createStreamProxyHandler } from './services/streamProxy.js';
 import { buildStatus } from './services/status.js';
 import { isFullResolutionAllowed } from './services/resolutionMode.js';
 import { createAuthService, AuthError } from './services/authService.js';
+import { sendWelcomeEmail } from './services/mailer.js';
 import { createRequireAuth } from './middleware/requireAuth.js';
 import { createPlaylistService, PlaylistError } from './services/playlistService.js';
 import { createFavoritesService, FavoritesError } from './services/favoritesService.js';
@@ -412,6 +413,8 @@ export function createApp(deps = {}) {
     app.post('/api/auth/register', async (req, res) => {
       try {
         const user = await authService.register(req.body || {});
+        // Correo de bienvenida (best-effort, no bloquea la respuesta).
+        sendWelcomeEmail(user.email, user.displayName).catch(() => {});
         return res.status(201).json(user);
       } catch (err) {
         if (err instanceof AuthError) return res.status(err.status).json({ error: err.message });
@@ -455,6 +458,7 @@ export function createApp(deps = {}) {
         if (!email) return res.status(401).json({ error: 'Google no devolvió un correo.' });
         const result = await authService.googleAuth({ email });
         if (statsRepo) statsRepo.incr('logins').catch(() => {});
+        if (result.created) sendWelcomeEmail(result.email, result.displayName).catch(() => {});
         return res.json(result);
       } catch (err) {
         if (err instanceof AuthError) return res.status(err.status).json({ error: err.message });
@@ -471,6 +475,10 @@ export function createApp(deps = {}) {
     });
     app.post('/api/me', requireAuth, async (req, res) => {
       try { return res.json(await authService.updateProfile(req.userId, req.body || {})); }
+      catch (err) { if (err instanceof AuthError) return res.status(err.status).json({ error: err.message }); return res.status(500).json({ error: 'Error.' }); }
+    });
+    app.delete('/api/me', requireAuth, async (req, res) => {
+      try { return res.json(await authService.deleteAccount(req.userId)); }
       catch (err) { if (err instanceof AuthError) return res.status(err.status).json({ error: err.message }); return res.status(500).json({ error: 'Error.' }); }
     });
   }

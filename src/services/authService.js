@@ -134,6 +134,14 @@ export function createAuthService({ userRepo, jwtSecret = process.env.JWT_SECRET
       return { email: u.email, displayName: u.displayName || '', guest: !!u.isGuest };
     },
 
+    /** Elimina la cuenta del usuario y todos sus datos (cascada). */
+    async deleteAccount(userId) {
+      if (typeof userRepo.remove !== 'function') throw new AuthError(501, 'No disponible.');
+      const ok = await userRepo.remove(userId);
+      if (!ok) throw new AuthError(401, 'Sesión inválida.');
+      return { deleted: true };
+    },
+
     /** Verifica un JWT (6.6, 6.7). */
     verifyToken(token) {
       try {
@@ -156,13 +164,15 @@ export function createAuthService({ userRepo, jwtSecret = process.env.JWT_SECRET
         throw new AuthError(400, 'Email inválido.');
       }
       let user = await userRepo.findByEmail(normalizedEmail);
+      let created = false;
       if (!user) {
         const passwordHash = await hashPassword(randomBytes(24).toString('hex'));
         user = await userRepo.insert({ email: normalizedEmail, passwordHash });
+        created = true;
       }
       try { if (typeof userRepo.recordLogin === 'function') await userRepo.recordLogin(user.id); } catch {}
       const token = jwt.sign({ sub: user.id }, jwtSecret, { expiresIn: TOKEN_TTL_SECONDS });
-      return { token, email: user.email };
+      return { token, email: user.email, displayName: user.displayName || '', created };
     },
   };
 }

@@ -130,6 +130,19 @@ export function createJsonUserRepo() {
       const u = store.users[id];
       if (u) { u.playCount = (u.playCount || 0) + 1; u.lastActive = Date.now(); save(); }
     },
+    // Elimina la cuenta y todos sus datos asociados (cascada).
+    async remove(id) {
+      const u = store.users[id];
+      if (!u) return false;
+      if (u.email && store.emailIndex[u.email] === id) delete store.emailIndex[u.email];
+      delete store.users[id];
+      if (store.favorites) delete store.favorites[id];
+      if (store.savedAlbums) delete store.savedAlbums[id];
+      if (store.playlists) for (const pid of Object.keys(store.playlists)) { if (store.playlists[pid]?.userId === id) delete store.playlists[pid]; }
+      if (Array.isArray(store.history)) store.history = store.history.filter(h => h.userId !== id);
+      save();
+      return true;
+    },
   };
 }
 

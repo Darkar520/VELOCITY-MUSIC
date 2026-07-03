@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { api, isAuthed, setOnUnauthorized } from './api.js';
 import * as offline from './offline.js';
-import { CSS, THEMES, SEED_ROWS, GENRES, MOODS, ERAS, FALLBACK_COVER, BASE_VARS } from './constants.js';
+import { CSS, THEMES, SEED_ROWS, LATIN_ROWS, DISCOVERY, GENRES, MOODS, ERAS, FALLBACK_COVER, BASE_VARS } from './constants.js';
 import { fmt, hex2rgba, grad, hiResCover, dedupeByTitle, capPerArtist, slimTrack, parseLRC, tintedVars } from './helpers.js';
 import { cacheTrack, cacheTracks, trackById, allCached, loadMeta, loadPlayerState, saveMeta, normalizeTrack } from './catalog.js';
 import { usePersisted, useViewport, useDominantColor, useHSwipe } from './hooks.js';
@@ -431,8 +431,11 @@ function ProfileTab({ ctx }) {
           settings, setSettings, favs, setOpenPlaylist, setTab, email, onLogout,
           installApp, canInstall, isIOS, isStandalone, goWrapped,
           customPalettes, activeCustomId, setActiveCustomId, activePalette, addPalette, updatePalette, deletePalette,
-          displayName, saveProfileName } = ctx;
+          displayName, saveProfileName, deleteAccount } = ctx;
   const set = (k, v) => setSettings(s => ({ ...s, [k]: v }));
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const doDelete = async () => { setDeleting(true); try { await deleteAccount(); } finally { setDeleting(false); } };
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
   const [savingName, setSavingName] = useState(false);
@@ -565,6 +568,19 @@ function ProfileTab({ ctx }) {
       <button onClick={onLogout} className="btn-tap" style={{ width:'100%', display:'flex', alignItems:'center', justifyContent:'center', gap:10, background:'var(--surf-0)', border:'1px solid var(--line)', borderRadius:16, padding:'14px 0', cursor:'pointer', color:'#fb7185', fontSize:13, fontWeight:800, marginTop:6 }}>
         <Icon.Out c="#fb7185" sz={17} /> Cerrar sesión
       </button>
+
+      {!confirmDelete ? (
+        <button onClick={() => setConfirmDelete(true)} className="press" style={{ width:'100%', background:'none', border:'none', cursor:'pointer', color:'var(--txt-3)', fontSize:11.5, fontWeight:700, marginTop:14, padding:'8px 0' }}>Eliminar mi cuenta</button>
+      ) : (
+        <div style={{ marginTop:14, background:hex2rgba('#fb7185',.08), border:`1px solid ${hex2rgba('#fb7185',.3)}`, borderRadius:16, padding:16 }}>
+          <div style={{ fontSize:12.5, fontWeight:800, color:'#fb7185', marginBottom:6 }}>¿Eliminar tu cuenta?</div>
+          <div style={{ fontSize:11, color:'var(--txt-2)', lineHeight:1.5, marginBottom:12 }}>Se borrarán tu perfil, playlists, favoritos e historial de forma permanente. Esta acción no se puede deshacer.</div>
+          <div style={{ display:'flex', gap:8 }}>
+            <button onClick={() => setConfirmDelete(false)} disabled={deleting} className="btn-tap" style={{ flex:1, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:12, padding:'11px 0', cursor:'pointer', color:'var(--txt-0)', fontSize:12.5, fontWeight:800 }}>Cancelar</button>
+            <button onClick={doDelete} disabled={deleting} className="btn-tap" style={{ flex:1, background:'#fb7185', border:'none', borderRadius:12, padding:'11px 0', cursor:'pointer', color:'#04060a', fontSize:12.5, fontWeight:800, display:'flex', alignItems:'center', justifyContent:'center', gap:8 }}>{deleting && <Spinner c="#04060a" sz={15} />}Eliminar</button>
+          </div>
+        </div>
+      )}
 
       <div style={{ textAlign:'center', fontSize:9.5, color:'var(--txt-3)', marginTop:16 }}>VELOCITY MUSIC · v1.0</div>
     </div>
@@ -1525,19 +1541,45 @@ export default function App() {
       const clean = (arr) => arr.filter(Boolean);
       const pick = (arr, n) => { const a = [...arr]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a.slice(0, n); };
       const oneOf = (arr) => arr[Math.floor(Math.random() * arr.length)];
-      const buildDiscovery = async () => { if (!seeds.length) return null; const known = new Set([...recent, ...favs, ...downloaded, ...seeds.map(s => s.id)]); try { const rels = await Promise.all(seeds.slice(0, 5).map(s => api.radio(s.id).catch(() => []))); let tracks = capPerArtist(dedupeByTitle(rels.flat().map(normalizeTrack)), 2).filter(t => t.id && !known.has(t.id)); if (tracks.length < 12 && seeds[0]) { try { const raw = await api.search(seeds[0].artist || 'mix'); tracks = capPerArtist(dedupeByTitle([...tracks, ...raw.map(normalizeTrack).filter(t => t.id && !known.has(t.id))]), 2); } catch {} } for (let i = tracks.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [tracks[i], tracks[j]] = [tracks[j], tracks[i]]; } return tracks.slice(0, 30).length >= 6 ? { label: 'Descubrimiento Semanal', tracks: tracks.slice(0, 30) } : null; } catch { return null; } };
+      // Descubrimiento basado en radio de varias semillas + una búsqueda adyacente,
+      // excluyendo lo ya conocido. Mezcla profunda para una lista rica y variada.
+      const buildDiscovery = async () => {
+        if (!seeds.length) return null;
+        const known = new Set([...recent, ...favs, ...downloaded, ...seeds.map(s => s.id)]);
+        try {
+          const rels = await Promise.all(seeds.slice(0, 5).map(s => api.radio(s.id, 30).catch(() => [])));
+          let tracks = capPerArtist(dedupeByTitle(rels.flat().map(normalizeTrack)), 2).filter(t => t.id && !known.has(t.id));
+          if (tracks.length < 16 && seeds[0]) { try { const raw = await api.search((seeds[0].artist || 'mix') + ' similar artists'); tracks = capPerArtist(dedupeByTitle([...tracks, ...raw.map(normalizeTrack).filter(t => t.id && !known.has(t.id))]), 2); } catch {} }
+          for (let i = tracks.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [tracks[i], tracks[j]] = [tracks[j], tracks[i]]; }
+          const out = tracks.slice(0, 40);
+          return out.length >= 6 ? { label: 'Descubrimiento Semanal', tracks: out } : null;
+        } catch { return null; }
+      };
+      // Radio "porque escuchaste": lista por cada semilla, etiquetada con el artista.
+      const mixBecause = async (seed) => { try { const rel = await api.radio(seed.id, 30); const tracks = capPerArtist(dedupeByTitle([seed, ...rel.map(normalizeTrack)]), 2).filter(t => t.id).slice(0, 28); return tracks.length >= 5 ? { label: seed.artist || seed.title || 'Mezcla', tracks } : null; } catch { return null; } };
       const sections = [];
       const pushSection = (section, mixes) => { if (!mixes.length || !alive()) return; sections.push({ section, mixes }); setHomeRows([...sections]); setHomeLoading(false); };
+
+      // 1) Personalizado a partir de lo que escuchas.
       pushSection('Hecho para ti', clean(await Promise.all(seeds.map(mixFromSeed))));
+      // 2) Radio: "porque escuchaste X" (sugerencias mejoradas por semilla).
+      if (seeds.length) pushSection(oneOf(['Porque te gusta', 'Basado en tus gustos', 'Tu radio']), clean(await Promise.all(pick(seeds, 3).map(mixBecause))));
+      // 3) Descubrimiento profundo.
       { const disc = await buildDiscovery(); pushSection('Tu descubrimiento', disc ? [disc] : []); }
+
+      // Secciones temáticas: se barajan, pero garantizamos foco regional y descubrimiento.
       const themed = [
-        { title: oneOf(['Para cada momento', 'Según tu vibra', 'Estados de ánimo']), build: () => Promise.all(pick(MOODS, 8).map(m => mixFromSearch('Mix ' + m.label, m.q))) },
-        { title: oneOf(['Mezclas por género', 'Explora géneros', 'Por estilo']), build: () => Promise.all(pick(GENRES, 6).map(g => mixFromSearch(g.label, g.q))) },
-        { title: oneOf(['Viaja en el tiempo', 'Máquina del tiempo', 'Décadas']), build: () => Promise.all(pick(ERAS, 5).map(e => mixFromSearch(e.label, e.q))) },
-        { title: oneOf(['Descubre', 'Explorar', 'Algo nuevo']), build: () => Promise.all(pick(SEED_ROWS, 5).map(s => mixFromSearch(s.label, s.q))) },
+        { title: oneOf(['Para cada momento', 'Según tu vibra', 'Estados de ánimo']), build: () => Promise.all(pick(MOODS, 10).map(m => mixFromSearch('Mix ' + m.label, m.q))) },
+        { title: oneOf(['Mezclas por género', 'Explora géneros', 'Por estilo']), build: () => Promise.all(pick(GENRES, 8).map(g => mixFromSearch(g.label, g.q))) },
+        { title: oneOf(['Viaja en el tiempo', 'Máquina del tiempo', 'Décadas']), build: () => Promise.all(pick(ERAS, 6).map(e => mixFromSearch(e.label, e.q))) },
+        { title: oneOf(['Novedades', 'Lo nuevo', 'Recién salido']), build: () => Promise.all(pick(SEED_ROWS, 6).map(s => mixFromSearch(s.label, s.q))) },
       ];
       for (let i = themed.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [themed[i], themed[j]] = [themed[j], themed[i]]; }
-      for (const sec of themed) { if (!alive()) break; pushSection(sec.title, clean(await sec.build())); }
+      // Fijas al frente/fondo: regional (relevante) primero, "fuera de la burbuja" al final.
+      const latin = { title: oneOf(['Sonando en Latinoamérica', 'Lo de por acá', 'Éxitos latinos']), build: () => Promise.all(pick(LATIN_ROWS, 8).map(l => mixFromSearch(l.label, l.q))) };
+      const beyond = { title: oneOf(['Fuera de tu burbuja', 'Sal de lo de siempre', 'Amplía tu gusto']), build: () => Promise.all(pick(DISCOVERY, 6).map(d => mixFromSearch(d.label, d.q))) };
+      const ordered = [latin, ...themed, beyond];
+      for (const sec of ordered) { if (!alive()) break; pushSection(sec.title, clean(await sec.build())); }
       if (alive()) setHomeLoading(false);
     })();
   }, [authed, recent, favs, downloaded, feedNonce]);
@@ -2018,6 +2060,7 @@ export default function App() {
     setTrack(null); setPlaying(false); setView(null); setOpenPlaylist(null); setTab('home');
   };
   const handleAuthed = (em, name) => { if (em) { setEmail(em); localStorage.setItem('velocity.email', em); } if (name != null) { setDisplayName(name); localStorage.setItem('velocity.name', name); } setAuthed(true); };
+  const deleteAccount = async () => { try { await api.deleteAccount(); } catch {} onLogout(); };
 
   // ── Selección múltiple ──
   const toggleSelect = (id) => setSelection(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -2131,7 +2174,7 @@ export default function App() {
     selecting, selection, toggleSelect, startSelection, clearSelection,
     hydrateTracks, playStats: playStatsRef.current,
     customPalettes, activeCustomId, setActiveCustomId, activePalette, addPalette, updatePalette, deletePalette,
-    displayName, saveProfileName,
+    displayName, saveProfileName, deleteAccount,
   };
 
   const playerProps = { track, playing, togglePlay, next, prev, time, dur, seek, vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved: track ? favs.includes(track.id) : false, toggleFav, T, loadingAudio };
