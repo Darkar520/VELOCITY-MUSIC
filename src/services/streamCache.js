@@ -1,3 +1,5 @@
+import { readFileSync, writeFileSync, existsSync, renameSync, mkdirSync } from 'node:fs';
+import path from 'node:path';
 import { normalizeText } from '../lib/normalize.js';
 
 export const DEFAULT_CACHE_TTL_SECONDS = 60 * 60 * 4; // 14400
@@ -22,9 +24,57 @@ export const MAX_ENTRIES = 10000;
  * Requisitos: 3.1, 3.3, 3.4, 3.5, 3.6, 3.8, 15.8
  */
 export class StreamCache {
-  constructor() {
+  /**
+   * @param {object} [options]
+   * @param {string} [options.persistPath] Ruta de archivo para persistir en disco.
+   *   Si se omite, la caché es solo en memoria (comportamiento previo).
+   * @param {number} [options.persistDebounceMs] Debounce de escritura (por defecto 3000).
+   */
+  constructor(options = {}) {
     /** @type {Map<string, { value: string, expiresAt: number }>} */
     this.cache = new Map();
+    this.persistPath = options.persistPath || null;
+    this._debounceMs = options.persistDebounceMs ?? 3000;
+    this._saveTimer = null;
+    if (this.persistPath) this._load();
+  }
+
+  // ── Persistencia en disco (opt-in) ──
+  _load() {
+    try {
+      if (!existsSync(this.persistPath)) return;
+      const data = JSON.parse(readFileSync(this.persistPath, 'utf8'));
+      const now = Date.now();
+      if (data && Array.isArray(data.entries)) {
+        for (const [k, v] of data.entries) {
+          // Descartar entradas expiradas o malformadas al cargar.
+          if (v && typeof v.value === 'string' && typeof v.expiresAt === 'number' && v.expiresAt > now) {
+            this.cache.set(k, v);
+          }
+        }
+      }
+    } catch { /* archivo ilegible: arrancar con caché vacía */ }
+  }
+
+  _scheduleSave() {
+    if (!this.persistPath || this._saveTimer) return;
+    this._saveTimer = setTimeout(() => { this._saveTimer = null; this.flush(); }, this._debounceMs);
+    if (this._saveTimer.unref) this._saveTimer.unref();
+  }
+
+  /** Escribe la caché a disco de forma atómica (solo entradas vigentes). */
+  flush() {
+    if (!this.persistPath) return;
+    try {
+      const dir = path.dirname(this.persistPath);
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      const now = Date.now();
+      const entries = [];
+      for (const [k, v] of this.cache) if (v.expiresAt > now) entries.push([k, v]);
+      const tmp = `${this.persistPath}.tmp`;
+      writeFileSync(tmp, JSON.stringify({ entries }), 'utf8');
+      renameSync(tmp, this.persistPath);
+    } catch { /* no romper el servicio si falla el guardado */ }
   }
 
   get(key) {
@@ -58,6 +108,7 @@ export class StreamCache {
     }
 
     this.cache.set(key, { value, expiresAt });
+    this._scheduleSave();
   }
 
   /** Clave normalizada para un par (artista, título). */

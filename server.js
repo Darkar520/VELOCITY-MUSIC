@@ -1,7 +1,10 @@
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
+import path from 'node:path';
 
 import { createApp } from './src/app.js';
 import { StreamCache } from './src/services/streamCache.js';
+import { createLimiter, createInflight } from './src/lib/concurrency.js';
+import { normalizeText } from './src/lib/normalize.js';
 import { resolveActiveMode } from './src/services/resolutionMode.js';
 import { probeYtDlp, createYtDlpExtractor, createYtDlpCatalog, YT_DLP_BIN_DIR } from './src/extractors/ytdlp.js';
 import { createYTMusicCatalog, createYTMusicArtist, createYTMusicAlbum, createYTMusicLyrics, createYTMusicSearchAll, createYTMusicRadio, createYTMusicSong } from './src/extractors/ytmusic.js';
@@ -32,6 +35,9 @@ import {
 
 const PORT = process.env.PORT || 3000;
 const USE_POSTGRES = process.env.USE_POSTGRES === '1';
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Máximo de procesos yt-dlp simultáneos (configurable). Evita saturar el servidor.
+const RESOLVE_CONCURRENCY = Number(process.env.RESOLVE_CONCURRENCY) || 4;
 
 // Re-exportar para compatibilidad y pruebas.
 export { StreamCache } from './src/services/streamCache.js';
@@ -47,7 +53,13 @@ process.on('unhandledRejection', (reason) => {
 });
 
 async function bootstrap() {
-  const cache = new StreamCache();
+  // Caché de URLs de audio persistente en disco: sobrevive reinicios y comparte
+  // resultados entre peticiones. TTL por entrada (≈4 h) igual que antes.
+  const cache = new StreamCache({ persistPath: path.join(__dirname, 'data', 'stream-cache.json') });
+  // Volcar la caché a disco al salir para no perder resoluciones recientes.
+  for (const sig of ['exit', 'SIGINT', 'SIGTERM']) {
+    try { process.on(sig, () => { cache.flush(); if (sig !== 'exit') process.exit(0); }); } catch {}
+  }
 
   // Repositorios: PostgreSQL si USE_POSTGRES=1; si no, en memoria (uso personal).
   const repos = USE_POSTGRES
@@ -82,6 +94,22 @@ async function bootstrap() {
   const { notice } = await resolveActiveMode({ requested: 'full' }, probeYtDlp);
   await refreshMode();
 
+  // ── Resolución de audio escalable ──
+  // 1) Límite de concurrencia: como máximo RESOLVE_CONCURRENCY procesos yt-dlp
+  //    a la vez; el resto espera en cola (no colapsa el servidor).
+  // 2) Deduplicación en vuelo: si varias personas piden la MISMA pista a la vez,
+  //    se lanza un solo yt-dlp y todas comparten el resultado.
+  const resolveLimit = createLimiter(RESOLVE_CONCURRENCY);
+  const resolveInflight = createInflight();
+  const baseExtractor = createYtDlpExtractor();
+  const extractorImpl = (args = {}) => {
+    const q = args.quality ? `#${args.quality}` : '';
+    const key = args.videoId
+      ? `yt:${args.videoId}${q}`
+      : `${normalizeText(args.artist)}:${normalizeText(args.title)}${q}`;
+    return resolveInflight(key, () => resolveLimit(() => baseExtractor(args)));
+  };
+
   const ytmCatalog = createYTMusicCatalog();
   const ytdlpCatalog = createYtDlpCatalog();
   const catalogWithFallback = async (q, limit) => {
@@ -96,7 +124,7 @@ async function bootstrap() {
     catalogImpl: catalogWithFallback,
     catalogTimeoutMs: 12000,
     resolveTimeoutMs: 35000,
-    extractorImpl: createYtDlpExtractor(),
+    extractorImpl,
     artistImpl: createYTMusicArtist(),
     albumImpl: createYTMusicAlbum(),
     radioImpl: createYTMusicRadio(),
