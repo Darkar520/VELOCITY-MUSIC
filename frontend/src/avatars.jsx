@@ -141,6 +141,110 @@ export const AVATARS = [
       <rect x="72" y="49" width="13" height="23" rx="6.5" fill="#141a24" />
     </g>
   ) },
+  { id:'dog', name:'Perro', bg:['#fbbf24','#b45309'], art:(
+    <g>
+      <ellipse cx="24" cy="48" rx="10" ry="20" fill="#7a5230" transform="rotate(-10 24 48)" />
+      <ellipse cx="76" cy="48" rx="10" ry="20" fill="#7a5230" transform="rotate(10 76 48)" />
+      <ellipse cx="50" cy="54" rx="30" ry="29" fill="#d9a066" />
+      <ellipse cx="50" cy="66" rx="16" ry="13" fill="#f0dcc0" />
+      <circle cx="40" cy="50" r="3.6" fill="#2a1a12" /><circle cx="60" cy="50" r="3.6" fill="#2a1a12" />
+      <circle cx="41" cy="48.7" r="1.1" fill="#fff" /><circle cx="61" cy="48.7" r="1.1" fill="#fff" />
+      <ellipse cx="50" cy="61" rx="4.6" ry="3.4" fill="#2a1a12" />
+      <path d="M50 64v5" stroke="#2a1a12" strokeWidth="1.8" strokeLinecap="round" />
+    </g>
+  ) },
+  { id:'wolf', name:'Lobo', bg:['#334155','#0f172a'], art:(
+    <g>
+      <polygon points="22,42 28,10 46,36" fill="#8792a3" /><polygon points="78,42 72,10 54,36" fill="#8792a3" />
+      <polygon points="27,36 30,18 41,34" fill="#4b5563" /><polygon points="73,36 70,18 59,34" fill="#4b5563" />
+      <path d="M50 22C72 22 82 42 80 58 78 76 66 90 50 90 34 90 22 76 20 58 18 42 28 22 50 22Z" fill="#9aa5b5" />
+      <path d="M50 54c9 0 18 7 15 20-3 11-11 15-15 15s-12-4-15-15c-3-13 6-20 15-20Z" fill="#e5e9ef" />
+      <ellipse cx="38" cy="52" rx="4.6" ry="6" fill="#20262e" /><ellipse cx="62" cy="52" rx="4.6" ry="6" fill="#20262e" />
+      <path d="M50 65l5 5-5 4-5-4Z" fill="#20262e" />
+    </g>
+  ) },
+  { id:'tiger', name:'Tigre', bg:['#0f172a','#020617'], art:(
+    <g>
+      <circle cx="30" cy="28" r="9" fill="#f2823a" /><circle cx="70" cy="28" r="9" fill="#f2823a" />
+      <circle cx="30" cy="28" r="4.5" fill="#3a1e12" /><circle cx="70" cy="28" r="4.5" fill="#3a1e12" />
+      <ellipse cx="50" cy="56" rx="31" ry="30" fill="#f2823a" />
+      <ellipse cx="50" cy="66" rx="15" ry="12" fill="#fff6ef" />
+      <path d="M50 26v11" stroke="#2a1a12" strokeWidth="3" strokeLinecap="round" />
+      <path d="M41 30l-2 9M59 30l2 9" stroke="#2a1a12" strokeWidth="2.6" strokeLinecap="round" />
+      <path d="M22 50l9 3M78 50l-9 3" stroke="#2a1a12" strokeWidth="2.6" strokeLinecap="round" />
+      <circle cx="40" cy="52" r="3.4" fill="#2a1a12" /><circle cx="60" cy="52" r="3.4" fill="#2a1a12" />
+      <path d="M50 62l4 3-4 3-4-3Z" fill="#2a1a12" />
+    </g>
+  ) },
+  { id:'lion', name:'León', bg:['#1f2937','#0b1220'], art:(
+    <g>
+      <circle cx="50" cy="52" r="37" fill="#a65a1e" />
+      <g fill="#c47a2c">
+        <circle cx="50" cy="15" r="8" /><circle cx="78" cy="26" r="8" /><circle cx="87" cy="52" r="8" /><circle cx="78" cy="78" r="8" />
+        <circle cx="50" cy="89" r="8" /><circle cx="22" cy="78" r="8" /><circle cx="13" cy="52" r="8" /><circle cx="22" cy="26" r="8" />
+      </g>
+      <circle cx="50" cy="54" r="27" fill="#e3a862" />
+      <circle cx="40" cy="50" r="3.4" fill="#3a1f10" /><circle cx="60" cy="50" r="3.4" fill="#3a1f10" />
+      <path d="M50 57l4 3-4 3-4-3Z" fill="#3a1f10" />
+      <path d="M50 63q-6 5-11 3M50 63q6 5 11 3" stroke="#3a1f10" strokeWidth="1.8" fill="none" strokeLinecap="round" />
+    </g>
+  ) },
+  { id:'koala', name:'Koala', bg:['#94a3b8','#475569'], art:(
+    <g>
+      <circle cx="24" cy="42" r="15" fill="#9ca3af" /><circle cx="76" cy="42" r="15" fill="#9ca3af" />
+      <circle cx="24" cy="42" r="8" fill="#cbd5e1" /><circle cx="76" cy="42" r="8" fill="#cbd5e1" />
+      <ellipse cx="50" cy="56" rx="27" ry="27" fill="#aeb6c1" />
+      <circle cx="41" cy="52" r="3.4" fill="#1f2733" /><circle cx="59" cy="52" r="3.4" fill="#1f2733" />
+      <ellipse cx="50" cy="64" rx="7" ry="9" fill="#1f2733" />
+    </g>
+  ) },
+  { id:'monkey', name:'Mono', bg:['#a16207','#5b3a0a'], art:(
+    <g>
+      <circle cx="23" cy="48" r="11" fill="#8a5a3b" /><circle cx="77" cy="48" r="11" fill="#8a5a3b" />
+      <circle cx="23" cy="48" r="6" fill="#c98f63" /><circle cx="77" cy="48" r="6" fill="#c98f63" />
+      <ellipse cx="50" cy="52" rx="28" ry="28" fill="#8a5a3b" />
+      <ellipse cx="50" cy="63" rx="20" ry="19" fill="#e8c9a0" />
+      <circle cx="42" cy="50" r="3.4" fill="#2a1a12" /><circle cx="58" cy="50" r="3.4" fill="#2a1a12" />
+      <ellipse cx="46" cy="63" rx="2" ry="1.4" fill="#2a1a12" /><ellipse cx="54" cy="63" rx="2" ry="1.4" fill="#2a1a12" />
+      <path d="M44 70q6 4 12 0" stroke="#2a1a12" strokeWidth="1.8" fill="none" strokeLinecap="round" />
+    </g>
+  ) },
+  { id:'dino', name:'Dino', bg:['#065f46','#022c22'], art:(
+    <g>
+      <polygon points="38,22 42,10 47,22" fill="#3f8f43" /><polygon points="50,20 54,8 59,20" fill="#3f8f43" />
+      <path d="M50 20C72 20 84 40 82 60 80 80 66 90 50 90 34 90 20 80 18 60 16 40 28 20 50 20Z" fill="#5eb85a" />
+      <circle cx="40" cy="48" r="6.5" fill="#fff" /><circle cx="60" cy="48" r="6.5" fill="#fff" />
+      <circle cx="41" cy="49" r="2.8" fill="#123" /><circle cx="61" cy="49" r="2.8" fill="#123" />
+      <path d="M37 66h26" stroke="#245b28" strokeWidth="3" strokeLinecap="round" />
+    </g>
+  ) },
+  { id:'unicorn', name:'Unicornio', bg:['#f9a8d4','#a855f7'], art:(
+    <g>
+      <polygon points="50,6 45,27 55,27" fill="#fde68a" />
+      <ellipse cx="50" cy="57" rx="29" ry="29" fill="#fbfaff" />
+      <path d="M31 36q7-12 17-7" stroke="#a855f7" strokeWidth="5" fill="none" strokeLinecap="round" />
+      <path d="M69 36q-7-12-17-7" stroke="#22d3ee" strokeWidth="5" fill="none" strokeLinecap="round" />
+      <circle cx="41" cy="55" r="3.6" fill="#3a2740" /><circle cx="59" cy="55" r="3.6" fill="#3a2740" />
+      <ellipse cx="50" cy="67" rx="9" ry="6" fill="#f4b8d0" />
+      <circle cx="46" cy="67" r="1.4" fill="#3a2740" /><circle cx="54" cy="67" r="1.4" fill="#3a2740" />
+    </g>
+  ) },
+  { id:'ghost', name:'Fantasma', bg:['#6d28d9','#312e81'], art:(
+    <g>
+      <path d="M24 46C24 22 76 22 76 46 L76 84 L67 75 L58 84 L50 75 L42 84 L33 75 L24 84 Z" fill="#f5f6fa" />
+      <circle cx="40" cy="46" r="5" fill="#2a2340" /><circle cx="60" cy="46" r="5" fill="#2a2340" />
+      <ellipse cx="50" cy="57" rx="4" ry="6" fill="#2a2340" />
+    </g>
+  ) },
+  { id:'ninja', name:'Ninja', bg:['#1f2937','#0b1220'], art:(
+    <g>
+      <circle cx="50" cy="52" r="33" fill="#232c3f" />
+      <rect x="17" y="45" width="66" height="14" rx="7" fill="#f0d0a8" />
+      <circle cx="40" cy="52" r="3.4" fill="#232c3f" /><circle cx="60" cy="52" r="3.4" fill="#232c3f" />
+      <rect x="17" y="40" width="66" height="7" rx="2" fill="#e11d48" />
+      <path d="M80 41l15-3v9l-15-2Z" fill="#e11d48" />
+    </g>
+  ) },
 ];
 
 export function PixelAvatar({ av, size = 52, round = true }) {

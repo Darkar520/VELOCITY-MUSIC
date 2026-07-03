@@ -1452,8 +1452,11 @@ export default function App() {
   const [updateReady, setUpdateReady] = useState(false);
   useEffect(() => {
     if (!('serviceWorker' in navigator)) return;
+    // Si la página cargó SIN controlador, el primer controllerchange es la
+    // instalación inicial (no una actualización): no recargar en ese caso.
+    const hadController = !!navigator.serviceWorker.controller;
     let fired = false;
-    const onCtrl = () => { if (fired) return; fired = true; setUpdateReady(true); };
+    const onCtrl = () => { if (fired || !hadController) return; fired = true; setUpdateReady(true); };
     navigator.serviceWorker.addEventListener('controllerchange', onCtrl);
     return () => navigator.serviceWorker.removeEventListener('controllerchange', onCtrl);
   }, []);
