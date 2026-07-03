@@ -66,7 +66,18 @@ export function createApp(deps = {}) {
     }),
   );
   app.use(express.json({ limit: '2mb' }));
-  if (staticDir) app.use(express.static(staticDir));
+  if (staticDir) app.use(express.static(staticDir, {
+    setHeaders: (res, filePath) => {
+      const p = filePath.replace(/\\/g, '/');
+      // Assets con hash en el nombre → inmutables, caché de 1 año.
+      if (/\/assets\/.+\.(js|css|woff2?|png|jpe?g|svg|gif|webp)$/i.test(p)) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      // App shell y service worker → siempre revalidar para recibir versiones nuevas.
+      } else if (/\/(index\.html|sw\.js|manifest\.webmanifest)$/i.test(p)) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      }
+    },
+  }));
 
   // ── Proxy de carátulas ──
   // Sirve imágenes de portada remotas desde el MISMO origen. Esto evita el

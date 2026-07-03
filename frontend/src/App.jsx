@@ -1445,6 +1445,25 @@ export default function App() {
   const toastTimer = useRef(null);
   const showToast = (m) => { setToast(m); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 2400); };
 
+  // ── Auto-actualización de la PWA ──
+  // Cuando el service worker instala una versión nueva y toma el control,
+  // recargamos automáticamente PERO solo si no se está reproduciendo música
+  // (para no cortar la reproducción). Si está sonando, esperamos a que pause.
+  const [updateReady, setUpdateReady] = useState(false);
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return;
+    let fired = false;
+    const onCtrl = () => { if (fired) return; fired = true; setUpdateReady(true); };
+    navigator.serviceWorker.addEventListener('controllerchange', onCtrl);
+    return () => navigator.serviceWorker.removeEventListener('controllerchange', onCtrl);
+  }, []);
+  useEffect(() => {
+    if (!updateReady) return;
+    if (playing) { showToast('Nueva versión lista · se aplicará al pausar'); return; }
+    const t = setTimeout(() => window.location.reload(), 500);
+    return () => clearTimeout(t);
+  }, [updateReady, playing]);
+
   const audioRef = useRef(null);
   const playingRef = useRef(false);
   // Web Audio para normalizar volumen (compresor de rango dinámico). Opt-in.
