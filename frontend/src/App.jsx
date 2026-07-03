@@ -1456,9 +1456,11 @@ export default function App() {
     // instalación inicial (no una actualización): no recargar en ese caso.
     const hadController = !!navigator.serviceWorker.controller;
     let fired = false;
-    const onCtrl = () => { if (fired || !hadController) return; fired = true; setUpdateReady(true); };
-    navigator.serviceWorker.addEventListener('controllerchange', onCtrl);
-    return () => navigator.serviceWorker.removeEventListener('controllerchange', onCtrl);
+    const trigger = () => { if (fired || !hadController) return; fired = true; setUpdateReady(true); };
+    const onMsg = (e) => { if (e.data && e.data.type === 'vm-updated') trigger(); };
+    navigator.serviceWorker.addEventListener('controllerchange', trigger);
+    navigator.serviceWorker.addEventListener('message', onMsg);
+    return () => { navigator.serviceWorker.removeEventListener('controllerchange', trigger); navigator.serviceWorker.removeEventListener('message', onMsg); };
   }, []);
   useEffect(() => {
     if (!updateReady) return;

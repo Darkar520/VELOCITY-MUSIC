@@ -9,7 +9,7 @@
 //  - El audio descargado NO lo maneja el SW: vive en IndexedDB (offline.js).
 // ═══════════════════════════════════════════════════════════════
 
-const CACHE = 'velocity-v3';
+const CACHE = 'velocity-v4';
 const APP_SHELL = ['/', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'];
 
 self.addEventListener('install', (event) => {
@@ -24,6 +24,8 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((keys) =>
       Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
     ).then(() => self.clients.claim())
+     .then(() => self.clients.matchAll({ type: 'window' }))
+     .then((clients) => clients.forEach((c) => c.postMessage({ type: 'vm-updated' })))
   );
 });
 
