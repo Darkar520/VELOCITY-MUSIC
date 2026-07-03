@@ -31,13 +31,18 @@ import {
   createPgPlaylistRepo,
   createPgFavoritesRepo,
   createPgHistoryRepo,
+  createPgSavedAlbumsRepo,
+  createPgTrackMetaRepo,
+  createPgStatsRepo,
 } from './src/repositories/postgres.js';
+import { initSchema } from './src/db/init.js';
 
 const PORT = process.env.PORT || 3000;
 const USE_POSTGRES = process.env.USE_POSTGRES === '1';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// Máximo de procesos yt-dlp simultáneos (configurable). Evita saturar el servidor.
-const RESOLVE_CONCURRENCY = Number(process.env.RESOLVE_CONCURRENCY) || 4;
+// Máximo de procesos yt-dlp simultáneos POR PROCESO. En cluster, el lanzador
+// reparte el total entre workers vía WORKER_RESOLVE_CONCURRENCY.
+const RESOLVE_CONCURRENCY = Number(process.env.WORKER_RESOLVE_CONCURRENCY || process.env.RESOLVE_CONCURRENCY) || 4;
 
 // Re-exportar para compatibilidad y pruebas.
 export { StreamCache } from './src/services/streamCache.js';
@@ -52,7 +57,7 @@ process.on('unhandledRejection', (reason) => {
   console.error('⚠️  Promesa rechazada sin manejar (proceso continúa):', reason?.message || reason);
 });
 
-async function bootstrap() {
+export async function bootstrap() {
   // Caché de URLs de audio persistente en disco: sobrevive reinicios y comparte
   // resultados entre peticiones. TTL por entrada (≈4 h) igual que antes.
   const cache = new StreamCache({ persistPath: path.join(__dirname, 'data', 'stream-cache.json') });
@@ -62,12 +67,17 @@ async function bootstrap() {
   }
 
   // Repositorios: PostgreSQL si USE_POSTGRES=1; si no, en memoria (uso personal).
+  // Con Postgres: aplicar el esquema (idempotente) antes de crear los repos.
+  if (USE_POSTGRES) { await initSchema(); }
   const repos = USE_POSTGRES
     ? {
         userRepo: createPgUserRepo(query),
         playlistRepo: createPgPlaylistRepo(query),
         favoritesRepo: createPgFavoritesRepo(query),
         historyRepo: createPgHistoryRepo(query),
+        savedAlbumsRepo: createPgSavedAlbumsRepo(query),
+        trackMetaRepo: createPgTrackMetaRepo(query),
+        statsRepo: createPgStatsRepo(query),
         trackRepo: null,
       }
     : {

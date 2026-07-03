@@ -3,22 +3,134 @@
  * repositorios en memoria. Reciben una función `query(text, params)`.
  */
 
+const USER_COLS = 'id, email, password_hash, display_name, avatar, is_guest';
+const mapUser = (r) => r ? {
+  id: r.id, email: r.email, passwordHash: r.password_hash,
+  displayName: r.display_name || '', avatar: r.avatar || '', isGuest: !!r.is_guest,
+} : null;
+
 export function createPgUserRepo(query) {
   return {
     async findByEmail(email) {
-      const { rows } = await query('SELECT id, email, password_hash FROM users WHERE email = $1', [email]);
-      return rows[0] ? { id: rows[0].id, email: rows[0].email, passwordHash: rows[0].password_hash } : null;
+      const { rows } = await query(`SELECT ${USER_COLS} FROM users WHERE email = $1`, [email]);
+      return mapUser(rows[0]);
     },
     async findById(id) {
-      const { rows } = await query('SELECT id, email, password_hash FROM users WHERE id = $1', [id]);
-      return rows[0] ? { id: rows[0].id, email: rows[0].email, passwordHash: rows[0].password_hash } : null;
+      const { rows } = await query(`SELECT ${USER_COLS} FROM users WHERE id = $1`, [id]);
+      return mapUser(rows[0]);
     },
-    async insert({ email, passwordHash }) {
+    async insert({ email, passwordHash, displayName = '', isGuest = false }) {
       const { rows } = await query(
-        'INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id, email',
-        [email, passwordHash],
+        `INSERT INTO users (email, password_hash, display_name, is_guest)
+         VALUES ($1, $2, $3, $4) RETURNING ${USER_COLS}`,
+        [email, passwordHash, displayName || '', !!isGuest],
       );
-      return { id: rows[0].id, email: rows[0].email };
+      return mapUser(rows[0]);
+    },
+    async updateProfile(id, { displayName, avatar }) {
+      const sets = []; const vals = []; let i = 1;
+      if (typeof displayName === 'string') { sets.push(`display_name = $${i++}`); vals.push(displayName.trim().slice(0, 40)); }
+      if (typeof avatar === 'string') { sets.push(`avatar = $${i++}`); vals.push(avatar.slice(0, 24)); }
+      if (!sets.length) { const { rows } = await query(`SELECT ${USER_COLS} FROM users WHERE id = $1`, [id]); return mapUser(rows[0]); }
+      vals.push(id);
+      const { rows } = await query(`UPDATE users SET ${sets.join(', ')} WHERE id = $${i} RETURNING ${USER_COLS}`, vals);
+      return mapUser(rows[0]);
+    },
+    async recordLogin(id) {
+      await query('UPDATE users SET last_login = now(), login_count = login_count + 1 WHERE id = $1', [id]);
+    },
+    async recordPlay(id) {
+      await query('UPDATE users SET play_count = play_count + 1, last_active = now() WHERE id = $1', [id]);
+    },
+    async remove(id) {
+      // FK ON DELETE CASCADE limpia playlists, favoritos, historial y álbumes.
+      const { rowCount } = await query('DELETE FROM users WHERE id = $1', [id]);
+      return rowCount > 0;
+    },
+  };
+}
+
+export function createPgSavedAlbumsRepo(query) {
+  return {
+    async list(userId) {
+      const { rows } = await query(
+        'SELECT album_id, name, artist, cover, year FROM saved_albums WHERE user_id = $1 ORDER BY saved_at DESC',
+        [userId],
+      );
+      return rows.map((r) => ({ albumId: r.album_id, name: r.name, artist: r.artist, cover: r.cover, year: r.year }));
+    },
+    async add(userId, album) {
+      if (!album || !album.albumId) return;
+      await query(
+        `INSERT INTO saved_albums (user_id, album_id, name, artist, cover, year)
+         VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (user_id, album_id) DO NOTHING`,
+        [userId, album.albumId, album.name || '', album.artist || '', album.cover || '', album.year || null],
+      );
+    },
+    async remove(userId, albumId) {
+      await query('DELETE FROM saved_albums WHERE user_id = $1 AND album_id = $2', [userId, albumId]);
+    },
+  };
+}
+
+export function createPgTrackMetaRepo(query) {
+  return {
+    async upsertMany(tracks) {
+      if (!Array.isArray(tracks)) return;
+      for (const t of tracks.slice(0, 500)) {
+        if (!t || !t.id) continue;
+        await query(
+          `INSERT INTO track_meta (id, title, artist, artist_id, album, album_id, genre, cover, duration_seconds, updated_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
+           ON CONFLICT (id) DO UPDATE SET
+             title=EXCLUDED.title, artist=EXCLUDED.artist, artist_id=EXCLUDED.artist_id,
+             album=EXCLUDED.album, album_id=EXCLUDED.album_id, genre=EXCLUDED.genre,
+             cover=EXCLUDED.cover, duration_seconds=EXCLUDED.duration_seconds, updated_at=now()`,
+          [t.id, t.title || '', t.artist || '', t.artistId || null, t.album || '', t.albumId || null, t.genre || '', t.cover || '', t.durationSeconds || t.duration || 0],
+        );
+      }
+    },
+    async getMany(ids) {
+      if (!Array.isArray(ids) || !ids.length) return [];
+      const { rows } = await query(
+        `SELECT id, title, artist, artist_id, album, album_id, genre, cover, duration_seconds
+         FROM track_meta WHERE id = ANY($1)`,
+        [ids],
+      );
+      return rows.map((r) => ({ id: r.id, title: r.title, artist: r.artist, artistId: r.artist_id, album: r.album, albumId: r.album_id, genre: r.genre, cover: r.cover, durationSeconds: r.duration_seconds }));
+    },
+    async has(id) {
+      const { rows } = await query('SELECT 1 FROM track_meta WHERE id = $1', [id]);
+      return rows.length > 0;
+    },
+  };
+}
+
+export function createPgStatsRepo(query) {
+  return {
+    async incr(metric, n = 1) {
+      await query(
+        `INSERT INTO app_stats (metric, value) VALUES ($1, $2)
+         ON CONFLICT (metric) DO UPDATE SET value = app_stats.value + $2`,
+        [metric, n],
+      );
+    },
+    async summary() {
+      const [{ rows: statRows }, { rows: userRows }] = await Promise.all([
+        query('SELECT metric, value FROM app_stats'),
+        query(`SELECT email, created_at, last_login, last_active, login_count, play_count FROM users ORDER BY COALESCE(last_active, last_login, created_at) DESC`),
+      ]);
+      const s = Object.fromEntries(statRows.map((r) => [r.metric, Number(r.value)]));
+      const users = userRows.map((u) => ({
+        email: u.email, createdAt: u.created_at,
+        lastLogin: u.last_login ? new Date(u.last_login).getTime() : null,
+        lastActive: u.last_active ? new Date(u.last_active).getTime() : null,
+        loginCount: u.login_count || 0, playCount: u.play_count || 0,
+      }));
+      return {
+        totals: { registeredUsers: users.length, logins: s.logins || 0, plays: s.plays || 0, searches: s.searches || 0 },
+        users,
+      };
     },
   };
 }

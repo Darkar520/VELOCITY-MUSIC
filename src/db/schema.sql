@@ -10,6 +10,47 @@ CREATE TABLE IF NOT EXISTS users (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Campos de perfil y trazabilidad (idempotente).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar       TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_guest     BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login   TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active  TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS login_count  INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS play_count   INTEGER NOT NULL DEFAULT 0;
+
+-- Álbumes guardados en la biblioteca del usuario.
+CREATE TABLE IF NOT EXISTS saved_albums (
+  user_id   UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  album_id  TEXT NOT NULL,
+  name      TEXT NOT NULL DEFAULT '',
+  artist    TEXT NOT NULL DEFAULT '',
+  cover     TEXT NOT NULL DEFAULT '',
+  year      TEXT,
+  saved_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, album_id)
+);
+
+-- Metadatos de pistas (sincronización de biblioteca entre dispositivos).
+CREATE TABLE IF NOT EXISTS track_meta (
+  id               TEXT PRIMARY KEY,
+  title            TEXT NOT NULL DEFAULT '',
+  artist           TEXT NOT NULL DEFAULT '',
+  artist_id        TEXT,
+  album            TEXT NOT NULL DEFAULT '',
+  album_id         TEXT,
+  genre            TEXT NOT NULL DEFAULT '',
+  cover            TEXT NOT NULL DEFAULT '',
+  duration_seconds INTEGER NOT NULL DEFAULT 0,
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Contadores globales de uso (métricas/trazabilidad).
+CREATE TABLE IF NOT EXISTS app_stats (
+  metric TEXT PRIMARY KEY,
+  value  BIGINT NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS playlists (
   id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,

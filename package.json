@@ -9,12 +9,15 @@
   },
   "scripts": {
     "start": "node server.js",
+    "start:cluster": "node cluster.js",
     "dev": "node --watch server.js",
     "build": "cd frontend && npm install && npm run build",
     "test": "node --test",
-    "db:init": "node src/db/init.js"
+    "db:init": "node src/db/init.js",
+    "db:migrate": "node scripts/migrate-json-to-pg.js"
   },
   "dependencies": {
+    "compression": "^1.7.5",
     "cors": "^2.8.5",
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2",

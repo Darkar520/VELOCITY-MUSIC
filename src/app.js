@@ -1,7 +1,9 @@
 import cors from 'cors';
 import express from 'express';
+import compression from 'compression';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRateLimiter } from './middleware/rateLimit.js';
 
 import { StreamCache } from './services/streamCache.js';
 import { searchTracks, MetadataError } from './services/metadataService.js';
@@ -57,6 +59,16 @@ export function createApp(deps = {}) {
   } = deps;
 
   const app = express();
+  // Detrás de ngrok/proxy: usar X-Forwarded-For para obtener la IP real del cliente.
+  app.set('trust proxy', true);
+  // Compresión gzip para respuestas de texto (JSON/HTML/JS/CSS). NO comprime el
+  // audio (audio/* no es comprimible) ni el proxy de streaming (rompería Range).
+  app.use(compression({
+    filter: (req, res) => {
+      if (req.path === '/api/stream-proxy' || req.path === '/img') return false;
+      return compression.filter(req, res);
+    },
+  }));
   app.use(
     cors({
       origin: process.env.ALLOWED_ORIGIN || '*',
@@ -66,6 +78,15 @@ export function createApp(deps = {}) {
     }),
   );
   app.use(express.json({ limit: '2mb' }));
+
+  // ── Rate limiting por IP (protege endpoints costosos/sensibles) ──
+  // No se aplica a /api/stream-proxy ni /img para no afectar la reproducción.
+  const authLimiter = createRateLimiter({ windowMs: 5 * 60_000, max: 40, message: 'Demasiados intentos. Espera unos minutos.' });
+  const apiLimiter = createRateLimiter({ windowMs: 60_000, max: 150 });
+  app.use('/api/auth', authLimiter);
+  for (const p of ['/api/search', '/api/search/all', '/api/resolve', '/api/radio', '/api/artist', '/api/album', '/api/lyrics']) {
+    app.use(p, apiLimiter);
+  }
   if (staticDir) app.use(express.static(staticDir, {
     setHeaders: (res, filePath) => {
       const p = filePath.replace(/\\/g, '/');
