@@ -418,6 +418,17 @@ export function createApp(deps = {}) {
         return res.status(500).json({ error: 'Error de registro.' });
       }
     });
+    // ---- Modo invitado (cuenta anónima efímera) ----
+    app.post('/api/auth/guest', async (req, res) => {
+      try {
+        const result = await authService.guest();
+        if (statsRepo) statsRepo.incr('logins').catch(() => {});
+        return res.json(result);
+      } catch (err) {
+        if (err instanceof AuthError) return res.status(err.status).json({ error: err.message });
+        return res.status(500).json({ error: 'No se pudo crear la sesión de invitado.' });
+      }
+    });
     app.post('/api/auth/login', async (req, res) => {
       try {
         const result = await authService.login(req.body || {});
@@ -449,6 +460,18 @@ export function createApp(deps = {}) {
         if (err instanceof AuthError) return res.status(err.status).json({ error: err.message });
         return res.status(502).json({ error: 'No se pudo verificar con Google.' });
       }
+    });
+  }
+
+  // ---- Perfil del usuario (protegido) ----
+  if (requireAuth && authService) {
+    app.get('/api/me', requireAuth, async (req, res) => {
+      try { return res.json(await authService.getProfile(req.userId)); }
+      catch (err) { if (err instanceof AuthError) return res.status(err.status).json({ error: err.message }); return res.status(500).json({ error: 'Error.' }); }
+    });
+    app.post('/api/me', requireAuth, async (req, res) => {
+      try { return res.json(await authService.updateProfile(req.userId, req.body || {})); }
+      catch (err) { if (err instanceof AuthError) return res.status(err.status).json({ error: err.message }); return res.status(500).json({ error: 'Error.' }); }
     });
   }
 

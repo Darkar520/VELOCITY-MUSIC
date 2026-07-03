@@ -105,12 +105,20 @@ export function createJsonUserRepo() {
     async findById(id) {
       return store.users[id] || null;
     },
-    async insert({ email, passwordHash }) {
-      const user = { id: randomUUID(), email, passwordHash, createdAt: new Date().toISOString() };
+    async insert({ email, passwordHash, displayName = '', isGuest = false }) {
+      const user = { id: randomUUID(), email, passwordHash, displayName: displayName || '', isGuest: !!isGuest, createdAt: new Date().toISOString() };
       store.users[user.id] = user;
       store.emailIndex[email] = user.id;
       save();
       return user;
+    },
+    // Actualiza el perfil editable (por ahora, el nombre visible).
+    async updateProfile(id, { displayName }) {
+      const u = store.users[id];
+      if (!u) return null;
+      if (typeof displayName === 'string') u.displayName = displayName.trim().slice(0, 40);
+      save();
+      return u;
     },
     // Trazabilidad: registra el último inicio de sesión y cuenta acumulada.
     async recordLogin(id) {

@@ -93,10 +93,10 @@ export const api = {
   },
 
   // ── Autenticación ──
-  async register(email, password) {
+  async register(email, password, displayName) {
     return jsonOrThrow(await fetch('/api/auth/register', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, displayName }),
     }));
   },
   async login(email, password) {
@@ -106,6 +106,20 @@ export const api = {
     }));
     if (data.token) setToken(data.token);
     return data;
+  },
+  async guestLogin() {
+    const data = await jsonOrThrow(await fetch('/api/auth/guest', { method: 'POST' }));
+    if (data.token) setToken(data.token);
+    return data;
+  },
+  async me() {
+    return jsonOrThrow(await fetch('/api/me', { headers: authHeaders() }));
+  },
+  async updateProfile(displayName) {
+    return jsonOrThrow(await fetch('/api/me', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ displayName }),
+    }));
   },
   logout() { setToken(null); },
 

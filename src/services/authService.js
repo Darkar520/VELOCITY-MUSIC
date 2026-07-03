@@ -71,7 +71,7 @@ export function createAuthService({ userRepo, jwtSecret = process.env.JWT_SECRET
   }
   return {
     /** Registro (6.1, 6.2, 6.3, 6.8). */
-    async register({ email, password }) {
+    async register({ email, password, displayName }) {
       const normalizedEmail = String(email ?? '').trim().toLowerCase();
       if (!normalizedEmail || !normalizedEmail.includes('@')) {
         throw new AuthError(400, 'Email inválido.');
@@ -85,8 +85,9 @@ export function createAuthService({ userRepo, jwtSecret = process.env.JWT_SECRET
         throw new AuthError(409, 'El email ya está registrado.');
       }
       const passwordHash = await hashPassword(password);
-      const user = await userRepo.insert({ email: normalizedEmail, passwordHash });
-      return { id: user.id, email: user.email };
+      const name = String(displayName ?? '').trim().slice(0, 40);
+      const user = await userRepo.insert({ email: normalizedEmail, passwordHash, displayName: name });
+      return { id: user.id, email: user.email, displayName: user.displayName || '' };
     },
 
     /** Login (6.4, 6.5). Mensaje genérico para no revelar email vs password. */
@@ -100,7 +101,37 @@ export function createAuthService({ userRepo, jwtSecret = process.env.JWT_SECRET
       // Trazabilidad: registrar el inicio de sesión (best-effort).
       try { if (typeof userRepo.recordLogin === 'function') await userRepo.recordLogin(user.id); } catch {}
       const token = jwt.sign({ sub: user.id }, jwtSecret, { expiresIn: TOKEN_TTL_SECONDS });
-      return { token };
+      return { token, email: user.email, displayName: user.displayName || '' };
+    },
+
+    /**
+     * Modo invitado: crea una cuenta anónima efímera (sin email real ni
+     * contraseña usable) y emite un JWT. Permite usar la app completa sin
+     * compartir datos personales.
+     */
+    async guest() {
+      const rnd = randomBytes(9).toString('hex');
+      const email = `invitado-${rnd}@velocity.guest`;
+      const passwordHash = await hashPassword(randomBytes(24).toString('hex'));
+      const user = await userRepo.insert({ email, passwordHash, displayName: 'Invitado', isGuest: true });
+      try { if (typeof userRepo.recordLogin === 'function') await userRepo.recordLogin(user.id); } catch {}
+      const token = jwt.sign({ sub: user.id }, jwtSecret, { expiresIn: TOKEN_TTL_SECONDS });
+      return { token, email: user.email, displayName: 'Invitado', guest: true };
+    },
+
+    /** Perfil del usuario autenticado. */
+    async getProfile(userId) {
+      const u = await userRepo.findById(userId);
+      if (!u) throw new AuthError(401, 'Sesión inválida.');
+      return { email: u.email, displayName: u.displayName || '', guest: !!u.isGuest };
+    },
+
+    /** Actualiza el perfil editable (nombre visible). */
+    async updateProfile(userId, { displayName }) {
+      if (typeof userRepo.updateProfile !== 'function') throw new AuthError(501, 'No disponible.');
+      const u = await userRepo.updateProfile(userId, { displayName });
+      if (!u) throw new AuthError(401, 'Sesión inválida.');
+      return { email: u.email, displayName: u.displayName || '', guest: !!u.isGuest };
     },
 
     /** Verifica un JWT (6.6, 6.7). */

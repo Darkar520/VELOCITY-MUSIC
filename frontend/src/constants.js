@@ -10,11 +10,13 @@ export const CSS = `
     --txt-0:#f4f7fb; --txt-1:#aab4c2; --txt-2:#5b6675; --txt-3:#3a4150;
   }
   *, *::before, *::after { box-sizing: border-box; }
-  @keyframes fadeUp   { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:translateY(0); } }
-  @keyframes eqBar    { from { transform:scaleY(.16); } to { transform:scaleY(1); } }
-  @keyframes breathe  { 0%,100%{ opacity:.26; transform:translate(-50%,-50%) scale(.9); } 50%{ opacity:.6; transform:translate(-50%,-50%) scale(1.12); } }
-  @keyframes spinSlow { to { transform:rotate(360deg); } }
-  @keyframes spin360  { to { transform:rotate(360deg); } }
+  @keyframes fadeUp      { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:translateY(0); } }
+  @keyframes eqBar       { from { transform:scaleY(.16); } to { transform:scaleY(1); } }
+  @keyframes breathe     { 0%,100%{ opacity:.26; transform:translate(-50%,-50%) scale(.9); } 50%{ opacity:.6; transform:translate(-50%,-50%) scale(1.12); } }
+  @keyframes spinSlow    { to { transform:rotate(360deg); } }
+  @keyframes spin360     { to { transform:rotate(360deg); } }
+  @keyframes coverInLeft  { from { opacity:.4; transform:scale(.94) translateX(60px);  } to { opacity:1; transform:scale(1) translateX(0); } }
+  @keyframes coverInRight { from { opacity:.4; transform:scale(.94) translateX(-60px); } to { opacity:1; transform:scale(1) translateX(0); } }
   .fade-up { animation: fadeUp .5s cubic-bezier(.22,1,.36,1) both; }
   .eq-bar  { transform-origin: bottom; animation: eqBar .55s ease-in-out infinite alternate; }
   .breathe { animation: breathe 5s ease-in-out infinite; }

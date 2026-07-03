@@ -3,22 +3,50 @@
 // ═══════════════════════════════════════════════════════════════
 import { useState, useEffect, useRef } from 'react';
 
-// Swipe horizontal (siguiente/anterior). Devuelve handlers táctiles y un ref
-// `moved` para suprimir el click si hubo deslizamiento.
+// Swipe horizontal (siguiente/anterior). Devuelve handlers táctiles y dragX
+// para animar la transición. Llama preventDefault en touchmove horizontal
+// para evitar que el browser mueva la página.
 export function useHSwipe({ onLeft, onRight, threshold = 55 } = {}) {
-  const sx = useRef(0), sy = useRef(0), active = useRef(false), moved = useRef(false);
-  const onTouchStart = (e) => { const t = e.touches[0]; sx.current = t.clientX; sy.current = t.clientY; active.current = true; moved.current = false; };
+  const sx = useRef(0), sy = useRef(0), active = useRef(false);
+  const locked = useRef(null); // 'h' | 'v' | null
+  const [dragX, setDragX] = useState(0);
+
+  const onTouchStart = (e) => {
+    const t = e.touches[0];
+    sx.current = t.clientX; sy.current = t.clientY;
+    active.current = true; locked.current = null;
+    setDragX(0);
+  };
+
   const onTouchMove = (e) => {
     if (!active.current) return;
-    const t = e.touches[0], dx = t.clientX - sx.current, dy = t.clientY - sy.current;
-    if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.3) moved.current = true;
+    const t = e.touches[0];
+    const dx = t.clientX - sx.current, dy = t.clientY - sy.current;
+    if (!locked.current) {
+      if (Math.abs(dx) > 8 || Math.abs(dy) > 8)
+        locked.current = Math.abs(dx) > Math.abs(dy) * 1.2 ? 'h' : 'v';
+    }
+    if (locked.current === 'h') {
+      e.preventDefault();
+      // Resistencia: limitar a ±120px con amortiguación
+      const max = 120;
+      const r = dx > 0 ? Math.min(dx, max) : Math.max(dx, -max);
+      setDragX(r * 0.75);
+    }
   };
+
   const onTouchEnd = (e) => {
     if (!active.current) return; active.current = false;
-    const t = e.changedTouches[0], dx = t.clientX - sx.current, dy = t.clientY - sy.current;
-    if (Math.abs(dx) > threshold && Math.abs(dx) > Math.abs(dy) * 1.3) { dx < 0 ? onLeft?.() : onRight?.(); }
+    const t = e.changedTouches[0];
+    const dx = t.clientX - sx.current, dy = t.clientY - sy.current;
+    if (locked.current === 'h' && Math.abs(dx) > threshold && Math.abs(dx) > Math.abs(dy) * 1.2) {
+      dx < 0 ? onLeft?.() : onRight?.();
+    }
+    setDragX(0);
+    locked.current = null;
   };
-  return { moved, handlers: { onTouchStart, onTouchMove, onTouchEnd } };
+
+  return { dragX, handlers: { onTouchStart, onTouchMove, onTouchEnd } };
 }
 
 // Estado persistido en localStorage.
