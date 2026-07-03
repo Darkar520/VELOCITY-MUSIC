@@ -115,6 +115,38 @@ export function createPgStatsRepo(query) {
         [metric, n],
       );
     },
+    async recordSearch(userId, q) {
+      if (!userId || !q) return;
+      await query('INSERT INTO search_log (user_id, q) VALUES ($1, $2)', [userId, String(q).slice(0, 200)]);
+    },
+    async userActivity(idOrEmail, limit = 200) {
+      // Resolver por id (UUID) o email.
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(idOrEmail));
+      const { rows: urows } = await query(
+        `SELECT id, email, display_name, is_guest, created_at, last_login, last_active, login_count, play_count
+         FROM users WHERE ${isUuid ? 'id = $1' : 'email = $1'}`,
+        [isUuid ? idOrEmail : String(idOrEmail).toLowerCase()],
+      );
+      if (!urows[0]) return null;
+      const u = urows[0];
+      const uid = u.id;
+      const [{ rows: plays }, { rows: searches }, { rows: top }] = await Promise.all([
+        query(`SELECT h.track_id, (EXTRACT(EPOCH FROM h.played_at)*1000)::bigint AS at, t.title, t.artist
+               FROM listening_history h LEFT JOIN track_meta t ON t.id = h.track_id
+               WHERE h.user_id = $1 ORDER BY h.played_at DESC LIMIT $2`, [uid, limit]),
+        query(`SELECT q, (EXTRACT(EPOCH FROM created_at)*1000)::bigint AS at FROM search_log WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2`, [uid, limit]),
+        query(`SELECT h.track_id, COUNT(*)::int AS count, t.title, t.artist
+               FROM listening_history h LEFT JOIN track_meta t ON t.id = h.track_id
+               WHERE h.user_id = $1 GROUP BY h.track_id, t.title, t.artist ORDER BY count DESC LIMIT 15`, [uid]),
+      ]);
+      return {
+        user: { id: uid, email: u.email, displayName: u.display_name || '', isGuest: !!u.is_guest, createdAt: u.created_at, lastLogin: u.last_login ? new Date(u.last_login).getTime() : null, lastActive: u.last_active ? new Date(u.last_active).getTime() : null, loginCount: u.login_count || 0, playCount: u.play_count || 0 },
+        plays: plays.map((p) => ({ trackId: p.track_id, at: Number(p.at), title: p.title || '', artist: p.artist || '' })),
+        searches: searches.map((s) => ({ q: s.q, at: Number(s.at) })),
+        topTracks: top.map((t) => ({ trackId: t.track_id, count: t.count, title: t.title || '', artist: t.artist || '' })),
+        totals: { plays: plays.length, searches: searches.length },
+      };
+    },
     async summary() {
       const [{ rows: statRows }, { rows: userRows }] = await Promise.all([
         query('SELECT metric, value FROM app_stats'),

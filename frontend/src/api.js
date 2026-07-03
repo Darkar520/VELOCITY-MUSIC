@@ -38,12 +38,12 @@ export const api = {
     return jsonOrThrow(await fetch('/api/status'));
   },
   async search(q, signal) {
-    const data = await jsonOrThrow(await fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal }));
+    const data = await jsonOrThrow(await fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal, headers: authHeaders() }));
     return data.results || [];
   },
   // Búsqueda combinada: { songs, albums, artists }
   async searchAll(q, signal) {
-    return jsonOrThrow(await fetch(`/api/search/all?q=${encodeURIComponent(q)}`, { signal }));
+    return jsonOrThrow(await fetch(`/api/search/all?q=${encodeURIComponent(q)}`, { signal, headers: authHeaders() }));
   },
   // URL de streaming (proxy que resuelve con yt-dlp). Se usa como src del <audio>.
   // quality: 'high' | 'medium' | 'low' (mapeado desde la preferencia del usuario)

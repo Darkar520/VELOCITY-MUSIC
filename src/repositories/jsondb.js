@@ -19,7 +19,7 @@ const DATA_DIR = path.join(__dirname, '..', '..', 'data');
 const DB_FILE = path.join(DATA_DIR, 'velocity-db.json');
 
 function emptyStore() {
-  return { users: {}, emailIndex: {}, playlists: {}, favorites: {}, history: [], savedAlbums: {}, tracks: {}, stats: { logins: 0, plays: 0, searches: 0 }, seq: 0 };
+  return { users: {}, emailIndex: {}, playlists: {}, favorites: {}, history: [], savedAlbums: {}, tracks: {}, searchLog: [], stats: { logins: 0, plays: 0, searches: 0 }, seq: 0 };
 }
 
 let store = emptyStore();
@@ -157,9 +157,20 @@ export function createJsonStatsRepo() {
       store.stats[metric] = (store.stats[metric] || 0) + n;
       save();
     },
+    // Registro de búsqueda por usuario (trazabilidad). Acotado para no crecer sin fin.
+    async recordSearch(userId, q) {
+      if (!userId || !q) return;
+      if (!Array.isArray(store.searchLog)) store.searchLog = [];
+      store.searchLog.push({ userId, q: String(q).slice(0, 200), at: Date.now() });
+      if (store.searchLog.length > 20000) store.searchLog = store.searchLog.slice(-15000);
+      save();
+    },
     async summary() {
       const users = Object.values(store.users || {}).map((u) => ({
+        id: u.id,
         email: u.email,
+        displayName: u.displayName || '',
+        isGuest: !!u.isGuest,
         createdAt: u.createdAt,
         lastLogin: u.lastLogin || null,
         lastActive: u.lastActive || null,
@@ -175,6 +186,32 @@ export function createJsonStatsRepo() {
           searches: s.searches || 0,
         },
         users,
+      };
+    },
+    // Detalle por usuario: reproducciones (con título/artista) y búsquedas recientes.
+    async userActivity(idOrEmail, limit = 100) {
+      const user = store.users[idOrEmail] || store.users[store.emailIndex[String(idOrEmail).toLowerCase()]];
+      if (!user) return null;
+      const uid = user.id;
+      const plays = (store.history || [])
+        .filter((h) => h.userId === uid)
+        .sort((a, b) => b.playedAt - a.playedAt)
+        .slice(0, limit)
+        .map((h) => { const t = store.tracks[h.trackId] || {}; return { trackId: h.trackId, at: h.playedAt, title: t.title || '', artist: t.artist || '' }; });
+      const searches = (store.searchLog || [])
+        .filter((e) => e.userId === uid)
+        .sort((a, b) => b.at - a.at)
+        .slice(0, limit)
+        .map((e) => ({ q: e.q, at: e.at }));
+      // Top canciones del usuario por número de reproducciones.
+      const counts = {};
+      for (const h of (store.history || [])) if (h.userId === uid) counts[h.trackId] = (counts[h.trackId] || 0) + 1;
+      const topTracks = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 15)
+        .map(([tid, n]) => { const t = store.tracks[tid] || {}; return { trackId: tid, count: n, title: t.title || '', artist: t.artist || '' }; });
+      return {
+        user: { id: uid, email: user.email, displayName: user.displayName || '', isGuest: !!user.isGuest, createdAt: user.createdAt, lastLogin: user.lastLogin || null, lastActive: user.lastActive || null, loginCount: user.loginCount || 0, playCount: user.playCount || 0 },
+        plays, searches, topTracks,
+        totals: { plays: plays.length, searches: searches.length },
       };
     },
   };

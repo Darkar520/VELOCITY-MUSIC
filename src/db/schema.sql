@@ -51,6 +51,15 @@ CREATE TABLE IF NOT EXISTS app_stats (
   value  BIGINT NOT NULL DEFAULT 0
 );
 
+-- Registro de búsquedas por usuario (trazabilidad).
+CREATE TABLE IF NOT EXISTS search_log (
+  id         BIGSERIAL PRIMARY KEY,
+  user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  q          TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_search_log_user_time ON search_log (user_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS playlists (
   id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,

@@ -124,6 +124,15 @@ export function createApp(deps = {}) {
 
   const authService = userRepo ? createAuthService({ userRepo, jwtSecret }) : null;
   const requireAuth = authService ? createRequireAuth(authService, userRepo) : null;
+  // Auth opcional: devuelve el userId si hay un token válido, si no null (sin bloquear).
+  const optionalUserId = (req) => {
+    if (!authService) return null;
+    const h = req.headers.authorization || '';
+    const t = h.startsWith('Bearer ') ? h.slice(7) : '';
+    if (!t) return null;
+    const r = authService.verifyToken(t);
+    return r ? r.userId : null;
+  };
   const playlistService = playlistRepo
     ? createPlaylistService({ playlistRepo, trackRepo })
     : null;
@@ -172,7 +181,14 @@ export function createApp(deps = {}) {
       });
       const deduped = dedupeTracks(results);
       searchCacheSet(cacheKey, { results: deduped, at: Date.now() });
-      if (statsRepo) statsRepo.incr('searches').catch(() => {});
+      if (statsRepo) {
+        statsRepo.incr('searches').catch(() => {});
+        // Trazabilidad por usuario (si viene autenticado): qué buscó y cuándo.
+        if (qRaw && typeof statsRepo.recordSearch === 'function') {
+          const uid = optionalUserId(req);
+          if (uid) statsRepo.recordSearch(uid, qRaw).catch(() => {});
+        }
+      }
       res.setHeader('X-Cache', 'MISS');
       return res.json({ results: deduped });
     } catch (err) {
@@ -270,6 +286,13 @@ export function createApp(deps = {}) {
     if (typeof searchAllImpl !== 'function') return res.status(501).json({ error: 'No disponible.' });
     try {
       const data = await withTimeout(searchAllImpl(q, 20), 12000);
+      if (statsRepo) {
+        statsRepo.incr('searches').catch(() => {});
+        if (typeof statsRepo.recordSearch === 'function') {
+          const uid = optionalUserId(req);
+          if (uid) statsRepo.recordSearch(uid, q).catch(() => {});
+        }
+      }
       return res.json(data);
     } catch {
       return res.status(502).json({ error: 'No se pudo buscar.' });
@@ -612,31 +635,69 @@ export function createApp(deps = {}) {
   // La clave se define con la variable de entorno ADMIN_KEY (por defecto 'velocity-admin').
   if (statsRepo) {
     const ADMIN_KEY = process.env.ADMIN_KEY || 'velocity-admin';
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const fmtDate = (t) => t ? new Date(t).toLocaleString('es') : '—';
+    const STYLE = `body{font-family:system-ui,sans-serif;background:#04060a;color:#f4f7fb;margin:0;padding:24px}a{color:#10d9a0;text-decoration:none}a:hover{text-decoration:underline}
+      h1{font-size:20px;margin:0 0 4px}h2{font-size:15px;margin:26px 0 10px;color:#cdd6e2}.sub{color:#8b97a8;margin:0 0 20px;font-size:13px}
+      .cards{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px}.card{background:#10151e;border:1px solid #ffffff14;border-radius:14px;padding:16px 20px;min-width:120px}
+      .card .n{font-size:28px;font-weight:800;color:#10d9a0}.card .l{font-size:11px;color:#8b97a8;text-transform:uppercase;letter-spacing:1px;margin-top:4px}
+      table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:9px 12px;border-bottom:1px solid #ffffff10;vertical-align:top}th{color:#8b97a8;font-size:11px;text-transform:uppercase;letter-spacing:1px}
+      input{background:#10151e;border:1px solid #ffffff20;border-radius:10px;padding:8px 12px;color:#f4f7fb;font-size:13px;width:280px;margin-bottom:14px}
+      .tag{display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;background:#1b2230;color:#8b97a8}.guest{background:#3a2a10;color:#e0a458}`;
+    const page = (title, body) => `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><style>${STYLE}</style></head><body>${body}</body></html>`;
+
     app.get('/api/admin/stats', wrap(async (req, res) => {
       if (String(req.query.key || '') !== ADMIN_KEY) {
         return res.status(401).json({ error: 'Clave de administrador inválida.' });
       }
-      const data = await statsRepo.summary();
-      // Si el navegador lo pide, devolver un panel HTML legible; si no, JSON.
+      const key = encodeURIComponent(String(req.query.key));
       const wantsHtml = String(req.query.html || '') === '1' || (req.headers.accept || '').includes('text/html');
+      const userParam = String(req.query.user || '').trim();
+
+      // ── Vista detalle de un usuario ──
+      if (userParam) {
+        const act = (typeof statsRepo.userActivity === 'function') ? await statsRepo.userActivity(userParam, 200) : null;
+        if (!act) { if (!wantsHtml) return res.status(404).json({ error: 'Usuario no encontrado.' }); return res.status(404).send(page('No encontrado', '<p>Usuario no encontrado.</p>')); }
+        if (!wantsHtml) return res.json(act);
+        const u = act.user;
+        const top = act.topTracks.map((t, i) => `<tr><td>${i + 1}</td><td>${esc(t.title || t.trackId)}</td><td>${esc(t.artist)}</td><td>${t.count}</td></tr>`).join('') || '<tr><td colspan="4">Sin datos.</td></tr>';
+        const plays = act.plays.map((p) => `<tr><td>${esc(p.title || p.trackId)}</td><td>${esc(p.artist)}</td><td>${fmtDate(p.at)}</td></tr>`).join('') || '<tr><td colspan="3">Sin reproducciones.</td></tr>';
+        const searches = act.searches.map((s) => `<tr><td>${esc(s.q)}</td><td>${fmtDate(s.at)}</td></tr>`).join('') || '<tr><td colspan="2">Sin búsquedas.</td></tr>';
+        return res.setHeader('Content-Type', 'text/html; charset=utf-8').send(page(`Usuario · ${u.email}`, `
+          <p class="sub"><a href="/api/admin/stats?key=${key}&html=1">← Volver</a></p>
+          <h1>${esc(u.displayName || u.email)} ${u.isGuest ? '<span class="tag guest">invitado</span>' : ''}</h1>
+          <p class="sub">${esc(u.email)} · registrado ${fmtDate(u.createdAt)}</p>
+          <div class="cards">
+            <div class="card"><div class="n">${u.loginCount}</div><div class="l">Inicios de sesión</div></div>
+            <div class="card"><div class="n">${u.playCount}</div><div class="l">Reproducciones</div></div>
+            <div class="card"><div class="n">${act.searches.length}</div><div class="l">Búsquedas (recientes)</div></div>
+            <div class="card"><div class="n">${fmtDate(u.lastActive || u.lastLogin)}</div><div class="l">Última actividad</div></div>
+          </div>
+          <h2>Top canciones</h2>
+          <table><thead><tr><th>#</th><th>Canción</th><th>Artista</th><th>Veces</th></tr></thead><tbody>${top}</tbody></table>
+          <h2>Reproducciones recientes</h2>
+          <table><thead><tr><th>Canción</th><th>Artista</th><th>Cuándo</th></tr></thead><tbody>${plays}</tbody></table>
+          <h2>Búsquedas recientes</h2>
+          <table><thead><tr><th>Búsqueda</th><th>Cuándo</th></tr></thead><tbody>${searches}</tbody></table>`));
+      }
+
+      // ── Vista general ──
+      const data = await statsRepo.summary();
       if (!wantsHtml) return res.json(data);
-      const fmtDate = (t) => t ? new Date(t).toLocaleString('es') : '—';
-      const rows = data.users.map((u) => `<tr><td>${u.email}</td><td>${u.loginCount}</td><td>${u.playCount}</td><td>${fmtDate(u.lastActive || u.lastLogin)}</td><td>${new Date(u.createdAt).toLocaleDateString('es')}</td></tr>`).join('');
-      res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      return res.send(`<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Velocity · Métricas</title>
-        <style>body{font-family:system-ui,sans-serif;background:#04060a;color:#f4f7fb;margin:0;padding:24px}h1{font-size:20px;margin:0 0 4px}p{color:#8b97a8;margin:0 0 20px;font-size:13px}
-        .cards{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:24px}.card{background:#10151e;border:1px solid #ffffff14;border-radius:14px;padding:16px 20px;min-width:120px}
-        .card .n{font-size:28px;font-weight:800;color:#10d9a0}.card .l{font-size:11px;color:#8b97a8;text-transform:uppercase;letter-spacing:1px;margin-top:4px}
-        table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:10px 12px;border-bottom:1px solid #ffffff10}th{color:#8b97a8;font-size:11px;text-transform:uppercase;letter-spacing:1px}</style></head>
-        <body><h1>VELOCITY MUSIC · Trazabilidad</h1><p>Actualizado: ${new Date().toLocaleString('es')}</p>
+      const rows = data.users.map((u) => {
+        const ident = encodeURIComponent(u.id || u.email);
+        return `<tr><td><a href="/api/admin/stats?key=${key}&html=1&user=${ident}">${esc(u.email)}</a> ${u.isGuest ? '<span class="tag guest">invitado</span>' : ''}</td><td>${esc(u.displayName || '')}</td><td>${u.loginCount}</td><td>${u.playCount}</td><td>${fmtDate(u.lastActive || u.lastLogin)}</td><td>${u.createdAt ? new Date(u.createdAt).toLocaleDateString('es') : '—'}</td></tr>`;
+      }).join('');
+      return res.setHeader('Content-Type', 'text/html; charset=utf-8').send(page('Velocity · Trazabilidad', `
+        <h1>VELOCITY MUSIC · Trazabilidad</h1><p class="sub">Actualizado: ${new Date().toLocaleString('es')} · toca un correo para ver su detalle</p>
         <div class="cards">
           <div class="card"><div class="n">${data.totals.registeredUsers}</div><div class="l">Usuarios</div></div>
           <div class="card"><div class="n">${data.totals.logins}</div><div class="l">Inicios de sesión</div></div>
           <div class="card"><div class="n">${data.totals.plays}</div><div class="l">Reproducciones</div></div>
           <div class="card"><div class="n">${data.totals.searches}</div><div class="l">Búsquedas</div></div>
         </div>
-        <table><thead><tr><th>Email</th><th>Logins</th><th>Reproducciones</th><th>Última actividad</th><th>Registrado</th></tr></thead><tbody>${rows || '<tr><td colspan="5">Sin usuarios aún.</td></tr>'}</tbody></table>
-        </body></html>`);
+        <input id="f" placeholder="Filtrar por correo…" oninput="for(const r of document.querySelectorAll('tbody tr')){r.style.display=r.innerText.toLowerCase().includes(this.value.toLowerCase())?'':'none'}" />
+        <table><thead><tr><th>Email</th><th>Nombre</th><th>Logins</th><th>Reprod.</th><th>Última actividad</th><th>Registrado</th></tr></thead><tbody>${rows || '<tr><td colspan="6">Sin usuarios aún.</td></tr>'}</tbody></table>`));
     }));
   }
 

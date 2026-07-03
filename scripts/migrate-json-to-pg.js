@@ -105,6 +105,15 @@ async function main() {
       tracks++;
     }
 
+    // Registro de búsquedas por usuario.
+    for (const e of store.searchLog || []) {
+      if (!e || !store.users?.[e.userId]) continue;
+      await client.query(
+        'INSERT INTO search_log (user_id, q, created_at) VALUES ($1,$2, to_timestamp($3/1000.0))',
+        [e.userId, String(e.q || '').slice(0, 200), Number(e.at) || Date.now()],
+      );
+    }
+
     // Estadísticas globales.
     for (const [metric, value] of Object.entries(store.stats || {})) {
       await client.query(
