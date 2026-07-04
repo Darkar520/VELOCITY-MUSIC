@@ -1542,14 +1542,14 @@ export default function App() {
     // (2) Sondeo de versión por hash del bundle.
     try {
       const s = document.querySelector('script[src*="/assets/index-"]');
-      runningBundleRef.current = s ? (s.getAttribute('src').match(/index-[A-Za-z0-9]+\.js/) || [null])[0] : null;
+      runningBundleRef.current = s ? (s.getAttribute('src').match(/index-[A-Za-z0-9_-]+\.js/) || [null])[0] : null;
     } catch {}
     let stop = false;
     const checkVersion = async () => {
       if (stop || !runningBundleRef.current) return;
       try {
         const html = await fetch('/?_v=' + Date.now(), { cache: 'no-store' }).then(r => r.ok ? r.text() : '');
-        const m = html.match(/index-[A-Za-z0-9]+\.js/);
+        const m = html.match(/index-[A-Za-z0-9_-]+\.js/);
         if (m && m[0] !== runningBundleRef.current) setUpdateReady(true);
       } catch {}
     };
@@ -1559,11 +1559,13 @@ export default function App() {
     checkVersion();
     return () => { stop = true; clearInterval(iv); document.removeEventListener('visibilitychange', onVis); if (typeof cleanupSW === 'function') cleanupSW(); };
   }, []);
-  // Auto-aplicar solo si NO se está reproduciendo (sin cortar música). Si suena,
-  // se muestra el aviso visible (UpdateBanner) para que el usuario decida.
+  // El aviso (UpdateBanner) SIEMPRE se muestra cuando hay versión nueva, para que
+  // el usuario lo vea y pueda actualizar. Si la música está pausada, además se
+  // auto-aplica tras unos segundos (transparente); si suena, no cortamos: el
+  // usuario decide con el botón.
   useEffect(() => {
     if (!updateReady || playing) return;
-    const t = setTimeout(() => applyUpdate(), 1500);
+    const t = setTimeout(() => applyUpdate(), 6000);
     return () => clearTimeout(t);
   }, [updateReady, playing]);
 
@@ -1746,7 +1748,8 @@ export default function App() {
     const ranked = Object.keys(score).map(trackById).filter(Boolean).sort((a, b) => score[b.id] - score[a.id]);
     const seeds = []; const seenArtist = new Set();
     for (const t of ranked) { const a = (t.artist || '').toLowerCase(); if (seenArtist.has(a)) continue; seenArtist.add(a); seeds.push(t); if (seeds.length >= 5) break; }
-    const sig = seeds.map(s => s.id).join('|') + '#' + feedNonce;
+    const topSearches = [...new Set((recentSearches || []).map(s => (s || '').trim()).filter(Boolean))].slice(0, 6);
+    const sig = seeds.map(s => s.id).join('|') + '::' + topSearches.join('|') + '#' + feedNonce;
     if (sig === feedSigRef.current && homeRows.length) return;
     feedSigRef.current = sig;
     const myToken = ++feedTokenRef.current;
@@ -1758,6 +1761,7 @@ export default function App() {
       const clean = (arr) => arr.filter(Boolean);
       const pick = (arr, n) => { const a = [...arr]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a.slice(0, n); };
       const oneOf = (arr) => arr[Math.floor(Math.random() * arr.length)];
+      const cap1 = (s) => (s || '').charAt(0).toUpperCase() + (s || '').slice(1);
       // Descubrimiento basado en radio de varias semillas + una búsqueda adyacente,
       // excluyendo lo ya conocido. Mezcla profunda para una lista rica y variada.
       const buildDiscovery = async () => {
@@ -1776,30 +1780,40 @@ export default function App() {
       const mixBecause = async (seed) => { try { const rel = await api.radio(seed.id, 50); const tracks = capPerArtist(dedupeByTitle([seed, ...rel.map(normalizeTrack)]), 8).filter(t => t.id).slice(0, 50); return tracks.length >= 5 ? { label: seed.artist || seed.title || 'Mezcla', tracks } : null; } catch { return null; } };
       const sections = [];
       const pushSection = (section, mixes) => { if (!mixes.length || !alive()) return; sections.push({ section, mixes }); setHomeRows([...sections]); setHomeLoading(false); };
+      const hasPersonal = seeds.length > 0 || topSearches.length > 0;
 
-      // 1) Personalizado a partir de lo que escuchas.
+      // ── NÚCLEO PERSONAL (prioridad) ──
+      // 1) Mezclas por lo que más escuchas (una por artista semilla).
       pushSection('Hecho para ti', clean(await Promise.all(seeds.map(mixFromSeed))));
-      // 2) Radio: "porque escuchaste X" (sugerencias mejoradas por semilla).
-      if (seeds.length) pushSection(oneOf(['Porque te gusta', 'Basado en tus gustos', 'Tu radio']), clean(await Promise.all(pick(seeds, 3).map(mixBecause))));
-      // 3) Descubrimiento profundo.
+      // 2) Inspirado en tus búsquedas recientes (señal fuerte de intención).
+      if (topSearches.length) {
+        pushSection('Inspirado en tus búsquedas', clean(await Promise.all(topSearches.map(term => mixFromSearch(cap1(term), term)))));
+      }
+      // 3) Radio por semilla: "porque escuchaste X".
+      if (seeds.length) pushSection(oneOf(['Porque te gusta', 'Basado en tus gustos', 'Tu radio']), clean(await Promise.all(pick(seeds, 4).map(mixBecause))));
+      // 4) Descubrimiento profundo a partir de tu perfil.
       { const disc = await buildDiscovery(); pushSection('Tu descubrimiento', disc ? [disc] : []); }
 
-      // Secciones temáticas: se barajan, pero garantizamos foco regional y descubrimiento.
-      const themed = [
-        { title: oneOf(['Para cada momento', 'Según tu vibra', 'Estados de ánimo']), build: () => Promise.all(pick(MOODS, 10).map(m => mixFromSearch('Mix ' + m.label, m.q))) },
-        { title: oneOf(['Mezclas por género', 'Explora géneros', 'Por estilo']), build: () => Promise.all(pick(GENRES, 8).map(g => mixFromSearch(g.label, g.q))) },
-        { title: oneOf(['Viaja en el tiempo', 'Máquina del tiempo', 'Décadas']), build: () => Promise.all(pick(ERAS, 6).map(e => mixFromSearch(e.label, e.q))) },
-        { title: oneOf(['Novedades', 'Lo nuevo', 'Recién salido']), build: () => Promise.all(pick(SEED_ROWS, 6).map(s => mixFromSearch(s.label, s.q))) },
-      ];
-      for (let i = themed.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [themed[i], themed[j]] = [themed[j], themed[i]]; }
-      // Fijas al frente/fondo: regional (relevante) primero, "fuera de la burbuja" al final.
-      const latin = { title: oneOf(['Sonando en Latinoamérica', 'Lo de por acá', 'Éxitos latinos']), build: () => Promise.all(pick(LATIN_ROWS, 8).map(l => mixFromSearch(l.label, l.q))) };
-      const beyond = { title: oneOf(['Fuera de tu burbuja', 'Sal de lo de siempre', 'Amplía tu gusto']), build: () => Promise.all(pick(DISCOVERY, 6).map(d => mixFromSearch(d.label, d.q))) };
-      const ordered = [latin, ...themed, beyond];
-      for (const sec of ordered) { if (!alive()) break; pushSection(sec.title, clean(await sec.build())); }
+      // ── EXPLORACIÓN (genéricas, reducidas para usuarios con historial) ──
+      const explore = [];
+      // Regional relevante siempre.
+      explore.push({ title: oneOf(['Sonando en Latinoamérica', 'Lo de por acá', 'Éxitos latinos']), build: () => Promise.all(pick(LATIN_ROWS, 8).map(l => mixFromSearch(l.label, l.q))) });
+      if (hasPersonal) {
+        // Con historial: solo 2 filas de exploración (no saturar de genéricas).
+        explore.push({ title: oneOf(['Explora géneros', 'Por estilo']), build: () => Promise.all(pick(GENRES, 6).map(g => mixFromSearch(g.label, g.q))) });
+        explore.push({ title: oneOf(['Fuera de tu burbuja', 'Amplía tu gusto']), build: () => Promise.all(pick(DISCOVERY, 6).map(d => mixFromSearch(d.label, d.q))) });
+      } else {
+        // Usuario nuevo (sin historial): feed genérico completo para no dejarlo vacío.
+        explore.push({ title: 'Estados de ánimo', build: () => Promise.all(pick(MOODS, 10).map(m => mixFromSearch('Mix ' + m.label, m.q))) });
+        explore.push({ title: 'Explora géneros', build: () => Promise.all(pick(GENRES, 8).map(g => mixFromSearch(g.label, g.q))) });
+        explore.push({ title: 'Décadas', build: () => Promise.all(pick(ERAS, 6).map(e => mixFromSearch(e.label, e.q))) });
+        explore.push({ title: 'Novedades', build: () => Promise.all(pick(SEED_ROWS, 6).map(s => mixFromSearch(s.label, s.q))) });
+        explore.push({ title: 'Fuera de tu burbuja', build: () => Promise.all(pick(DISCOVERY, 6).map(d => mixFromSearch(d.label, d.q))) });
+      }
+      for (const sec of explore) { if (!alive()) break; pushSection(sec.title, clean(await sec.build())); }
       if (alive()) setHomeLoading(false);
     })();
-  }, [authed, recent, favs, downloaded, feedNonce]);
+  }, [authed, recent, favs, downloaded, recentSearches, feedNonce]);
 
   // Refresco dinámico del feed al volver tras un rato.
   useEffect(() => { let h = 0; const v = () => { if (document.visibilityState === 'hidden') h = Date.now(); else if (h && Date.now() - h > 720000) { h = 0; setFeedNonce(n => n + 1); } }; document.addEventListener('visibilitychange', v); return () => document.removeEventListener('visibilitychange', v); }, []);
@@ -2534,9 +2548,8 @@ export default function App() {
     </div>
   ) : null;
 
-  // Aviso visible de nueva versión: aparece cuando hay una actualización y la
-  // música está sonando (no cortamos la reproducción; el usuario decide cuándo).
-  const updateBanner = (updateReady && playing) ? (
+  // Aviso visible de nueva versión: aparece siempre que hay una actualización.
+  const updateBanner = updateReady ? (
     <div className="fade-up glass" style={{ position:'fixed', left:'50%', transform:'translateX(-50%)', bottom:'calc(env(safe-area-inset-bottom, 16px) + 150px)', zIndex:120, display:'flex', alignItems:'center', gap:12, background:'var(--surf-1)', border:`1px solid ${hex2rgba(T.accent,.5)}`, borderRadius:16, padding:'10px 12px 10px 16px', boxShadow:'0 14px 40px #000c', maxWidth:'calc(100vw - 28px)' }}>
       <div style={{ minWidth:0 }}>
         <div style={{ fontSize:12.5, fontWeight:800, color:'var(--txt-0)' }}>Nueva versión disponible</div>
