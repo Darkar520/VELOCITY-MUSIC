@@ -225,18 +225,38 @@ function SearchTab({ ctx }) {
     if (!term) { setRes({ songs: [], albums: [], artists: [] }); setErr(''); setLoading(false); return; }
     setLoading(true); setErr('');
     const ctrl = new AbortController();
+    let alive = true;                                  // solo la búsqueda vigente actualiza la UI
+    const aborted = (e) => e && (e.name === 'AbortError' || ctrl.signal.aborted);
     const id = setTimeout(async () => {
-      try {
-        const d = await api.searchAll(term, ctrl.signal);
-        setRes({ songs: dedupeByTitle((d.songs || []).map(normalizeTrack)), albums: d.albums || [], artists: d.artists || [] });
-      } catch (e) {
-        if (e.name !== 'AbortError') {
-          try { const raw = await api.search(term, ctrl.signal); setRes({ songs: dedupeByTitle(raw.map(normalizeTrack)), albums: [], artists: [] }); }
-          catch { setErr('No se pudo buscar. ¿El backend está activo?'); }
+      // Intenta searchAll; si falla por algo transitorio, cae a search; y reintenta 1 vez.
+      const attempt = async () => {
+        try {
+          const d = await api.searchAll(term, ctrl.signal);
+          return { songs: dedupeByTitle((d.songs || []).map(normalizeTrack)), albums: d.albums || [], artists: d.artists || [] };
+        } catch (e) {
+          if (aborted(e)) throw e;                      // cancelada: no es error real
+          const raw = await api.search(term, ctrl.signal); // respaldo
+          return { songs: dedupeByTitle(raw.map(normalizeTrack)), albums: [], artists: [] };
         }
-      } finally { setLoading(false); }
+      };
+      try {
+        let data;
+        try { data = await attempt(); }
+        catch (e) {
+          if (aborted(e)) return;                        // superada por otra búsqueda
+          await new Promise(r => setTimeout(r, 700));    // breve pausa y un reintento
+          if (!alive || ctrl.signal.aborted) return;
+          data = await attempt();
+        }
+        if (!alive || ctrl.signal.aborted) return;
+        setRes(data); setErr('');
+      } catch (e) {
+        if (!aborted(e) && alive) setErr('No se pudo buscar. Revisa tu conexión e inténtalo de nuevo.');
+      } finally {
+        if (alive && !ctrl.signal.aborted) setLoading(false);
+      }
     }, 380);
-    return () => { clearTimeout(id); ctrl.abort(); };
+    return () => { alive = false; clearTimeout(id); ctrl.abort(); };
   }, [q]);
 
   const runGenre = (g) => { setQ(g.q); addSearch(g.label); };
