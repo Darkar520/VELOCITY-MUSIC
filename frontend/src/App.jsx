@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { api, isAuthed, setOnUnauthorized } from './api.js';
 import * as offline from './offline.js';
 import { CSS, THEMES, SEED_ROWS, LATIN_ROWS, DISCOVERY, GENRES, MOODS, ERAS, FALLBACK_COVER, BASE_VARS } from './constants.js';
@@ -506,7 +507,7 @@ function ProfileTab({ ctx }) {
         </div>
       </div>
 
-      {avatarPicker && (
+      {avatarPicker && createPortal(
         <>
           <div onClick={() => setAvatarPicker(false)} style={{ position:'fixed', inset:0, background:'#04060acc', backdropFilter:'blur(10px)', WebkitBackdropFilter:'blur(10px)', zIndex:130 }} />
           <div className="fade-up" style={{ position:'fixed', left:0, right:0, bottom:0, margin:'0 auto', width:'100%', maxWidth:460, maxHeight:'82dvh', overflowY:'auto', background:'linear-gradient(180deg, var(--surf-1), var(--surf-0))', border:'1px solid var(--line)', borderRadius:'26px 26px 0 0', padding:'10px 18px calc(env(safe-area-inset-bottom, 16px) + 20px)', zIndex:131, boxShadow:'0 -30px 80px #000d' }}>
@@ -532,7 +533,8 @@ function ProfileTab({ ctx }) {
               ))}
             </div>
           </div>
-        </>
+        </>,
+        document.body
       )}
 
       <button onClick={() => goWrapped?.()} className="btn-tap" style={{ width:'100%', position:'relative', overflow:'hidden', textAlign:'left', cursor:'pointer', borderRadius:20, padding:'16px 18px', marginBottom:14, background:`linear-gradient(135deg, ${T.accent}, ${T.accent2})`, color:'#04060a', border:'none', boxShadow:`0 12px 30px ${hex2rgba(T.accent,.4)}` }}>
@@ -590,7 +592,7 @@ function ProfileTab({ ctx }) {
         </button>
       </SettingCard>
 
-      {dlOpen && (
+      {dlOpen && createPortal(
         <>
           <div onClick={() => setDlOpen(false)} style={{ position:'fixed', inset:0, background:'#04060acc', backdropFilter:'blur(10px)', WebkitBackdropFilter:'blur(10px)', zIndex:130 }} />
           <div className="fade-up" style={{ position:'fixed', left:0, right:0, bottom:0, margin:'0 auto', width:'100%', maxWidth:460, maxHeight:'82dvh', overflowY:'auto', background:'linear-gradient(180deg, var(--surf-1), var(--surf-0))', border:'1px solid var(--line)', borderRadius:'26px 26px 0 0', padding:'10px 16px calc(env(safe-area-inset-bottom, 16px) + 20px)', zIndex:131, boxShadow:'0 -30px 80px #000d' }}>
@@ -622,7 +624,8 @@ function ProfileTab({ ctx }) {
               </div>
             </>)}
           </div>
-        </>
+        </>,
+        document.body
       )}
 
       <SettingCard title="Calidad de Audio">
@@ -643,13 +646,6 @@ function ProfileTab({ ctx }) {
       <SettingCard title="Reproducción">
         <ToggleRow label="Reproducción automática" desc="Continúa al terminar la pista" on={settings.autoplay} onToggle={() => set('autoplay', !settings.autoplay)} T={T} />
         <ToggleRow label="Normalizar volumen" desc="Mismo nivel en todas las pistas" on={settings.normalize} onToggle={() => set('normalize', !settings.normalize)} T={T} />
-        <div style={{ marginTop:10 }}>
-          <div style={{ display:'flex', justifyContent:'space-between', marginBottom:7 }}>
-            <span style={{ fontSize:12.5, fontWeight:700, color:'var(--txt-0)' }}>Crossfade</span>
-            <span style={{ fontSize:11, fontWeight:800, fontFamily:'monospace', color:T.accent }}>{settings.crossfade}s</span>
-          </div>
-          <RangeSlider value={settings.crossfade} min={0} max={12} onChange={v => set('crossfade', v)} accent={T.accent} ariaLabel="Crossfade" />
-        </div>
       </SettingCard>
 
       {!isStandalone && (
@@ -1488,7 +1484,7 @@ export default function App() {
   const [eq, setEq] = usePersisted('velocity.eq', 'waves');
   const [lyricOffset, setLyricOffset] = usePersisted('velocity.lyricOffset', 0);
   const [recentSearches, setRecentSearches] = usePersisted('velocity.searches', []);
-  const [settings, setSettings] = usePersisted('velocity.settings', { autoplay:true, normalize:false, crossfade:0 });
+  const [settings, setSettings] = usePersisted('velocity.settings', { autoplay:true, normalize:false });
 
   // datos del backend
   const [favs, setFavs] = useState([]);
@@ -2384,14 +2380,6 @@ export default function App() {
         const a = audioRef.current; if (!a) return;
         const ct = a.currentTime || 0; setTime(ct);
         if (ct > 0 && loadingAudio) setLoadingAudio(false);
-        // Crossfade: desvanecer el volumen en los últimos N segundos de la pista.
-        // Usamos `dur` (duración fiable mostrada en la barra), no a.duration.
-        const total = dur || a.duration || 0;
-        const cf = Math.min(settings.crossfade || 0, total / 2);
-        if (cf > 0 && total > 0 && !pendingFadeRef.current) {
-          const remaining = total - ct;
-          if (remaining <= cf) a.volume = Math.max(0, vol * (remaining / cf));
-        }
       }}
       onLoadedMetadata={() => { setDur(audioRef.current?.duration||0); if (resumeRef.current != null && audioRef.current) { try { audioRef.current.currentTime = resumeRef.current; } catch {} setTime(resumeRef.current); resumeRef.current = null; } }}
       onCanPlay={() => setLoadingAudio(false)}
