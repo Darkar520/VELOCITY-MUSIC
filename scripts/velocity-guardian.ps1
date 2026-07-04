@@ -37,8 +37,14 @@ function Test-Tunnel  { [bool](Get-Process cloudflared -ErrorAction SilentlyCont
 
 function Start-Backend {
   ("`n===== Backend iniciado {0} =====" -f (Get-Date)) | Out-File -FilePath $BackLog -Append -Encoding utf8
+  $envVars  = 'set GOOGLE_CLIENT_ID=1096324357690-vuhqbq7vphbm54da9lbhbffv8ane18d9.apps.googleusercontent.com'
+  $envVars += '&& set USE_POSTGRES=1'
+  $envVars += '&& set DATABASE_URL=postgresql://velocity:VelocityDB2026!@localhost:5432/velocity_music'
+  $envVars += '&& set JWT_SECRET=42861e47db4b0dcbd80a0ccdfd9690f307531ed3deed7a81a858fa4692607be8fd09f434e3e37067ddec0370fa0aa2b315c9a51e564e2bfb13d9a61aa323e555'
+  $envVars += '&& set CLUSTER=1'
+  $cmd = '{0}&& npm run start:cluster >> "{1}" 2>&1' -f $envVars, $BackLog
   Start-Process -FilePath $env:ComSpec `
-    -ArgumentList '/c', ('set GOOGLE_CLIENT_ID=1096324357690-vuhqbq7vphbm54da9lbhbffv8ane18d9.apps.googleusercontent.com&& npm start >> "{0}" 2>&1' -f $BackLog) `
+    -ArgumentList '/c', $cmd `
     -WorkingDirectory $Proj -WindowStyle Hidden | Out-Null
 }
 
