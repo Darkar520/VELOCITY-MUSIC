@@ -236,9 +236,10 @@ function HomeTab({ ctx }) {
 // SEARCH TAB
 // ═══════════════════════════════════════════════════════════════
 function SearchTab({ ctx }) {
-  const { track, playing, play, T, favs, toggleFav, addToTarget, onMenu, recentSearches, addSearch, removeSearch, downloaded, downloading, goArtist, goAlbum, selecting, selection, toggleSelect, startSelection, addToQueue, removeFromQueue } = ctx;
+  const { track, playing, play, T, favs, toggleFav, addToTarget, onMenu, recentSearches, addSearch, removeSearch, downloaded, downloading, goArtist, goAlbum, goMix, selecting, selection, toggleSelect, startSelection, addToQueue, removeFromQueue } = ctx;
   const [q, setQ] = useState('');
   const [res, setRes] = useState({ songs: [], albums: [], artists: [] });
+  const [relatedMixes, setRelatedMixes] = useState([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
 
@@ -2116,6 +2117,10 @@ export default function App() {
 
   const play = (t, list, opts = {}) => {
     if (!t) return;
+    // Asegurar que la pista tenga cover: si el catálogo la tiene, usarla.
+    // Esto evita que la MediaSession (notificación) quede sin carátula.
+    const cached = trackById(t.id);
+    if (cached && cached.cover && !t.cover) t = { ...t, cover: cached.cover };
     cacheTrack(t); saveMeta();
     // Detener limpiamente la pista anterior para evitar el "clic" al cortar la onda.
     const a = audioRef.current;
@@ -2614,6 +2619,7 @@ export default function App() {
   // fresca (evade caché de borde) y, si vuelve a fallar, salta a la siguiente
   // pista de la cola en lugar de detener todo. Reduce al máximo los cortes.
   const MAX_PLAY_RETRIES = 2;
+  const consecutiveFailsRef = useRef(0);
   const handleAudioError = () => {
     selfPauseRef.current = false;
     const a = audioRef.current;
@@ -2622,22 +2628,17 @@ export default function App() {
     const st = playErrorRef.current;
     const n = (st.id === cur) ? st.n : 0;
     const isBlob = typeof a.currentSrc === 'string' && a.currentSrc.startsWith('blob:');
-    // Reintentos con espera para fuentes de red (la resolución en frío de yt-dlp
-    // puede tardar/fallar transitoriamente; casi siempre funciona al reintentar).
-    // No reintentar blobs offline corruptos.
+    // Reintentos con espera creciente (resolución en frío puede tardar).
     if (n < MAX_PLAY_RETRIES && !isBlob) {
       const attempt = n + 1;
       playErrorRef.current = { id: cur, n: attempt };
       setLoadingAudio(true);
-      // Espera creciente antes de reintentar (deja que el backend resuelva/cachee).
-      const delay = attempt === 1 ? 900 : 2200;
+      const delay = attempt === 1 ? 1200 : 2500;
       setTimeout(() => {
-        if (!audioRef.current || trackRef.current?.id !== cur) return;   // cambió de pista
+        if (!audioRef.current || trackRef.current?.id !== cur) return;
         try {
           const q = ({ high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' }[quality] || 'high');
           const base = api.streamUrl({ artist: track.artist, title: track.title, id: track.id, quality: q });
-          // 1er reintento: mismo URL (si el backend ya resolvió, sirve de caché → rápido).
-          // 2do reintento: cache-bust para forzar un fetch/re-resolución fresca.
           audioRef.current.src = attempt >= 2 ? (base + '&_r=' + Date.now()) : base;
           audioRef.current.load();
           const p = audioRef.current.play(); if (p && p.catch) p.catch(() => {});
@@ -2645,13 +2646,25 @@ export default function App() {
       }, delay);
       return;
     }
-    // Agotados los reintentos: saltar a la siguiente si hay cola; si no, avisar.
+    // Agotados reintentos: saltar con protección contra cascada.
+    // Si muchas pistas fallan seguidas (backend saturado/caído), detener tras 4
+    // saltos consecutivos para no quedarse en un loop infinito de saltos.
     playErrorRef.current = { id: cur, n: 0 };
+    consecutiveFailsRef.current += 1;
+    if (consecutiveFailsRef.current > 4) {
+      consecutiveFailsRef.current = 0;
+      setLoadingAudio(false); setPlaying(false);
+      showToast('Varias pistas no disponibles. Verifica tu conexión.');
+      return;
+    }
     setLoadingAudio(false);
     const ids = queue && queue.length ? queue : [];
     const i = ids.indexOf(cur);
-    if (ids.length > 1 && i !== -1) { showToast('Pista no disponible · saltando…'); next(); }
-    else { setPlaying(false); showToast('No se pudo reproducir esta pista'); }
+    if (ids.length > 1 && i !== -1) {
+      // Pequeña espera antes de saltar (da tiempo al backend de liberar concurrencia).
+      showToast('Pista no disponible · saltando…');
+      setTimeout(() => next(), 800);
+    } else { setPlaying(false); showToast('No se pudo reproducir esta pista'); }
   };
 
   const audioEl = (
@@ -2665,7 +2678,7 @@ export default function App() {
       onLoadedMetadata={() => { setDur(audioRef.current?.duration||0); if (resumeRef.current != null && audioRef.current) { try { audioRef.current.currentTime = resumeRef.current; } catch {} setTime(resumeRef.current); resumeRef.current = null; } }}
       onCanPlay={() => setLoadingAudio(false)}
       onPlay={() => { selfPauseRef.current = false; setLoadingAudio(false); }}
-      onPlaying={() => { selfPauseRef.current = false; setLoadingAudio(false); playErrorRef.current = { id: null, n: 0 }; if (pendingFadeRef.current) { pendingFadeRef.current = false; fadeInAudio(); } }}
+      onPlaying={() => { selfPauseRef.current = false; setLoadingAudio(false); playErrorRef.current = { id: null, n: 0 }; consecutiveFailsRef.current = 0; if (pendingFadeRef.current) { pendingFadeRef.current = false; fadeInAudio(); } }}
       onStalled={() => setLoadingAudio(true)}
       onWaiting={() => setLoadingAudio(true)}
       onPause={() => {
