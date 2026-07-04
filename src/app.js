@@ -356,7 +356,7 @@ export function createApp(deps = {}) {
   // ---- Radio / relacionadas (reproducción tipo Spotify) ----
   app.get('/api/radio', async (req, res) => {
     const id = String(req.query.id || '').trim();
-    const limit = Math.min(40, Math.max(1, Number(req.query.limit) || 25));
+    const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 50));
     if (!id) return res.status(400).json({ error: 'Se requiere id de pista.' });
     if (typeof radioImpl !== 'function') return res.status(501).json({ error: 'No disponible.' });
     const cacheKey = `radio:${id}:${limit}`;

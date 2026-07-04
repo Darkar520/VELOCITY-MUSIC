@@ -298,7 +298,7 @@ function SearchTab({ ctx }) {
           {res.albums.length > 0 && (<>
             <SectionHeader label="Álbumes" accent={T.accent} />
             <div style={{ display:'flex', gap:15, overflowX:'auto', paddingBottom:6, paddingTop:2, marginBottom:18 }}>
-              {res.albums.map(a => <MediaCard key={a.albumId} cover={a.cover} title={a.name} subtitle={`${a.artist || 'Álbum'}${a.year ? ' · ' + a.year : ''}`} T={T} onClick={() => goAlbum(a.albumId, a.name, a.artist)} />)}
+              {res.albums.map(a => <MediaCard key={a.albumId} cover={a.cover} title={a.name} subtitle={`${a.artist || 'Álbum'}${a.year ? ' · ' + a.year : ''}`} T={T} onClick={() => goAlbum(a.albumId, a.name, a.artist, null, a.cover)} />)}
             </div>
           </>)}
 
@@ -437,7 +437,7 @@ function LibraryTab({ ctx }) {
         <>
           <SectionHeader label="Álbumes Guardados" accent={T.accent} />
           <div style={{ display:'flex', gap:15, overflowX:'auto', paddingBottom:6 }}>
-            {savedAlbums.map(a => <MediaCard key={a.albumId} cover={a.cover} title={a.name} subtitle={a.artist || 'Álbum'} T={T} onClick={() => goAlbum(a.albumId, a.name, a.artist)} />)}
+            {savedAlbums.map(a => <MediaCard key={a.albumId} cover={a.cover} title={a.name} subtitle={a.artist || 'Álbum'} T={T} onClick={() => goAlbum(a.albumId, a.name, a.artist, null, a.cover)} />)}
           </div>
         </>
       )}
@@ -1215,7 +1215,7 @@ function DetailView({ view, ctx }) {
             {albums.length > 0 && <>
               <SectionHeader label="Álbumes" accent={T.accent} />
               <div style={{ display:'flex', gap:15, overflowX:'auto', paddingBottom:6, marginBottom:20 }}>
-                {albums.map(a => <MediaCard key={a.albumId} cover={a.cover} title={a.name} subtitle={a.year ? String(a.year) : 'Álbum'} T={T} onClick={() => goAlbum(a.albumId, a.name, name)} />)}
+                {albums.map(a => <MediaCard key={a.albumId} cover={a.cover} title={a.name} subtitle={a.year ? String(a.year) : 'Álbum'} T={T} onClick={() => goAlbum(a.albumId, a.name, name, null, a.cover)} />)}
               </div>
             </>}
             <SectionHeader label="Canciones populares" accent={T.accent} action={!selecting && <button onClick={() => startSelection()} className="press" style={{ background:'none', border:'none', cursor:'pointer', color:T.accent, fontSize:11.5, fontWeight:800 }}>Seleccionar</button>} />
@@ -1235,7 +1235,7 @@ function DetailView({ view, ctx }) {
   const name = d?.name || view.name || 'Álbum';
   const artist = d?.artist || view.artist;
   const songs = d?.tracks || [];
-  const cover = d?.cover || songs[0]?.cover;
+  const cover = d?.cover || view.cover || songs[0]?.cover;
   return (
     <div className="fade-up" style={{ paddingBottom:8 }}>
       <Back />
@@ -1376,7 +1376,7 @@ function TrackMenu({ trackId, onClose, ctx }) {
   const isDl = downloaded.has(trackId);
   const items = [
     { icon: Icon.Queue, label:'Añadir a la cola', action: () => { addToQueue(trackId); onClose(); } },
-    { icon: Icon.Disc,  label:'Ir al álbum',      action: () => { goAlbum(tk.albumId, tk.album, tk.artist, tk.title); onClose(); } },
+    { icon: Icon.Disc,  label:'Ir al álbum',      action: () => { goAlbum(tk.albumId, tk.album, tk.artist, tk.title, tk.cover); onClose(); } },
     { icon: Icon.User,  label:'Ir al artista',    action: () => { goArtist(tk.artistId, tk.artist); onClose(); } },
     { icon: Icon.Plus,  label:'Añadir a playlist',action: () => { addToTarget(trackId); onClose(); } },
     { icon: Icon.Heart, label: faved ? 'Quitar de Me gusta' : 'Añadir a Me gusta', action: () => { toggleFav(trackId); onClose(); }, filled: faved },
@@ -1753,8 +1753,8 @@ export default function App() {
     const alive = () => myToken === feedTokenRef.current;
     setHomeLoading(true);
     (async () => {
-      const mixFromSeed = async (seed) => { try { const rel = await api.radio(seed.id); const tracks = capPerArtist(dedupeByTitle([seed, ...rel.map(normalizeTrack)]), 3).filter(t => t.id).slice(0, 25); return tracks.length >= 4 ? { label: seed.artist || 'Mezcla', tracks } : null; } catch { return null; } };
-      const mixFromSearch = async (label, q) => { try { const raw = await api.search(q); const tracks = dedupeByTitle(raw.slice(0, 22).map(normalizeTrack)).filter(t => t.id); return tracks.length >= 4 ? { label, tracks } : null; } catch { return null; } };
+      const mixFromSeed = async (seed) => { try { const rel = await api.radio(seed.id, 50); const tracks = capPerArtist(dedupeByTitle([seed, ...rel.map(normalizeTrack)]), 3).filter(t => t.id).slice(0, 50); return tracks.length >= 4 ? { label: seed.artist || 'Mezcla', tracks } : null; } catch { return null; } };
+      const mixFromSearch = async (label, q) => { try { const raw = await api.search(q); const tracks = dedupeByTitle(raw.slice(0, 50).map(normalizeTrack)).filter(t => t.id); return tracks.length >= 4 ? { label, tracks } : null; } catch { return null; } };
       const clean = (arr) => arr.filter(Boolean);
       const pick = (arr, n) => { const a = [...arr]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a.slice(0, n); };
       const oneOf = (arr) => arr[Math.floor(Math.random() * arr.length)];
@@ -1764,16 +1764,16 @@ export default function App() {
         if (!seeds.length) return null;
         const known = new Set([...recent, ...favs, ...downloaded, ...seeds.map(s => s.id)]);
         try {
-          const rels = await Promise.all(seeds.slice(0, 5).map(s => api.radio(s.id, 30).catch(() => [])));
+          const rels = await Promise.all(seeds.slice(0, 5).map(s => api.radio(s.id, 50).catch(() => [])));
           let tracks = capPerArtist(dedupeByTitle(rels.flat().map(normalizeTrack)), 2).filter(t => t.id && !known.has(t.id));
           if (tracks.length < 16 && seeds[0]) { try { const raw = await api.search((seeds[0].artist || 'mix') + ' similar artists'); tracks = capPerArtist(dedupeByTitle([...tracks, ...raw.map(normalizeTrack).filter(t => t.id && !known.has(t.id))]), 2); } catch {} }
           for (let i = tracks.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [tracks[i], tracks[j]] = [tracks[j], tracks[i]]; }
-          const out = tracks.slice(0, 40);
+          const out = tracks.slice(0, 50);
           return out.length >= 6 ? { label: 'Descubrimiento Semanal', tracks: out } : null;
         } catch { return null; }
       };
       // Radio "porque escuchaste": lista por cada semilla, etiquetada con el artista.
-      const mixBecause = async (seed) => { try { const rel = await api.radio(seed.id, 30); const tracks = capPerArtist(dedupeByTitle([seed, ...rel.map(normalizeTrack)]), 2).filter(t => t.id).slice(0, 28); return tracks.length >= 5 ? { label: seed.artist || seed.title || 'Mezcla', tracks } : null; } catch { return null; } };
+      const mixBecause = async (seed) => { try { const rel = await api.radio(seed.id, 50); const tracks = capPerArtist(dedupeByTitle([seed, ...rel.map(normalizeTrack)]), 2).filter(t => t.id).slice(0, 50); return tracks.length >= 5 ? { label: seed.artist || seed.title || 'Mezcla', tracks } : null; } catch { return null; } };
       const sections = [];
       const pushSection = (section, mixes) => { if (!mixes.length || !alive()) return; sections.push({ section, mixes }); setHomeRows([...sections]); setHomeLoading(false); };
 
@@ -2294,26 +2294,35 @@ export default function App() {
       .catch(fallback)
       .finally(() => setDetailLoading(false));
   };
-  const goAlbum = (albumId, name, artist, songTitle) => {
-    setExpanded(false); setView({ type:'album', albumId, name, artist });
+  const goAlbum = (albumId, name, artist, songTitle, cover) => {
+    // Pasar la carátula al `view` para que el hero la muestre de inmediato
+    // mientras carga (antes desaparecía porque el detalle no la recibía).
+    setExpanded(false); setView({ type:'album', albumId, name, artist, cover });
     setDetailData(null); setDetailLoading(true);
     // Las pistas de álbum (YT Music) suelen no traer carátula propia: heredan la
     // del álbum para que no aparezcan sin portada al abrir el detalle.
     const loadAlbum = (aid) => api.album(aid).then(d => {
-      const albumCover = d.cover || '';
+      const albumCover = d.cover || cover || '';
       const tracks = (d.tracks || []).map(t => normalizeTrack({ ...t, artworkUrl: t.artworkUrl || t.cover || albumCover }));
-      setDetailData({ type:'album', name: d.name || name, artist: d.artist || artist, artistId: d.artistId, cover: d.cover, year: d.year, tracks });
+      setDetailData({ type:'album', name: d.name || name, artist: d.artist || artist, artistId: d.artistId, cover: d.cover || cover, year: d.year, tracks });
     });
     (async () => {
       try {
         let aid = albumId;
         if (!aid) {
-          const raw = await api.search(`${songTitle || name} ${artist || ''}`.trim());
-          aid = raw.map(normalizeTrack).find(t => t.albumId)?.albumId || null;
+          // Resolver el álbum por nombre+artista (más fiable que solo canciones).
+          const r = await api.searchAll(`${name} ${artist || ''}`.trim()).catch(() => null);
+          aid = r?.albums?.[0]?.albumId
+            || (r?.songs || []).map(normalizeTrack).find(t => t.albumId)?.albumId
+            || null;
+          if (!aid) {
+            const raw = await api.search(`${songTitle || name} ${artist || ''}`.trim()).catch(() => []);
+            aid = raw.map(normalizeTrack).find(t => t.albumId)?.albumId || null;
+          }
         }
         if (aid) await loadAlbum(aid);
-        else setDetailData({ type:'album', name, artist, tracks: [], none: true });
-      } catch { setDetailData({ type:'album', name, artist, tracks: [], none: true }); }
+        else setDetailData({ type:'album', name, artist, cover, tracks: [], none: true });
+      } catch { setDetailData({ type:'album', name, artist, cover, tracks: [], none: true }); }
       finally { setDetailLoading(false); }
     })();
   };
