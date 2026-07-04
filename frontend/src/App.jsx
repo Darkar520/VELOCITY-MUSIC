@@ -202,7 +202,7 @@ function HomeTab({ ctx }) {
             {(sec.mixes || []).map(mix => (
               <MixCard key={mix.label} mix={mix} T={T}
                 onOpen={() => goMix(mix)}
-                onPlay={() => { const ids = mix.tracks.map(t => t.id); play(mix.tracks[0], ids); }} />
+                onPlay={() => { const ids = mix.tracks.map(t => t.id); play(mix.tracks[0], ids, { mixLabel: mix.label }); }} />
             ))}
           </div>
         </div>
@@ -1177,7 +1177,7 @@ function DetailView({ view, ctx }) {
         </div>
         {songs.length > 0 && (
           <div style={{ display:'flex', gap:8, marginBottom:18, flexWrap:'wrap' }}>
-            <button onClick={() => play(songs[0], ids)} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:8, background:grad(T), border:'none', borderRadius:99, padding:'10px 22px', cursor:'pointer', color:'#04060a', fontSize:12.5, fontWeight:800, boxShadow:`0 6px 18px ${hex2rgba(T.accent,.45)}` }}><Icon.Play c="#04060a" sz={16} /> Reproducir</button>
+            <button onClick={() => play(songs[0], ids, { mixLabel: view.label })} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:8, background:grad(T), border:'none', borderRadius:99, padding:'10px 22px', cursor:'pointer', color:'#04060a', fontSize:12.5, fontWeight:800, boxShadow:`0 6px 18px ${hex2rgba(T.accent,.45)}` }}><Icon.Play c="#04060a" sz={16} /> Reproducir</button>
             <DownloadAllButton ids={ids} downloaded={downloaded} downloading={downloading} onClick={() => downloadMany(ids)} T={T} />
             {!selecting && <button onClick={() => startSelection()} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:7, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:99, padding:'10px 16px', cursor:'pointer', color:'var(--txt-1)', fontSize:12, fontWeight:700 }}><Icon.Check c={T.accent} sz={15} /> Seleccionar</button>}
           </div>
@@ -1463,6 +1463,9 @@ export default function App() {
   const resumeRef = useRef((() => { const s = loadPlayerState(); return s ? (s.t || 0) : null; })());
   const radioRef = useRef(false);        // ¿sesión de radio (autollenado de relacionadas)?
   const radioSeedRef = useRef(null);      // id de la pista semilla de la radio actual
+  // Sesión de mezcla: al terminar una mezcla, saltar a otra mezcla relacionada.
+  const mixSessionRef = useRef({ label: null, used: new Set() });
+  const homeRowsRef = useRef([]);         // acceso al feed sin cierre obsoleto
   const persistRef = useRef({});
   const pendingRef = useRef(null);
   if (!pendingRef.current) { pendingRef.current = new Set(); try { JSON.parse(localStorage.getItem('velocity.pendingDl') || '[]').forEach(x => pendingRef.current.add(x)); } catch {} }
@@ -1798,8 +1801,15 @@ export default function App() {
 
       // ── EXPLORACIÓN (genéricas, reducidas para usuarios con historial) ──
       const explore = [];
-      // Regional relevante siempre.
-      explore.push({ title: oneOf(['Sonando en Latinoamérica', 'Lo de por acá', 'Éxitos latinos']), build: () => Promise.all(pick(LATIN_ROWS, 8).map(l => mixFromSearch(l.label, l.q))) });
+      // Fila fresca y personalizada (reemplaza la regional "Latinoamérica"):
+      // semillas por RECENCIA (lo que escuchas AHORA), distintas de "Hecho para ti".
+      const freshSeeds = [];
+      { const seenA = new Set(); for (const id of recent) { const t = trackById(id); if (!t) continue; const a = (t.artist || '').toLowerCase(); if (!a || seenA.has(a)) continue; seenA.add(a); freshSeeds.push(t); if (freshSeeds.length >= 6) break; } }
+      if (freshSeeds.length) {
+        explore.push({ title: oneOf(['Novedades para ti', 'Fresco para ti', 'Tu mezcla del momento']), build: () => Promise.all(freshSeeds.map(mixBecause)) });
+      } else {
+        explore.push({ title: 'Tendencias ahora', build: () => Promise.all(pick(SEED_ROWS, 6).map(s => mixFromSearch(s.label, s.q))) });
+      }
       if (hasPersonal) {
         // Con historial: solo 2 filas de exploración (no saturar de genéricas).
         explore.push({ title: oneOf(['Explora géneros', 'Por estilo']), build: () => Promise.all(pick(GENRES, 6).map(g => mixFromSearch(g.label, g.q))) });
@@ -1921,16 +1931,8 @@ export default function App() {
     autoExtendRef.current = track.id;
     (async () => {
       try {
-        const raw = await api.radio(track.id);
-        let more = capPerArtist(dedupeByTitle(raw.map(normalizeTrack)), 3)
-          .filter(t => t.id && t.id !== track.id && !ids.includes(t.id));
-        if (!more.length) {
-          const rawS = await api.search(track.artist || track.title);
-          more = rawS.map(normalizeTrack).filter(t => t.id && t.id !== track.id && !ids.includes(t.id));
-        }
-        if (!more.length) return;
-        more.slice(0, 20).forEach(t => cacheTrack(t));
-        const addIds = more.slice(0, 20).map(t => t.id);
+        const addIds = await buildContinuation(track, ids);
+        if (!addIds.length) return;
         setQueue(q => { const base = q && q.length ? q : [track.id]; const merged = [...base]; addIds.forEach(id => { if (!merged.includes(id)) merged.push(id); }); return merged; });
       } catch {}
     })();
@@ -2071,6 +2073,10 @@ export default function App() {
     // Modo radio: llena la cola con relacionadas a la pista elegida.
     if (opts.radio) { radioRef.current = true; ensureRadio(t, initialQueue); }
     else { radioRef.current = false; radioSeedRef.current = null; }
+    // Sesión de mezcla: reproducir una mezcla la inicia; cualquier otra
+    // reproducción la limpia; las auto-continuaciones la preservan (keepMix).
+    if (opts.mixLabel) mixSessionRef.current = { label: opts.mixLabel, used: new Set([opts.mixLabel]) };
+    else if (!opts.keepMix) mixSessionRef.current = { label: null, used: new Set() };
   };
   const togglePlay = () => { if (track) setPlaying(p => !p); };
   const orderIds = queue.length ? queue : (track ? [track.id] : []);
@@ -2078,15 +2084,15 @@ export default function App() {
     if (!track || !orderIds.length) return;
     if (shuffle && orderIds.length > 1) {
       let id; do { id = orderIds[Math.floor(Math.random()*orderIds.length)]; } while (id === track.id && orderIds.length > 1);
-      const t = trackById(id); if (t) play(t, orderIds); return;
+      const t = trackById(id); if (t) play(t, orderIds, { keepMix: true }); return;
     }
     const i = orderIds.indexOf(track.id);
-    const t = trackById(orderIds[(i+1) % orderIds.length]); if (t) play(t, orderIds);
+    const t = trackById(orderIds[(i+1) % orderIds.length]); if (t) play(t, orderIds, { keepMix: true });
   };
   const prev = () => {
     if (!track || !orderIds.length) return;
     const i = orderIds.indexOf(track.id);
-    const t = trackById(orderIds[(i-1+orderIds.length) % orderIds.length]); if (t) play(t, orderIds);
+    const t = trackById(orderIds[(i-1+orderIds.length) % orderIds.length]); if (t) play(t, orderIds, { keepMix: true });
   };
   const seek = (v) => { if (audioRef.current) { audioRef.current.currentTime = v; if (audioRef.current.volume < vol && !pendingFadeRef.current) audioRef.current.volume = vol; } setTime(v); };
   // Carátulas vecinas (para el carrusel tipo Spotify en el reproductor).
@@ -2188,6 +2194,39 @@ export default function App() {
   useEffect(() => { queueRef.current = queue; }, [queue]);
   useEffect(() => { trackRef.current = track; }, [track]);
   useEffect(() => { settingsRef.current = settings; }, [settings]);
+  useEffect(() => { homeRowsRef.current = homeRows; }, [homeRows]);
+
+  // Construye la continuación de la cola al llegar al final: si venimos de una
+  // mezcla, salta a OTRA mezcla relacionada del feed (más variedad); si no,
+  // radio de la última pista. Devuelve IDs nuevos a añadir (no reproduce).
+  const buildContinuation = async (currentTrack, ids) => {
+    const sess = mixSessionRef.current;
+    if (sess && sess.label) {
+      const allMixes = (homeRowsRef.current || []).flatMap(s => s.mixes || []);
+      const recentArtists = new Set(ids.slice(-12).map(id => (trackById(id)?.artist || '').toLowerCase()).filter(Boolean));
+      const candidates = allMixes.filter(m => m.label && !sess.used.has(m.label) && (m.tracks || []).length >= 4);
+      const related = candidates.find(m => (m.tracks || []).some(t => recentArtists.has((t.artist || '').toLowerCase())))
+        || candidates[Math.floor(Math.random() * candidates.length)];
+      if (related) {
+        sess.used.add(related.label);
+        const newIds = (related.tracks || []).map(t => { cacheTrack(t); return t.id; }).filter(id => id && !ids.includes(id));
+        if (newIds.length >= 4) return newIds;
+      }
+    }
+    // Radio de la última pista (endless clásico).
+    try {
+      const rel = await api.radio(currentTrack.id, 50);
+      const more = capPerArtist(dedupeByTitle(rel.map(normalizeTrack)), 3).filter(t => t.id && t.id !== currentTrack.id && !ids.includes(t.id));
+      if (more.length) { const out = more.slice(0, 50); out.forEach(cacheTrack); return out.map(t => t.id); }
+    } catch {}
+    // Respaldo: búsqueda por artista.
+    try {
+      const raw = await api.search(currentTrack.artist || currentTrack.title);
+      const more = raw.map(normalizeTrack).filter(t => t.id && t.id !== currentTrack.id && !ids.includes(t.id));
+      if (more.length) { const out = more.slice(0, 20); out.forEach(cacheTrack); return out.map(t => t.id); }
+    } catch {}
+    return [];
+  };
 
   // ── Fin de pista: repeat / autoplay / radio de relacionadas ──
   const onEnded = async () => {
@@ -2204,28 +2243,14 @@ export default function App() {
     // Hay siguiente en la cola → reproducir
     if (i !== -1 && i < ids.length - 1) { next(); return; }
 
-    // Fin de la cola → radio de relacionadas
+    // Fin de la cola → continuar: otra mezcla relacionada (si venías de una) o
+    // radio de relacionadas. keepMix preserva la sesión para seguir encadenando.
     if (currentTrack) {
-      try {
-        const rel = await api.radio(currentTrack.id);
-        let more = capPerArtist(dedupeByTitle(rel.map(normalizeTrack)), 3)
-          .filter(t => t.id !== currentTrack.id && !ids.includes(t.id));
-        if (more.length) {
-          const add = more.slice(0, 20).map(t => t.id);
-          const nxt = trackById(add[0]);
-          if (nxt) { play(nxt, [...ids, ...add]); return; }
-        }
-      } catch {}
-      // Respaldo: búsqueda por artista
-      try {
-        const raw = await api.search(currentTrack.artist);
-        const more = raw.map(normalizeTrack).filter(t => t.id !== currentTrack.id && !ids.includes(t.id));
-        if (more.length) {
-          const add = more.slice(0, 8).map(t => t.id);
-          const nxt = trackById(add[0]);
-          if (nxt) { play(nxt, [...ids, ...add]); return; }
-        }
-      } catch {}
+      const addIds = await buildContinuation(currentTrack, ids);
+      if (addIds.length) {
+        const nxt = trackById(addIds[0]);
+        if (nxt) { play(nxt, [...ids, ...addIds], { keepMix: true }); return; }
+      }
     }
     setPlaying(false);
   };
