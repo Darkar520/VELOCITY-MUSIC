@@ -1537,6 +1537,8 @@ export default function App() {
   }, [updateReady, playing]);
 
   const audioRef = useRef(null);
+  // <audio> oculto que pre-descarga la SIGUIENTE pista (arranque casi instantáneo).
+  const preloadAudioRef = useRef(null);
   const playingRef = useRef(false);
   // Web Audio para normalizar volumen (compresor de rango dinámico). Opt-in.
   const audioCtxRef = useRef(null);
@@ -1798,6 +1800,27 @@ export default function App() {
     const ids = queue.length ? queue : [track.id];
     prefetchNext(track.id, ids, qParam);
   }, [track?.id, queue, quality]);
+
+  // ── Pre-buffer del AUDIO de la siguiente pista (estilo Spotify) ──
+  // Un <audio> oculto descarga por adelantado el stream de la próxima pista.
+  // Al cambiar, el navegador la sirve desde su caché (el proxy manda
+  // Cache-Control) → el arranque es casi instantáneo. No interfiere con la
+  // reproducción actual: está muteado y nunca llama a play().
+  useEffect(() => {
+    const el = preloadAudioRef.current;
+    if (!el || !track) return;
+    const ids = queue.length ? queue : [track.id];
+    const i = ids.indexOf(track.id);
+    if (i === -1 || ids.length < 2) { el.removeAttribute('src'); return; }
+    const nextId = ids[(i + 1) % ids.length];
+    if (!nextId || nextId === track.id || downloaded.has(nextId)) { el.removeAttribute('src'); return; }
+    const nt = trackById(nextId);
+    if (!nt) return;
+    const qualityMap = { high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' };
+    const qParam = qualityMap[quality] || 'high';
+    const url = api.streamUrl({ artist: nt.artist, title: nt.title, id: nt.id, quality: qParam });
+    if (el.getAttribute('src') !== url) { el.src = url; try { el.load(); } catch {} }
+  }, [track?.id, queue, quality, downloaded]);
 
   // ── Continuidad en segundo plano: extender la cola ANTES de que acabe ──
   // Si la pista actual es la última de la cola, se anexan relacionadas AHORA
@@ -2375,6 +2398,7 @@ export default function App() {
   const Content = view ? (view.type === 'wrapped' ? <WrappedView ctx={ctx} /> : <DetailView view={view} ctx={ctx} />) : TabContent;
 
   const audioEl = (
+    <>
     <audio ref={audioRef} src={playSrc || (track ? track.url : undefined)} preload="auto"
       onTimeUpdate={() => {
         const a = audioRef.current; if (!a) return;
@@ -2399,6 +2423,9 @@ export default function App() {
       onError={() => { selfPauseRef.current = false; setLoadingAudio(false); setPlaying(false); showToast('No se pudo reproducir esta pista'); }}
       onEnded={onEnded}
     />
+      {/* Pre-buffer oculto de la siguiente pista (muteado, nunca reproduce). */}
+      <audio ref={preloadAudioRef} preload="auto" muted style={{ display: 'none' }} aria-hidden="true" tabIndex={-1} />
+    </>
   );
 
   const expandedPlayer = (
