@@ -62,7 +62,10 @@ test('Property 7: validación de artist/title', async () => {
         fc.record({ artist: fc.constant('  '), title: fc.string({ minLength: 1, maxLength: 50 }) }),
         fc.record({ artist: fc.string({ minLength: 1, maxLength: 50 }), title: fc.constant('') }),
         fc.record({
-          artist: fc.string({ minLength: 201, maxLength: 260 }).map((s) => s.padEnd(201, 'x')),
+          // >200 caracteres NO-espacio: garantiza que tras trim siga superando el
+          // límite (el resolver valida el valor recortado, así que espacios que
+          // trim elimina no cuentan). Evita falsos negativos intermitentes.
+          artist: fc.string({ minLength: 201, maxLength: 260 }).map((s) => s.replace(/\s/g, 'x')),
           title: fc.constant('ok'),
         }),
       ),

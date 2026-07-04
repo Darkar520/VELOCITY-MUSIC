@@ -13,6 +13,7 @@
     "dev": "node --watch server.js",
     "build": "cd frontend && npm install && npm run build",
     "test": "node --test",
+    "verify": "node --test && cd frontend && npm run build",
     "db:init": "node src/db/init.js",
     "db:migrate": "node scripts/migrate-json-to-pg.js"
   },
