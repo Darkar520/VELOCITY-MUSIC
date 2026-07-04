@@ -1512,27 +1512,58 @@ export default function App() {
   const toastTimer = useRef(null);
   const showToast = (m) => { setToast(m); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 2400); };
 
-  // ── Auto-actualización de la PWA ──
-  // Cuando el service worker instala una versión nueva y toma el control,
-  // recargamos automáticamente PERO solo si no se está reproduciendo música
-  // (para no cortar la reproducción). Si está sonando, esperamos a que pause.
+  // ── Detección de versión desactualizada + auto-actualización ──
+  // Estrategia doble para no depender solo del Service Worker:
+  //  1) SW: si instala una versión nueva y toma el control → hay actualización.
+  //  2) Sondeo de versión: compara el hash del bundle en ejecución contra el que
+  //     sirve el servidor (index.html, no-cache). Detecta deploys aunque el SW
+  //     no cambie. Se revisa al enfocar la app y periódicamente.
   const [updateReady, setUpdateReady] = useState(false);
+  const runningBundleRef = useRef(null);
+  // Aplicar la actualización: activa el SW en espera (si lo hay) y recarga.
+  const applyUpdate = async () => {
+    try {
+      const reg = await navigator.serviceWorker?.getRegistration?.();
+      if (reg && reg.waiting) reg.waiting.postMessage('SKIP_WAITING');
+    } catch {}
+    window.location.reload();
+  };
   useEffect(() => {
-    if (!('serviceWorker' in navigator)) return;
-    // Si la página cargó SIN controlador, el primer controllerchange es la
-    // instalación inicial (no una actualización): no recargar en ese caso.
-    const hadController = !!navigator.serviceWorker.controller;
-    let fired = false;
-    const trigger = () => { if (fired || !hadController) return; fired = true; setUpdateReady(true); };
-    const onMsg = (e) => { if (e.data && e.data.type === 'vm-updated') trigger(); };
-    navigator.serviceWorker.addEventListener('controllerchange', trigger);
-    navigator.serviceWorker.addEventListener('message', onMsg);
-    return () => { navigator.serviceWorker.removeEventListener('controllerchange', trigger); navigator.serviceWorker.removeEventListener('message', onMsg); };
+    // (1) Señal del Service Worker.
+    if ('serviceWorker' in navigator) {
+      const hadController = !!navigator.serviceWorker.controller;
+      let fired = false;
+      const trigger = () => { if (fired || !hadController) return; fired = true; setUpdateReady(true); };
+      const onMsg = (e) => { if (e.data && e.data.type === 'vm-updated') trigger(); };
+      navigator.serviceWorker.addEventListener('controllerchange', trigger);
+      navigator.serviceWorker.addEventListener('message', onMsg);
+      var cleanupSW = () => { navigator.serviceWorker.removeEventListener('controllerchange', trigger); navigator.serviceWorker.removeEventListener('message', onMsg); };
+    }
+    // (2) Sondeo de versión por hash del bundle.
+    try {
+      const s = document.querySelector('script[src*="/assets/index-"]');
+      runningBundleRef.current = s ? (s.getAttribute('src').match(/index-[A-Za-z0-9]+\.js/) || [null])[0] : null;
+    } catch {}
+    let stop = false;
+    const checkVersion = async () => {
+      if (stop || !runningBundleRef.current) return;
+      try {
+        const html = await fetch('/?_v=' + Date.now(), { cache: 'no-store' }).then(r => r.ok ? r.text() : '');
+        const m = html.match(/index-[A-Za-z0-9]+\.js/);
+        if (m && m[0] !== runningBundleRef.current) setUpdateReady(true);
+      } catch {}
+    };
+    const iv = setInterval(checkVersion, 5 * 60 * 1000);
+    const onVis = () => { if (document.visibilityState === 'visible') checkVersion(); };
+    document.addEventListener('visibilitychange', onVis);
+    checkVersion();
+    return () => { stop = true; clearInterval(iv); document.removeEventListener('visibilitychange', onVis); if (typeof cleanupSW === 'function') cleanupSW(); };
   }, []);
+  // Auto-aplicar solo si NO se está reproduciendo (sin cortar música). Si suena,
+  // se muestra el aviso visible (UpdateBanner) para que el usuario decida.
   useEffect(() => {
-    if (!updateReady) return;
-    if (playing) { showToast('Nueva versión lista · se aplicará al pausar'); return; }
-    const t = setTimeout(() => window.location.reload(), 500);
+    if (!updateReady || playing) return;
+    const t = setTimeout(() => applyUpdate(), 1500);
     return () => clearTimeout(t);
   }, [updateReady, playing]);
 
@@ -2494,6 +2525,19 @@ export default function App() {
     </div>
   ) : null;
 
+  // Aviso visible de nueva versión: aparece cuando hay una actualización y la
+  // música está sonando (no cortamos la reproducción; el usuario decide cuándo).
+  const updateBanner = (updateReady && playing) ? (
+    <div className="fade-up glass" style={{ position:'fixed', left:'50%', transform:'translateX(-50%)', bottom:'calc(env(safe-area-inset-bottom, 16px) + 150px)', zIndex:120, display:'flex', alignItems:'center', gap:12, background:'var(--surf-1)', border:`1px solid ${hex2rgba(T.accent,.5)}`, borderRadius:16, padding:'10px 12px 10px 16px', boxShadow:'0 14px 40px #000c', maxWidth:'calc(100vw - 28px)' }}>
+      <div style={{ minWidth:0 }}>
+        <div style={{ fontSize:12.5, fontWeight:800, color:'var(--txt-0)' }}>Nueva versión disponible</div>
+        <div style={{ fontSize:10.5, color:'var(--txt-2)', marginTop:1 }}>Actualiza para tener lo último.</div>
+      </div>
+      <button onClick={applyUpdate} className="btn-tap" style={{ flexShrink:0, background:grad(T), border:'none', borderRadius:99, padding:'9px 18px', cursor:'pointer', color:'#04060a', fontSize:12, fontWeight:800, boxShadow:`0 6px 18px ${hex2rgba(T.accent,.4)}` }}>Actualizar</button>
+      <button aria-label="Después" onClick={() => setUpdateReady(false)} className="press" style={{ flexShrink:0, background:'var(--surf-2)', border:'none', borderRadius:'50%', width:30, height:30, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}><Icon.X c="var(--txt-1)" sz={15} /></button>
+    </div>
+  ) : null;
+
   // ───────────── DESKTOP ─────────────
   if (wide) {
     return (
@@ -2507,7 +2551,7 @@ export default function App() {
           </main>
         </div>
         <PlayerBar {...playerProps} onExpand={() => setExpanded(true)} onMenu={setMenuTarget} onQueue={() => setShowQueue(true)} />
-        {expandedPlayer}{addModal}{trackMenu}{queuePanel}{selectionBar}
+        {expandedPlayer}{addModal}{trackMenu}{queuePanel}{selectionBar}{updateBanner}
         <Toast msg={toast} T={T} />
       </div>
     );
@@ -2540,7 +2584,7 @@ export default function App() {
           })}
         </div>
       </div>
-      {expandedPlayer}{addModal}{trackMenu}{queuePanel}{selectionBar}
+      {expandedPlayer}{addModal}{trackMenu}{queuePanel}{selectionBar}{updateBanner}
       <Toast msg={toast} T={T} />
     </div>
   );
