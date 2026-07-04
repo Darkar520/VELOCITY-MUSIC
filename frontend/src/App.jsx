@@ -1597,8 +1597,9 @@ export default function App() {
   }, [updateReady, playing]);
 
   const audioRef = useRef(null);
-  // <audio> oculto que pre-descarga la SIGUIENTE pista (arranque casi instantáneo).
+  // Dos <audio> ocultos que pre-descargan las siguientes 2 pistas de la cola.
   const preloadAudioRef = useRef(null);
+  const preloadAudio2Ref = useRef(null);
   // Reintento por pista ante error de reproducción (URL de audio expirada, etc.).
   const playErrorRef = useRef({ id: null, n: 0 });
   const playingRef = useRef(false);
@@ -1968,25 +1969,25 @@ export default function App() {
     prefetchNext(track.id, ids, qParam);
   }, [track?.id, queue, quality]);
 
-  // ── Pre-buffer del AUDIO de la siguiente pista (estilo Spotify) ──
-  // Un <audio> oculto descarga por adelantado el stream de la próxima pista.
-  // Al cambiar, el navegador la sirve desde su caché (el proxy manda
-  // Cache-Control) → el arranque es casi instantáneo. No interfiere con la
-  // reproducción actual: está muteado y nunca llama a play().
+  // ── Pre-buffer del AUDIO de las siguientes 2 pistas (estilo Spotify) ──
+  // Dos <audio> ocultos descargan por adelantado los streams de las próximas 2
+  // pistas. Al cambiar, el navegador sirve desde caché → arranque instantáneo.
   useEffect(() => {
-    const el = preloadAudioRef.current;
-    if (!el || !track) return;
-    const ids = queue.length ? queue : [track.id];
-    const i = ids.indexOf(track.id);
-    if (i === -1 || ids.length < 2) { el.removeAttribute('src'); return; }
-    const nextId = ids[(i + 1) % ids.length];
-    if (!nextId || nextId === track.id || downloaded.has(nextId)) { el.removeAttribute('src'); return; }
-    const nt = trackById(nextId);
-    if (!nt) return;
+    const ids = queue.length ? queue : (track ? [track.id] : []);
+    const i = track ? ids.indexOf(track.id) : -1;
     const qualityMap = { high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' };
     const qParam = qualityMap[quality] || 'high';
-    const url = api.streamUrl({ artist: nt.artist, title: nt.title, id: nt.id, quality: qParam });
-    if (el.getAttribute('src') !== url) { el.src = url; try { el.load(); } catch {} }
+    const preload = (el, offset) => {
+      if (!el || !track || i === -1 || ids.length < 2) { if (el) el.removeAttribute('src'); return; }
+      const nextId = ids[(i + offset) % ids.length];
+      if (!nextId || nextId === track.id || downloaded.has(nextId)) { el.removeAttribute('src'); return; }
+      const nt = trackById(nextId);
+      if (!nt) { el.removeAttribute('src'); return; }
+      const url = api.streamUrl({ artist: nt.artist, title: nt.title, id: nt.id, quality: qParam });
+      if (el.getAttribute('src') !== url) { el.src = url; try { el.load(); } catch {} }
+    };
+    preload(preloadAudioRef.current, 1);
+    preload(preloadAudio2Ref.current, 2);
   }, [track?.id, queue, quality, downloaded]);
 
   // ── Continuidad en segundo plano: extender la cola ANTES de que acabe ──
@@ -2679,8 +2680,9 @@ export default function App() {
       onError={handleAudioError}
       onEnded={onEnded}
     />
-      {/* Pre-buffer oculto de la siguiente pista (muteado, nunca reproduce). */}
+      {/* Pre-buffer oculto de las siguientes 2 pistas (muteados, nunca reproducen). */}
       <audio ref={preloadAudioRef} preload="auto" muted style={{ display: 'none' }} aria-hidden="true" tabIndex={-1} />
+      <audio ref={preloadAudio2Ref} preload="auto" muted style={{ display: 'none' }} aria-hidden="true" tabIndex={-1} />
     </>
   );
 
