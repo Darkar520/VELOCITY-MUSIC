@@ -268,12 +268,31 @@ function mapUpNext(s) {
  */
 export async function getRadio(videoId, limit = 25) {
   const client = await getClientSafe();
-  const ups = await client.getUpNexts(videoId);
-  return (Array.isArray(ups) ? ups : [])
-    .filter((u) => (u.type ? u.type === 'SONG' : true) && u.videoId)
-    .slice(0, limit)
-    .map(mapUpNext)
-    .filter((t) => t.id && t.title);
+  const seen = new Set();
+  const out = [];
+  // Incorpora un lote de "Up Nexts" respetando unicidad y el límite.
+  const ingest = (ups) => {
+    for (const u of (Array.isArray(ups) ? ups : [])) {
+      if (out.length >= limit) break;
+      if (!u || !u.videoId) continue;
+      if (u.type && u.type !== 'SONG') continue;
+      if (seen.has(u.videoId)) continue;
+      seen.add(u.videoId);
+      const t = mapUpNext(u);
+      if (t.id && t.title) out.push(t);
+    }
+  };
+  // Semilla principal.
+  try { ingest(await client.getUpNexts(videoId)); } catch {}
+  // "Up Nexts" de YouTube Music suele devolver ~20-25 pistas por semilla. Para
+  // alcanzar el límite (p.ej. 50) expandimos el grafo: usamos las primeras
+  // pistas como semillas secundarias y unimos sus radios (en paralelo, deduplicado).
+  if (out.length < limit) {
+    const secondary = out.slice(0, 6).map((t) => t.id).filter((id) => id && id !== videoId);
+    const batches = await Promise.all(secondary.map((id) => client.getUpNexts(id).catch(() => [])));
+    for (const b of batches) { if (out.length >= limit) break; ingest(b); }
+  }
+  return out.slice(0, limit);
 }
 
 export function createYTMusicRadio() { return (videoId, limit) => getRadio(videoId, limit); }
