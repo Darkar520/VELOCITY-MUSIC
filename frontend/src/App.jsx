@@ -1622,88 +1622,86 @@ export default function App() {
   }, []);
 
   // ── Carga inicial tras autenticación ──
-  // Clave de caché por usuario para que distintas cuentas no compartan datos.
-  const libCacheKey = () => { try { return 'velocity.lib.' + (JSON.parse(localStorage.getItem('velocity.token') || 'null')?.split('.')[1] || 'u'); } catch { return 'velocity.lib.u'; } };
+  // Clave de caché de biblioteca por usuario (evita mezclar cuentas en un mismo equipo).
+  const libCacheKey = () => 'velocity.lib.' + (localStorage.getItem('velocity.email') || 'u');
+  // Persistir la biblioteca en local: estructura ligera + metadatos SOLO de las
+  // pistas de la biblioteca, sin carátulas pesadas (data:/blob:) para no exceder
+  // la cuota de localStorage (esa era la causa del fallo: setItem lanzaba y se perdía).
+  const persistLibCache = (favIds, pls, albums, recentIds) => {
+    try {
+      const libIds = new Set([...(favIds || []), ...(recentIds || [])]);
+      (pls || []).forEach(p => (p.trackIds || []).forEach(id => libIds.add(id)));
+      const tracks = [...libIds].map(trackById).filter(Boolean).map(t =>
+        (typeof t.cover === 'string' && (t.cover.startsWith('data:') || t.cover.startsWith('blob:')))
+          ? { ...t, cover: '' } : t
+      );
+      localStorage.setItem(libCacheKey(), JSON.stringify({ favs: favIds || [], playlists: pls || [], savedAlbums: albums || [], recent: recentIds || [], tracks }));
+    } catch {}
+  };
   // Restaurar biblioteca desde caché local (disponible aunque el backend esté caído).
   const restoreLibCache = () => {
     try {
-      const raw = localStorage.getItem(libCacheKey());
-      if (!raw) return;
-      const c = JSON.parse(raw);
-      if (c.favs)       setFavs(c.favs);
-      if (c.playlists)  setPlaylists(c.playlists);
-      if (c.savedAlbums) setSavedAlbums(c.savedAlbums);
-      if (c.recent)     setRecent(c.recent);
-      if (c.tracks)     c.tracks.forEach(normalizeTrack);
+      const c = JSON.parse(localStorage.getItem(libCacheKey()) || 'null');
+      if (!c) return;
+      if (Array.isArray(c.tracks))      c.tracks.forEach(cacheTrack);   // poblar catálogo primero
+      if (Array.isArray(c.favs))        setFavs(c.favs);
+      if (Array.isArray(c.playlists))   setPlaylists(c.playlists);
+      if (Array.isArray(c.savedAlbums)) setSavedAlbums(c.savedAlbums);
+      if (Array.isArray(c.recent))      setRecent(c.recent);
     } catch {}
   };
   useEffect(() => {
     if (!authed) return;
-    restoreLibCache(); // mostrar datos cacheados inmediatamente
+    restoreLibCache(); // mostrar datos cacheados de inmediato (offline-first)
     let cancel = false;
     (async () => {
       try {
-        const [fav, pls, hist] = await Promise.all([
+        const [fav, pls, hist, albums] = await Promise.all([
           api.favorites().catch(() => null),
           api.playlists().catch(() => null),
           api.history().catch(() => null),
+          api.savedAlbums().catch(() => null),
         ]);
         if (cancel) return;
-        // Si alguna petición falló (backend caído), la caché ya está restaurada — no pisar.
-        if (fav !== null)  setFavs(fav);
-        if (hist !== null) setRecent(hist.map(h => h.trackId));
-        api.savedAlbums().then(a => { if (!cancel) setSavedAlbums(a); }).catch(() => {});
-        // cargar pistas de cada playlist
-        const withTracks = await Promise.all((pls || []).map(async p => {
+        // Solo pisar el estado restaurado si la petición tuvo éxito (backend arriba).
+        if (fav !== null)    setFavs(fav);
+        if (hist !== null)   setRecent(hist.map(h => h.trackId));
+        if (albums !== null) setSavedAlbums(albums);
+        const withTracks = pls === null ? null : await Promise.all(pls.map(async p => {
           const ids = await api.playlistTracks(p.id).catch(() => []);
           return { id: p.id, name: p.name, trackIds: ids };
         }));
-        if (!cancel && pls !== null) setPlaylists(withTracks);
+        if (!cancel && withTracks !== null) setPlaylists(withTracks);
 
-        // ── Sincronización de metadatos entre dispositivos ──
-        // 1) Subir lo que este dispositivo ya conoce (para otros dispositivos).
+        // Sincronización de metadatos entre dispositivos: subir lo conocido.
         const local = [..._catalog.values()].map(slimTrack).filter(Boolean);
         if (local.length) api.saveTracks(local);
-        // 2) Hidratar metadatos faltantes de la biblioteca (favoritos, historial,
-        //    playlists) desde el backend, para poder renderizarlos aquí.
-        const allIds = new Set([...fav, ...hist.map(h => h.trackId)]);
-        withTracks.forEach(p => (p.trackIds || []).forEach(id => allIds.add(id)));
-        const missing = [...allIds].filter(id => id && !trackById(id));
-        if (missing.length) {
-          // En lotes de 300 (límite del endpoint).
+
+        // Si el backend respondió, hidratar metadatos faltantes y persistir la caché.
+        if (fav !== null) {
+          const recentIds = (hist || []).map(h => h.trackId);
+          const allIds = new Set([...fav, ...recentIds]);
+          (withTracks || []).forEach(p => (p.trackIds || []).forEach(id => allIds.add(id)));
+          const missing = [...allIds].filter(id => id && !trackById(id));
           for (let i = 0; i < missing.length && !cancel; i += 300) {
             const metas = await api.getTracks(missing.slice(i, i + 300));
-            if (!cancel && metas.length) { metas.forEach(normalizeTrack); }
+            if (!cancel && metas.length) metas.forEach(normalizeTrack);
           }
-          if (!cancel) { saveMeta(); setCatVer(v => v + 1); }
-        }
-        // ── Guardar biblioteca en caché local (offline fallback) ──
-        if (!cancel && fav !== null) {
-          try {
-            const tracks = [..._catalog.values()].map(slimTrack).filter(Boolean);
-            localStorage.setItem(libCacheKey(), JSON.stringify({
-              favs: fav,
-              playlists: withTracks,
-              savedAlbums: await api.savedAlbums().catch(() => []),
-              recent: (hist || []).map(h => h.trackId),
-              tracks,
-            }));
-          } catch {}
+          if (!cancel) {
+            saveMeta(); setCatVer(v => v + 1);
+            persistLibCache(fav, withTracks || [], albums || [], recentIds);
+          }
         }
       } catch {}
     })();
     return () => { cancel = true; };
   }, [authed]);
 
-  // ── Persistir biblioteca en caché local al cambiar favoritos/playlists/álbumes ──
+  // ── Re-persistir la caché al modificar biblioteca (fav/playlist/álbum/recientes) ──
   useEffect(() => {
-    if (!authed || !favs.length) return;
-    try {
-      const cur = JSON.parse(localStorage.getItem(libCacheKey()) || '{}');
-      const tracks = [..._catalog.values()].map(slimTrack).filter(Boolean);
-      localStorage.setItem(libCacheKey(), JSON.stringify({ ...cur, favs, playlists, savedAlbums, tracks }));
-    } catch {}
-  }, [favs, playlists, savedAlbums]);
+    if (!authed) return;
+    persistLibCache(favs, playlists, savedAlbums, recent);
+  }, [favs, playlists, savedAlbums, recent]);
 
   // ── Feed personalizado (mixes según lo que escuchas, guardas y descargas) ──
   const feedSigRef = useRef('');
