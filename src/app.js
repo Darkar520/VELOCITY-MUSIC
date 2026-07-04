@@ -61,6 +61,16 @@ export function createApp(deps = {}) {
   const app = express();
   // Detrás de ngrok/proxy: usar X-Forwarded-For para obtener la IP real del cliente.
   app.set('trust proxy', true);
+  app.disable('x-powered-by');
+  // ── Cabeceras de seguridad (sin CSP para no romper fuentes/imágenes/OAuth) ──
+  // Se aplican a todas las respuestas; son inocuas para audio, Range y portadas.
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Permissions-Policy', 'browsing-topics=()');
+    next();
+  });
   // Compresión gzip para respuestas de texto (JSON/HTML/JS/CSS). NO comprime el
   // audio (audio/* no es comprimible) ni el proxy de streaming (rompería Range).
   app.use(compression({
@@ -634,9 +644,14 @@ export function createApp(deps = {}) {
 
   // ---- Panel de trazabilidad / métricas (protegido por clave) ----
   // Uso: GET /api/admin/stats?key=TU_ADMIN_KEY
-  // La clave se define con la variable de entorno ADMIN_KEY (por defecto 'velocity-admin').
-  if (statsRepo) {
-    const ADMIN_KEY = process.env.ADMIN_KEY || 'velocity-admin';
+  // La clave se define con la variable de entorno ADMIN_KEY. SIN default: si no
+  // está configurada, el panel queda DESHABILITADO (no se expone con clave débil).
+  const ADMIN_KEY = process.env.ADMIN_KEY || '';
+  const ADMIN_ENABLED = ADMIN_KEY.length >= 8;
+  if (statsRepo && !ADMIN_ENABLED) {
+    app.get('/api/admin/stats', (req, res) => res.status(503).json({ error: 'Panel de administración deshabilitado (ADMIN_KEY no configurada).' }));
+  }
+  if (statsRepo && ADMIN_ENABLED) {
     const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     const fmtDate = (t) => t ? new Date(t).toLocaleString('es') : '—';
     const STYLE = `body{font-family:system-ui,sans-serif;background:#04060a;color:#f4f7fb;margin:0;padding:24px}a{color:#10d9a0;text-decoration:none}a:hover{text-decoration:underline}

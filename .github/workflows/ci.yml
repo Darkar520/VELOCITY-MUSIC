@@ -1,0 +1,49 @@
+name: CI
+
+# Puerta de calidad: corre en cada push y PR. Nada se promociona a producción
+# (rama main) sin que este workflow pase en verde.
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  verify:
+    name: Tests + Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install backend deps
+        run: npm ci || npm install
+
+      - name: Install frontend deps
+        run: npm ci || npm install
+        working-directory: frontend
+
+      - name: Run tests (unit + property-based)
+        run: node --test
+
+      - name: Build frontend (production)
+        run: npm run build
+        working-directory: frontend
+        env:
+          # El build de Pages usa build:pages; aquí validamos que compila.
+          NODE_ENV: production
+
+  # Bloquea el merge a main si el job "verify" no pasó (se enlaza en las reglas
+  # de protección de rama de GitHub: Settings → Branches → Require status checks).
+  gate:
+    name: Quality Gate
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "✅ Calidad verificada — apto para promocionar a producción."

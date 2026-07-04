@@ -10,10 +10,13 @@
   "scripts": {
     "start": "node server.js",
     "start:cluster": "node cluster.js",
+    "start:staging": "node scripts/start-staging.js",
     "dev": "node --watch server.js",
     "build": "cd frontend && npm install && npm run build",
     "test": "node --test",
     "verify": "node --test && cd frontend && npm run build",
+    "preflight": "powershell -ExecutionPolicy Bypass -File scripts/preflight.ps1",
+    "setup:hooks": "git config core.hooksPath .githooks",
     "db:init": "node src/db/init.js",
     "db:migrate": "node scripts/migrate-json-to-pg.js"
   },

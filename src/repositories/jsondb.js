@@ -15,7 +15,11 @@ import { fileURLToPath } from 'node:url';
  */
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.join(__dirname, '..', '..', 'data');
+// Directorio de datos configurable (VELOCITY_DATA_DIR) para aislar staging de
+// producción: dos instancias no deben escribir el mismo velocity-db.json.
+const DATA_DIR = process.env.VELOCITY_DATA_DIR
+  ? path.resolve(process.env.VELOCITY_DATA_DIR)
+  : path.join(__dirname, '..', '..', 'data');
 const DB_FILE = path.join(DATA_DIR, 'velocity-db.json');
 
 function emptyStore() {

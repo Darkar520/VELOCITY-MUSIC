@@ -1,0 +1,15 @@
+#!/bin/sh
+# Puerta local: bloquea `git push` si los tests fallan.
+# Instalar con:  npm run setup:hooks   (configura core.hooksPath a .githooks)
+#
+# Corre los tests (rápidos, sin red). El build completo se valida en CI.
+echo "[pre-push] Corriendo tests antes de pushear..."
+node --test
+if [ $? -ne 0 ]; then
+  echo ""
+  echo "X Tests fallaron. Push cancelado. Corrige antes de promocionar."
+  echo "  (Para saltar en una emergencia real: git push --no-verify)"
+  exit 1
+fi
+echo "OK tests verdes — push permitido."
+exit 0

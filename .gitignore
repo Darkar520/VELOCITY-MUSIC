@@ -9,8 +9,12 @@ frontend/node_modules/
 
 # ── Datos y backups de la base de datos JSON ──────────────────
 data/
+data-staging/
 *.bak
 *.pre-recover
+
+# ── Build de staging del frontend (Cloudflare Pages preview) ──
+frontend/dist/
 
 # ── Binarios descargados en runtime (yt-dlp) ──────────────────
 bin/

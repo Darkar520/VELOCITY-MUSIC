@@ -124,8 +124,22 @@ La reproducción NUNCA debe cortarse. Invariantes:
 
 - Panel: `GET /api/admin/stats?key=<ADMIN_KEY>&html=1` (usuarios, drill-down
   por usuario: reproducciones con título, búsquedas, top canciones).
-- Protegido por `ADMIN_KEY` (variable de entorno). Cambiar el valor por defecto.
+- Protegido por `ADMIN_KEY` (variable de entorno, ≥8 caracteres). **SIN default**:
+  si no está configurada, el panel queda **deshabilitado** (503). Nunca se
+  expone con una clave débil.
 - Todo el HTML del panel escapa entrada de usuario (anti-XSS).
+
+## 11. Proceso de release (staging → producción)
+
+Ver **docs/RELEASE.md**. Reglas duras:
+
+- **Nada llega a producción sin pasar la puerta de calidad** (tests + build).
+- **No commitear directo a `main`**: `feature/* → develop → main` vía PR.
+- Probar en **sandbox** (`npm run start:staging`, puerto 3001, `data-staging/`
+  aislado) y/o en el **preview de Cloudflare Pages** antes de promocionar.
+- Puertas: pre-push hook (`npm run setup:hooks`), `npm run preflight`, y CI
+  (GitHub Actions). Merge a `main` bloqueado si el CI está rojo.
+- Cabeceras de seguridad activas (nosniff, X-Frame-Options, Referrer-Policy).
 
 ---
 
