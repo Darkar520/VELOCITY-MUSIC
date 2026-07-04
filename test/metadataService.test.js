@@ -57,7 +57,10 @@ test('Property 2: validación de consulta de búsqueda', async () => {
         fc.stringOf(fc.constantFrom(' ', '\t', '\n'), { maxLength: 8 }),
         fc
           .string({ minLength: MAX_QUERY_LENGTH + 1, maxLength: MAX_QUERY_LENGTH + 50 })
-          .map((s) => s.padEnd(MAX_QUERY_LENGTH + 1, 'x')),
+          // Sin espacios: searchTracks valida la longitud DESPUÉS de trim(), así
+          // que un string largo pero mayormente en blanco quedaría corto y válido
+          // (comportamiento correcto). Garantizamos que siga superando el límite.
+          .map((s) => s.replace(/\s/g, 'x').padEnd(MAX_QUERY_LENGTH + 1, 'x')),
       ),
       async (badQuery) => {
         let invoked = false;
