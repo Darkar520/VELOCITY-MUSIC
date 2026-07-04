@@ -72,7 +72,12 @@ export function createYtDlpExtractor() {
     const target = videoId
       ? `https://www.youtube.com/watch?v=${videoId}`
       : `ytsearch1:${artist} - ${title} (Official Audio)`;
-    const args = ['-f', audioFormatSelector(quality), '-g', '--no-playlist', ...EXTRACTOR_ARGS, target];
+    // --extractor-retries: reintenta la extracción ante fallos transitorios de
+    // YouTube (reduce los "no se pudo reproducir" en frío). --socket-timeout:
+    // no quedarse colgado en una conexión estancada (falla rápido → reintenta).
+    const args = ['-f', audioFormatSelector(quality), '-g', '--no-playlist',
+      '--extractor-retries', '2', '--socket-timeout', '20',
+      ...EXTRACTOR_ARGS, target];
     return runForUrl(args);
   };
 }
@@ -134,7 +139,10 @@ function runYtDlp(args, { mode = 'url', timeoutMs = 30000 } = {}) {
 }
 
 function runForUrl(args) {
-  return runYtDlp(args, { mode: 'url', timeoutMs: 30000 });
+  // 45s: yt-dlp con --extractor-retries 2 y --socket-timeout 20 puede tardar
+  // ~40s en el peor caso (2 reintentos × 20s + resolución normal). Antes 30s
+  // mataba el proceso en frío antes de que terminara.
+  return runYtDlp(args, { mode: 'url', timeoutMs: 45000 });
 }
 
 /**

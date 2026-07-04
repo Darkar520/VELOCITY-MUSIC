@@ -2199,7 +2199,7 @@ export default function App() {
   // URL de streaming con la calidad actual: coincide con la clave de caché que
   // usan reproducir/precargar, así una canción ya resuelta se descarga al instante.
   const streamUrlQ = (t) => api.streamUrl({ artist: t.artist, title: t.title, id: t.id, quality: ({ high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' }[quality] || 'high') });
-  const fetchBlobWithTimeout = async (url, ms = 60000) => {
+  const fetchBlobWithTimeout = async (url, ms = 90000) => {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), ms);
     try {
@@ -2208,13 +2208,22 @@ export default function App() {
       return await res.blob();
     } finally { clearTimeout(t); }
   };
+  // Descarga resiliente: reintenta una vez con re-resolución fresca (la resolución
+  // en frío de yt-dlp puede tardar/fallar la primera vez).
+  const fetchTrackBlob = async (tk) => {
+    try { return await fetchBlobWithTimeout(streamUrlQ(tk), 90000); }
+    catch (e) {
+      await new Promise(r => setTimeout(r, 1500));
+      return await fetchBlobWithTimeout(streamUrlQ(tk) + '&_r=' + Date.now(), 90000);
+    }
+  };
   const download = async (tk) => {
     if (!tk || downloaded.has(tk.id) || downloading.has(tk.id)) return;
     setDownloading(d => { const n = new Set(d); n.add(tk.id); return n; });
     cacheTrack(tk); saveMeta(); pendingRef.current.add(tk.id); savePending();
     api.saveTracks([slimTrack(tk)]);
     try {
-      const blob = await fetchBlobWithTimeout(streamUrlQ(tk), 60000);
+      const blob = await fetchTrackBlob(tk);
       await offline.saveTrack(tk, blob);
       setDownloaded(d => { const n = new Set(d); n.add(tk.id); return n; });
       showToast('Descargada · disponible sin conexión');
@@ -2242,7 +2251,7 @@ export default function App() {
     const worker = async (id) => {
       const tk = trackById(id);
       try {
-        const blob = await fetchBlobWithTimeout(streamUrlQ(tk), 60000);
+        const blob = await fetchTrackBlob(tk);
         await offline.saveTrack(tk, blob);
         setDownloaded(d => { const n = new Set(d); n.add(id); return n; });
         ok++;
@@ -2603,6 +2612,7 @@ export default function App() {
   // Manejo resiliente de errores de reproducción: reintenta una vez con URL
   // fresca (evade caché de borde) y, si vuelve a fallar, salta a la siguiente
   // pista de la cola en lugar de detener todo. Reduce al máximo los cortes.
+  const MAX_PLAY_RETRIES = 2;
   const handleAudioError = () => {
     selfPauseRef.current = false;
     const a = audioRef.current;
@@ -2611,19 +2621,30 @@ export default function App() {
     const st = playErrorRef.current;
     const n = (st.id === cur) ? st.n : 0;
     const isBlob = typeof a.currentSrc === 'string' && a.currentSrc.startsWith('blob:');
-    // Reintento único para fuentes de red (no para blobs offline corruptos).
-    if (n < 1 && !isBlob) {
-      playErrorRef.current = { id: cur, n: n + 1 };
+    // Reintentos con espera para fuentes de red (la resolución en frío de yt-dlp
+    // puede tardar/fallar transitoriamente; casi siempre funciona al reintentar).
+    // No reintentar blobs offline corruptos.
+    if (n < MAX_PLAY_RETRIES && !isBlob) {
+      const attempt = n + 1;
+      playErrorRef.current = { id: cur, n: attempt };
       setLoadingAudio(true);
-      try {
-        const base = api.streamUrl({ artist: track.artist, title: track.title, id: track.id, quality: ({ high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' }[quality] || 'high') });
-        a.src = base + '&_r=' + Date.now();   // cache-bust: fuerza fetch fresco al proxy
-        a.load();
-        const p = a.play(); if (p && p.catch) p.catch(() => {});
-      } catch {}
+      // Espera creciente antes de reintentar (deja que el backend resuelva/cachee).
+      const delay = attempt === 1 ? 900 : 2200;
+      setTimeout(() => {
+        if (!audioRef.current || trackRef.current?.id !== cur) return;   // cambió de pista
+        try {
+          const q = ({ high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' }[quality] || 'high');
+          const base = api.streamUrl({ artist: track.artist, title: track.title, id: track.id, quality: q });
+          // 1er reintento: mismo URL (si el backend ya resolvió, sirve de caché → rápido).
+          // 2do reintento: cache-bust para forzar un fetch/re-resolución fresca.
+          audioRef.current.src = attempt >= 2 ? (base + '&_r=' + Date.now()) : base;
+          audioRef.current.load();
+          const p = audioRef.current.play(); if (p && p.catch) p.catch(() => {});
+        } catch {}
+      }, delay);
       return;
     }
-    // Segundo fallo: saltar a la siguiente si hay cola; si no, avisar.
+    // Agotados los reintentos: saltar a la siguiente si hay cola; si no, avisar.
     playErrorRef.current = { id: cur, n: 0 };
     setLoadingAudio(false);
     const ids = queue && queue.length ? queue : [];
