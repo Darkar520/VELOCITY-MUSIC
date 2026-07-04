@@ -452,9 +452,18 @@ function ProfileTab({ ctx }) {
           settings, setSettings, favs, setOpenPlaylist, setTab, email, onLogout,
           installApp, canInstall, isIOS, isStandalone, goWrapped,
           customPalettes, activeCustomId, setActiveCustomId, activePalette, addPalette, updatePalette, deletePalette,
-          displayName, saveProfileName, deleteAccount, avatar, saveAvatar } = ctx;
+          displayName, saveProfileName, deleteAccount, avatar, saveAvatar,
+          removeDownload, clearDownloads, getDownloads } = ctx;
   const set = (k, v) => setSettings(s => ({ ...s, [k]: v }));
   const [avatarPicker, setAvatarPicker] = useState(false);
+  // ── Administrador de descargas ──
+  const [dlOpen, setDlOpen] = useState(false);
+  const [dlInfo, setDlInfo] = useState(null);
+  const fmtBytes = (b) => b >= 1073741824 ? (b/1073741824).toFixed(2)+' GB' : b >= 1048576 ? (b/1048576).toFixed(1)+' MB' : Math.max(1, Math.round(b/1024))+' KB';
+  const refreshDownloads = () => getDownloads().then(setDlInfo).catch(() => setDlInfo({ count:0, bytes:0, items:[] }));
+  const openDownloads = () => { setDlInfo(null); setDlOpen(true); refreshDownloads(); };
+  const delOne = async (id) => { await removeDownload(id); refreshDownloads(); };
+  const delAll = async () => { await clearDownloads(); refreshDownloads(); };
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const doDelete = async () => { setDeleting(true); try { await deleteAccount(); } finally { setDeleting(false); } };
@@ -573,6 +582,48 @@ function ProfileTab({ ctx }) {
           </div>
         )}
       </SettingCard>
+
+      <SettingCard title="Descargas (offline)">
+        <div style={{ fontSize:11.5, color:'var(--txt-2)', lineHeight:1.5, marginBottom:12 }}>Tus descargas se guardan en este dispositivo y no se pierden al actualizar la app ni al cerrar sesión.</div>
+        <button onClick={openDownloads} className="btn-tap" style={{ width:'100%', display:'flex', alignItems:'center', justifyContent:'center', gap:9, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:14, padding:'12px 0', cursor:'pointer', color:'var(--txt-0)', fontSize:13, fontWeight:800 }}>
+          <Icon.Down c={T.accent} sz={17} /> Administrar descargas
+        </button>
+      </SettingCard>
+
+      {dlOpen && (
+        <>
+          <div onClick={() => setDlOpen(false)} style={{ position:'fixed', inset:0, background:'#04060acc', backdropFilter:'blur(10px)', WebkitBackdropFilter:'blur(10px)', zIndex:130 }} />
+          <div className="fade-up" style={{ position:'fixed', left:0, right:0, bottom:0, margin:'0 auto', width:'100%', maxWidth:460, maxHeight:'82dvh', overflowY:'auto', background:'linear-gradient(180deg, var(--surf-1), var(--surf-0))', border:'1px solid var(--line)', borderRadius:'26px 26px 0 0', padding:'10px 16px calc(env(safe-area-inset-bottom, 16px) + 20px)', zIndex:131, boxShadow:'0 -30px 80px #000d' }}>
+            <div style={{ width:40, height:4, borderRadius:99, background:'var(--surf-2)', margin:'6px auto 12px' }} />
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6 }}>
+              <div style={{ fontSize:16, fontWeight:900, color:'var(--txt-0)' }}>Descargas</div>
+              <button aria-label="Cerrar" onClick={() => setDlOpen(false)} className="press" style={{ background:'none', border:'none', cursor:'pointer' }}><Icon.X c="var(--txt-1)" sz={20} /></button>
+            </div>
+            {!dlInfo ? (
+              <div style={{ display:'flex', justifyContent:'center', padding:'30px 0' }}><Spinner c={T.accent} sz={22} /></div>
+            ) : dlInfo.count === 0 ? (
+              <div style={{ textAlign:'center', color:'var(--txt-2)', fontSize:12.5, padding:'24px 0' }}>No tienes canciones descargadas.</div>
+            ) : (<>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
+                <div style={{ fontSize:11.5, color:'var(--txt-2)', fontWeight:700 }}>{dlInfo.count} {dlInfo.count===1?'canción':'canciones'} · {fmtBytes(dlInfo.bytes)}</div>
+                <button onClick={delAll} className="press" style={{ background:hex2rgba('#fb7185',.12), border:`1px solid ${hex2rgba('#fb7185',.3)}`, borderRadius:99, padding:'6px 13px', cursor:'pointer', color:'#fb7185', fontSize:11, fontWeight:800 }}>Borrar todas</button>
+              </div>
+              <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
+                {dlInfo.items.map(it => (
+                  <div key={it.id} style={{ display:'flex', alignItems:'center', gap:12, padding:'8px 6px' }}>
+                    <CoverImg src={it.meta.cover} alt="" radius={10} size={96} style={{ width:44, height:44, flexShrink:0 }} />
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ fontSize:13, fontWeight:700, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{it.meta.title || 'Sin título'}</div>
+                      <div style={{ fontSize:10.5, color:'var(--txt-2)', marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{it.meta.artist || ''} · {fmtBytes(it.size)}</div>
+                    </div>
+                    <button aria-label="Eliminar descarga" onClick={() => delOne(it.id)} className="press" style={{ background:'none', border:'none', cursor:'pointer', padding:6, flexShrink:0 }}><Icon.Trash c="#fb7185" sz={17} /></button>
+                  </div>
+                ))}
+              </div>
+            </>)}
+          </div>
+        </>
+      )}
 
       <SettingCard title="Calidad de Audio">
         <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:9 }}>
@@ -1547,6 +1598,7 @@ export default function App() {
     homeRows.forEach(sec => (sec.mixes || []).forEach(m => (m.tracks || []).forEach(cacheTrack))); // hidratar caché del feed guardado
     (async () => {
       try {
+        await offline.pruneInvalid();            // limpiar descargas corruptas/vacías
         const metas = await offline.listMetas();
         metas.forEach(cacheTrack);
         const ids = await offline.listIds();
@@ -1987,6 +2039,12 @@ export default function App() {
     } catch { showToast(`No se pudo descargar: ${tk.title}`); }
     finally { setDownloading(d => { const n = new Set(d); n.delete(tk.id); return n; }); pendingRef.current.delete(tk.id); savePending(); }
   };
+  const clearDownloads = async () => {
+    try { await offline.deleteAll(); } catch {}
+    setDownloaded(new Set());
+    showToast('Todas las descargas eliminadas');
+  };
+  const getDownloads = () => offline.downloadsInfo();
   const removeDownload = async (id) => {
     try { await offline.deleteTrack(id); } catch {}
     setDownloaded(d => { const n = new Set(d); n.delete(id); return n; });
@@ -2300,7 +2358,7 @@ export default function App() {
     themeKey, setThemeKey, quality, setQuality, glow, setGlow, eq, setEq, settings, setSettings,
     view, setView, goArtist, goAlbum, goMix, goWrapped, startAiDj, shareTrack, email, onLogout, detailData,
     installApp, canInstall: !!installEvt, isIOS, isStandalone,
-    addToQueue, removeFromQueue: removeFromQueueToast, download, removeDownload, downloadMany, downloaded, downloading, openQueue: () => setShowQueue(true),
+    addToQueue, removeFromQueue: removeFromQueueToast, download, removeDownload, downloadMany, clearDownloads, getDownloads, downloaded, downloading, openQueue: () => setShowQueue(true),
     savedAlbums, saveAlbum, unsaveAlbum, isAlbumSaved,
     selecting, selection, toggleSelect, startSelection, clearSelection,
     hydrateTracks, playStats: playStatsRef.current,

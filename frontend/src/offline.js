@@ -135,3 +135,45 @@ export async function listMetas() {
     rq.onerror = () => resolve([]);
   });
 }
+
+function getAllRecords(db) {
+  return new Promise((resolve) => {
+    const tx = db.transaction(STORE, 'readonly');
+    const rq = tx.objectStore(STORE).getAll();
+    rq.onsuccess = () => resolve(rq.result || []);
+    rq.onerror = () => resolve([]);
+  });
+}
+
+// Resumen de descargas: total, bytes ocupados y lista (meta + tamaño), más
+// recientes primero. Para el administrador de almacenamiento.
+export async function downloadsInfo() {
+  const db = await openDB();
+  const records = await getAllRecords(db);
+  let bytes = 0;
+  const items = records
+    .map((r) => { const size = (r && r.blob && r.blob.size) || 0; bytes += size; return { id: r.id, meta: r.meta || { id: r.id }, size, at: r.at || 0 }; })
+    .sort((a, b) => b.at - a.at);
+  return { count: items.length, bytes, items };
+}
+
+// Borra TODAS las descargas de una vez.
+export async function deleteAll() {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).clear();
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+  });
+}
+
+// Elimina registros corruptos (sin blob o de tamaño 0) para que no queden
+// descargas "rotas" ni ocupando espacio. Devuelve los ids eliminados.
+export async function pruneInvalid() {
+  const db = await openDB();
+  const records = await getAllRecords(db);
+  const bad = records.filter((r) => !r || !r.blob || !r.blob.size).map((r) => r && r.id).filter(Boolean);
+  for (const id of bad) await deleteTrack(id);
+  return bad;
+}
