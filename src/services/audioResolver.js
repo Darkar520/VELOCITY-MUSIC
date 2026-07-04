@@ -42,6 +42,7 @@ export async function resolve(params = {}, ctx = {}) {
     extractorImpl,
     catalogImpl,
     timeoutMs = EXTRACTOR_TIMEOUT_MS,
+    forceRefresh = false,
   } = ctx;
 
   const artist = String(rawArtist ?? '').trim();
@@ -60,8 +61,9 @@ export async function resolve(params = {}, ctx = {}) {
       : `${normalizeText(artist)}:${normalizeText(title)}`;
   const key = quality ? `${baseKey}#${quality}` : baseKey;
 
-  // 1) Caché.
-  if (cache) {
+  // 1) Caché. Con forceRefresh se omite (la URL cacheada expiró/falló): se
+  //    re-resuelve y el cache.set posterior sobrescribe con la URL fresca.
+  if (cache && !forceRefresh) {
     const cached = cache.get(key);
     if (cached) {
       return { status: 302, url: cached, fromCache: true, mode };

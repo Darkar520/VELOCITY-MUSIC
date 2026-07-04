@@ -1572,6 +1572,8 @@ export default function App() {
   const audioRef = useRef(null);
   // <audio> oculto que pre-descarga la SIGUIENTE pista (arranque casi instantáneo).
   const preloadAudioRef = useRef(null);
+  // Reintento por pista ante error de reproducción (URL de audio expirada, etc.).
+  const playErrorRef = useRef({ id: null, n: 0 });
   const playingRef = useRef(false);
   // Web Audio para normalizar volumen (compresor de rango dinámico). Opt-in.
   const audioCtxRef = useRef(null);
@@ -2500,6 +2502,38 @@ export default function App() {
   );
   const Content = view ? (view.type === 'wrapped' ? <WrappedView ctx={ctx} /> : <DetailView view={view} ctx={ctx} />) : TabContent;
 
+  // Manejo resiliente de errores de reproducción: reintenta una vez con URL
+  // fresca (evade caché de borde) y, si vuelve a fallar, salta a la siguiente
+  // pista de la cola en lugar de detener todo. Reduce al máximo los cortes.
+  const handleAudioError = () => {
+    selfPauseRef.current = false;
+    const a = audioRef.current;
+    const cur = track?.id;
+    if (!a || !cur) { setLoadingAudio(false); setPlaying(false); return; }
+    const st = playErrorRef.current;
+    const n = (st.id === cur) ? st.n : 0;
+    const isBlob = typeof a.currentSrc === 'string' && a.currentSrc.startsWith('blob:');
+    // Reintento único para fuentes de red (no para blobs offline corruptos).
+    if (n < 1 && !isBlob) {
+      playErrorRef.current = { id: cur, n: n + 1 };
+      setLoadingAudio(true);
+      try {
+        const base = api.streamUrl({ artist: track.artist, title: track.title, id: track.id, quality: ({ high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' }[quality] || 'high') });
+        a.src = base + '&_r=' + Date.now();   // cache-bust: fuerza fetch fresco al proxy
+        a.load();
+        const p = a.play(); if (p && p.catch) p.catch(() => {});
+      } catch {}
+      return;
+    }
+    // Segundo fallo: saltar a la siguiente si hay cola; si no, avisar.
+    playErrorRef.current = { id: cur, n: 0 };
+    setLoadingAudio(false);
+    const ids = queue && queue.length ? queue : [];
+    const i = ids.indexOf(cur);
+    if (ids.length > 1 && i !== -1) { showToast('Pista no disponible · saltando…'); next(); }
+    else { setPlaying(false); showToast('No se pudo reproducir esta pista'); }
+  };
+
   const audioEl = (
     <>
     <audio ref={audioRef} src={playSrc || (track ? track.url : undefined)} preload="auto"
@@ -2511,7 +2545,7 @@ export default function App() {
       onLoadedMetadata={() => { setDur(audioRef.current?.duration||0); if (resumeRef.current != null && audioRef.current) { try { audioRef.current.currentTime = resumeRef.current; } catch {} setTime(resumeRef.current); resumeRef.current = null; } }}
       onCanPlay={() => setLoadingAudio(false)}
       onPlay={() => { selfPauseRef.current = false; setLoadingAudio(false); }}
-      onPlaying={() => { selfPauseRef.current = false; setLoadingAudio(false); if (pendingFadeRef.current) { pendingFadeRef.current = false; fadeInAudio(); } }}
+      onPlaying={() => { selfPauseRef.current = false; setLoadingAudio(false); playErrorRef.current = { id: null, n: 0 }; if (pendingFadeRef.current) { pendingFadeRef.current = false; fadeInAudio(); } }}
       onStalled={() => setLoadingAudio(true)}
       onWaiting={() => setLoadingAudio(true)}
       onPause={() => {
@@ -2523,7 +2557,7 @@ export default function App() {
         if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
         setPlaying(false);
       }}
-      onError={() => { selfPauseRef.current = false; setLoadingAudio(false); setPlaying(false); showToast('No se pudo reproducir esta pista'); }}
+      onError={handleAudioError}
       onEnded={onEnded}
     />
       {/* Pre-buffer oculto de la siguiente pista (muteado, nunca reproduce). */}

@@ -68,49 +68,62 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
     const videoId = String(req.query.id || '').trim() || undefined;
     const quality = String(req.query.quality || '').trim() || undefined;
 
-    let targetUrl;
-    try {
-      const resolved = await resolveUrl({ artist: v.artist, title: v.title, stream, videoId, quality });
-      targetUrl = resolved && resolved.url;
-    } catch (err) {
-      const status = err && err.status ? err.status : 502;
-      return res.status(status).json({ error: 'No se pudo resolver la pista.' });
-    }
-    if (!targetUrl) {
-      return res.status(404).json({ error: 'No se encontró una fuente de audio.' });
-    }
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-    try {
-      const headers = {};
-      if (req.headers.range) headers.Range = req.headers.range;
-
-      const upstream = await fetchImpl(targetUrl, { headers, signal: controller.signal });
-      clearTimeout(timer);
-
-      const cls = classifyUpstreamStatus(upstream.status);
-      if (!cls.pass) {
-        return res
-          .status(502)
-          .json({ error: `La fuente de audio respondió ${upstream.status}.` });
+    // Un intento = resolver (con o sin caché) + fetch upstream. Devuelve un
+    // resultado tipado sin escribir en `res`, para poder reintentar limpiamente.
+    const attempt = async (forceRefresh) => {
+      let targetUrl;
+      try {
+        const resolved = await resolveUrl({ artist: v.artist, title: v.title, stream, videoId, quality }, { forceRefresh });
+        targetUrl = resolved && resolved.url;
+      } catch (err) {
+        return { kind: 'resolveError', status: err && err.status ? err.status : 502 };
       }
+      if (!targetUrl) return { kind: 'notFound' };
 
-      const responseHeaders = buildResponseHeaders((name) => upstream.headers.get(name));
-      res.writeHead(upstream.status, responseHeaders);
-
-      if (!upstream.body) return res.end();
-      // Streaming progresivo: la reproducción puede empezar antes de transferir todo. (15.3)
-      Readable.fromWeb(upstream.body).pipe(res);
-    } catch (err) {
-      clearTimeout(timer);
-      // Timeout o fallo de conexión → 504. (4.7)
-      if (!res.headersSent) {
-        return res.status(504).json({ error: 'La fuente de audio no está disponible.' });
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const headers = {};
+        if (req.headers.range) headers.Range = req.headers.range;
+        const upstream = await fetchImpl(targetUrl, { headers, signal: controller.signal });
+        clearTimeout(timer);
+        const cls = classifyUpstreamStatus(upstream.status);
+        if (!cls.pass) return { kind: 'upstreamBad', status: upstream.status };
+        return { kind: 'ok', upstream };
+      } catch (err) {
+        clearTimeout(timer);
+        return { kind: 'networkError' };
       }
-      // Error tras enviar cabeceras → terminar sin estado adicional. (4.8)
-      return res.end();
+    };
+
+    // 1er intento con caché. Si el upstream falla (URL de audio expirada/403) o
+    // hay error de red, se reintenta UNA vez re-resolviendo con URL fresca.
+    let r = await attempt(false);
+    if (r.kind === 'upstreamBad' || r.kind === 'networkError') {
+      r = await attempt(true);
     }
+
+    // Si ya se enviaron cabeceras (p.ej. fallo durante el pipe), solo terminar. (4.8)
+    if (res.headersSent) return res.end();
+
+    if (r.kind === 'ok') {
+      try {
+        const upstream = r.upstream;
+        const responseHeaders = buildResponseHeaders((name) => upstream.headers.get(name));
+        res.writeHead(upstream.status, responseHeaders);
+        if (!upstream.body) return res.end();
+        // Streaming progresivo: la reproducción puede empezar antes de transferir todo. (15.3)
+        Readable.fromWeb(upstream.body).pipe(res);
+        return;
+      } catch (err) {
+        if (!res.headersSent) return res.status(504).json({ error: 'La fuente de audio no está disponible.' });
+        return res.end();
+      }
+    }
+    if (r.kind === 'notFound') return res.status(404).json({ error: 'No se encontró una fuente de audio.' });
+    if (r.kind === 'resolveError') return res.status(r.status).json({ error: 'No se pudo resolver la pista.' });
+    if (r.kind === 'networkError') return res.status(504).json({ error: 'La fuente de audio no está disponible.' });
+    // upstreamBad tras reintento.
+    return res.status(502).json({ error: `La fuente de audio respondió ${r.status}.` });
   };
 }

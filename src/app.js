@@ -141,14 +141,16 @@ export function createApp(deps = {}) {
     : null;
   const historyService = historyRepo ? createHistoryService({ historyRepo, trackRepo }) : null;
 
-  // Resolver compartido para /api/resolve y el proxy.
-  const doResolve = (params) =>
+  // Resolver compartido para /api/resolve y el proxy. `opts.forceRefresh` re-resuelve
+  // ignorando la caché (para recuperarse de URLs de audio expiradas/403).
+  const doResolve = (params, opts = {}) =>
     resolveAudio(params, {
       cache,
       mode: getActiveMode(),
       extractorImpl,
       catalogImpl,
       timeoutMs: resolveTimeoutMs,
+      forceRefresh: !!opts.forceRefresh,
     });
 
   // Caché de búsqueda en memoria (resultados, no audio). TTL 5 minutos, máx 200 entradas.
@@ -405,7 +407,7 @@ export function createApp(deps = {}) {
   // ---- Proxy de streaming ----
   app.get(
     '/api/stream-proxy',
-    createStreamProxyHandler({ resolveUrl: (params) => doResolve(params), timeoutMs: 20000 }),
+    createStreamProxyHandler({ resolveUrl: (params, opts) => doResolve(params, opts), timeoutMs: 20000 }),
   );
 
   // ---- Estado ----
