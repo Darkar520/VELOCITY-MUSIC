@@ -180,6 +180,51 @@ export const GENRES = [
   { label:'Trap', color:'#94a3b8', q:'trap music' },                 { label:'House', color:'#22d3ee', q:'house music' },
 ];
 
+// Selección amplia y curada de géneros/estilos para el onboarding. Cada uno con
+// una búsqueda semilla que devuelve una pista real coherente (no ruido).
+export const ONBOARDING_GENRES = [
+  { label:'Reggaetón', q:'reggaeton 2025' },
+  { label:'Regional Mexicano', q:'regional mexicano 2025' },
+  { label:'Corridos Tumbados', q:'corridos tumbados 2025' },
+  { label:'Pop Latino', q:'pop latino 2025' },
+  { label:'Trap Latino', q:'trap latino 2025' },
+  { label:'Salsa', q:'salsa clasicos' },
+  { label:'Bachata', q:'bachata 2025' },
+  { label:'Cumbia', q:'cumbia 2025' },
+  { label:'Merengue', q:'merengue clasico' },
+  { label:'Pop', q:'pop hits 2025' },
+  { label:'Pop en Inglés', q:'english pop hits 2025' },
+  { label:'Hip-Hop', q:'hip hop 2025' },
+  { label:'Rap en Español', q:'rap en español 2025' },
+  { label:'Trap', q:'trap music 2025' },
+  { label:'R&B', q:'rnb soul 2025' },
+  { label:'Rock', q:'rock hits' },
+  { label:'Rock en Español', q:'rock en español clasicos' },
+  { label:'Rock Alternativo', q:'alternative rock' },
+  { label:'Indie', q:'indie hits 2025' },
+  { label:'Indie Pop', q:'indie pop' },
+  { label:'Metal', q:'metal hits' },
+  { label:'Punk', q:'punk rock' },
+  { label:'Electrónica', q:'electronic dance 2025' },
+  { label:'House', q:'house music 2025' },
+  { label:'Techno', q:'techno 2025' },
+  { label:'EDM', q:'edm festival 2025' },
+  { label:'Lo-Fi', q:'lofi beats' },
+  { label:'K-Pop', q:'kpop 2025' },
+  { label:'Afrobeats', q:'afrobeats 2025' },
+  { label:'Amapiano', q:'amapiano 2025' },
+  { label:'Jazz', q:'jazz classics' },
+  { label:'Soul', q:'soul classics' },
+  { label:'Funk', q:'funk classics' },
+  { label:'Disco', q:'disco classics' },
+  { label:'Baladas', q:'baladas romanticas' },
+  { label:'Clásica', q:'classical music' },
+  { label:'Country', q:'country hits 2025' },
+  { label:'Blues', q:'blues classics' },
+  { label:'Reggae', q:'reggae classics' },
+  { label:'Dembow', q:'dembow 2025' },
+];
+
 // Mixes por estado de ánimo / momento (se muestrean aleatoriamente cada vez).
 export const MOODS = [
   { label:'Chill',          q:'chill music' },

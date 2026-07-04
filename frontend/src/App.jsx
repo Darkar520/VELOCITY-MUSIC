@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { api, isAuthed, setOnUnauthorized } from './api.js';
 import * as offline from './offline.js';
-import { CSS, THEMES, SEED_ROWS, LATIN_ROWS, DISCOVERY, GENRES, MOODS, ERAS, FALLBACK_COVER, BASE_VARS } from './constants.js';
+import { CSS, THEMES, SEED_ROWS, LATIN_ROWS, DISCOVERY, GENRES, ONBOARDING_GENRES, MOODS, ERAS, FALLBACK_COVER, BASE_VARS } from './constants.js';
 import { fmt, hex2rgba, grad, hiResCover, dedupeByTitle, capPerArtist, slimTrack, parseLRC, tintedVars } from './helpers.js';
 import { cacheTrack, cacheTracks, trackById, allCached, loadMeta, loadPlayerState, saveMeta, normalizeTrack } from './catalog.js';
 import { usePersisted, useViewport, useDominantColor, useHSwipe } from './hooks.js';
@@ -1778,82 +1778,110 @@ export default function App() {
     const seeds = []; const seenArtist = new Set();
     for (const t of ranked) { const a = (t.artist || '').toLowerCase(); if (seenArtist.has(a)) continue; seenArtist.add(a); seeds.push(t); if (seeds.length >= 5) break; }
     const topSearches = [...new Set((recentSearches || []).map(s => (s || '').trim()).filter(Boolean))].slice(0, 6);
-    const sig = seeds.map(s => s.id).join('|') + '::' + topSearches.join('|') + '#' + feedNonce;
+    const prefsSig = Array.isArray(onboardPrefs) ? onboardPrefs.map(p => p.q).join(',') : '';
+    const sig = seeds.map(s => s.id).join('|') + '::' + topSearches.join('|') + '::' + prefsSig + '#' + feedNonce;
     if (sig === feedSigRef.current && homeRows.length) return;
     feedSigRef.current = sig;
     const myToken = ++feedTokenRef.current;
     const alive = () => myToken === feedTokenRef.current;
     setHomeLoading(true);
     (async () => {
-      const mixFromSeed = async (seed) => { try { const rel = await api.radio(seed.id, 50); const tracks = capPerArtist(dedupeByTitle([seed, ...rel.map(normalizeTrack)]), 8).filter(t => t.id).slice(0, 50); return tracks.length >= 4 ? { label: seed.artist || 'Mezcla', tracks } : null; } catch { return null; } };
-      const mixFromSearch = async (label, q) => { try { const raw = await api.search(q); const tracks = dedupeByTitle(raw.slice(0, 50).map(normalizeTrack)).filter(t => t.id); return tracks.length >= 4 ? { label, tracks } : null; } catch { return null; } };
       const clean = (arr) => arr.filter(Boolean);
       const pick = (arr, n) => { const a = [...arr]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a.slice(0, n); };
       const oneOf = (arr) => arr[Math.floor(Math.random() * arr.length)];
       const cap1 = (s) => (s || '').charAt(0).toUpperCase() + (s || '').slice(1);
-      const buildDiscovery = async () => {
-        if (!seeds.length) return null;
-        const known = new Set([...recent, ...favs, ...downloaded, ...seeds.map(s => s.id)]);
+      // Mezcla desde una PISTA semilla: su radio (relacionadas reales), coherente.
+      const mixFromSeed = async (seed, limit = 40) => {
         try {
-          const rels = await Promise.all(seeds.slice(0, 5).map(s => api.radio(s.id, 50).catch(() => [])));
-          let tracks = capPerArtist(dedupeByTitle(rels.flat().map(normalizeTrack)), 3).filter(t => t.id && !known.has(t.id));
-          if (tracks.length < 16 && seeds[0]) { try { const raw = await api.search((seeds[0].artist || 'mix') + ' similar artists'); tracks = capPerArtist(dedupeByTitle([...tracks, ...raw.map(normalizeTrack).filter(t => t.id && !known.has(t.id))]), 3); } catch {} }
-          for (let i = tracks.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [tracks[i], tracks[j]] = [tracks[j], tracks[i]]; }
-          const out = tracks.slice(0, 50);
-          return out.length >= 6 ? { label: 'Descubrimiento Semanal', tracks: out } : null;
+          const rel = await api.radio(seed.id, limit);
+          const tracks = capPerArtist(dedupeByTitle([seed, ...rel.map(normalizeTrack)]), 8).filter(t => t.id).slice(0, limit);
+          return tracks.length >= 6 ? { label: seed.artist || seed.title || 'Mezcla', tracks } : null;
         } catch { return null; }
       };
-      const mixBecause = async (seed) => { try { const rel = await api.radio(seed.id, 50); const tracks = capPerArtist(dedupeByTitle([seed, ...rel.map(normalizeTrack)]), 8).filter(t => t.id).slice(0, 50); return tracks.length >= 5 ? { label: seed.artist || seed.title || 'Mezcla', tracks } : null; } catch { return null; } };
+      // Mezcla desde una CONSULTA (búsqueda o etiqueta): resuelve la pista real más
+      // relevante y arma la lista con SU radio. Evita el ruido de homónimos
+      // (p.ej. "Life Goes On" ya no junta canciones distintas con el mismo nombre).
+      const mixFromQuery = async (label, q) => {
+        try {
+          const raw = await api.search(q);
+          const base = raw.map(normalizeTrack).find(t => t.id);
+          if (!base) return null;
+          const rel = await api.radio(base.id, 40);
+          const tracks = capPerArtist(dedupeByTitle([base, ...rel.map(normalizeTrack)]), 6).filter(t => t.id).slice(0, 40);
+          return tracks.length >= 6 ? { label, tracks } : null;
+        } catch { return null; }
+      };
+      // Sección de un género: varias mezclas sembradas por artistas DISTINTOS del
+      // género (cada tarjeta = un artista real del estilo). Profundo, sin ruido.
+      const genreCards = async (q, n = 4) => {
+        try {
+          const raw = await api.search(q);
+          const cand = dedupeByTitle(raw.map(normalizeTrack)).filter(t => t.id);
+          const gs = []; const seen = new Set();
+          for (const t of cand) { const a = (t.artist || '').toLowerCase(); if (!a || seen.has(a)) continue; seen.add(a); gs.push(t); if (gs.length >= n) break; }
+          return clean(await Promise.all(gs.map(s => mixFromSeed(s, 40))));
+        } catch { return []; }
+      };
+      // Descubrimiento: relacionadas a un conjunto de pistas base, excluyendo lo ya conocido.
+      const buildDiscovery = async (baseTracks, label = 'Nuevos hallazgos') => {
+        const bases = (baseTracks || []).filter(Boolean);
+        if (!bases.length) return null;
+        const known = new Set([...recent, ...favs, ...[...downloaded], ...bases.map(s => s.id)]);
+        try {
+          const rels = await Promise.all(bases.slice(0, 5).map(s => api.radio(s.id, 40).catch(() => [])));
+          let tracks = capPerArtist(dedupeByTitle(rels.flat().map(normalizeTrack)), 3).filter(t => t.id && !known.has(t.id));
+          for (let i = tracks.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [tracks[i], tracks[j]] = [tracks[j], tracks[i]]; }
+          const out = tracks.slice(0, 50);
+          return out.length >= 8 ? { label, tracks: out } : null;
+        } catch { return null; }
+      };
+      // Resuelve consultas (géneros) a pistas base reales (para descubrimiento).
+      const resolvePrefTracks = async (prefsList) => {
+        const arr = await Promise.all((prefsList || []).map(async (p) => { try { const raw = await api.search(p.q); return raw.map(normalizeTrack).find(t => t.id) || null; } catch { return null; } }));
+        return arr.filter(Boolean);
+      };
+
       const sections = [];
       const pushSection = (section, mixes) => { if (!mixes.length || !alive()) return; sections.push({ section, mixes }); setHomeRows([...sections]); setHomeLoading(false); };
-
+      const prefs = Array.isArray(onboardPrefs) ? onboardPrefs : [];
       const hasHistory = seeds.length > 0 || topSearches.length > 0 || favs.length > 0;
 
+      // Semillas por RECENCIA (lo que suenas ahora) — distintas de las de frecuencia.
+      const freshSeeds = [];
+      { const seenA = new Set(); for (const id of recent) { const t = trackById(id); if (!t) continue; const a = (t.artist || '').toLowerCase(); if (!a || seenA.has(a)) continue; seenA.add(a); freshSeeds.push(t); if (freshSeeds.length >= 6) break; } }
+
       if (hasHistory) {
-        // ── USERS WITH HISTORY ──
-        // 1) Hecho para ti — mix from each seed
-        pushSection('Hecho para ti', clean(await Promise.all(seeds.map(mixFromSeed))));
-        // 2) Inspirado en tus búsquedas
-        if (topSearches.length > 0) {
-          pushSection('Inspirado en tus búsquedas', clean(await Promise.all(topSearches.map(term => mixFromSearch(cap1(term), term)))));
-        }
-        // 3) Porque te gusta [artist]
-        if (seeds.length) {
-          const becauseSeeds = pick(seeds, 3);
-          const becauseResults = clean(await Promise.all(becauseSeeds.map(mixBecause)));
-          if (becauseResults.length) pushSection('Porque te gusta ' + (becauseSeeds[0]?.artist || ''), becauseResults);
-        }
-        // 4) Tus favoritos expandidos — radio of up to 5 fav tracks, merged into one 50-track mix
-        if (favs.length > 0) {
+        // ── PERSONAL (muchos carruseles, todos derivados de tus datos) ──
+        if (seeds.length) pushSection('Hecho para ti', clean(await Promise.all(seeds.slice(0, 6).map(s => mixFromSeed(s, 50)))));
+        if (topSearches.length) pushSection('Inspirado en tus búsquedas', clean(await Promise.all(topSearches.map(term => mixFromQuery(cap1(term), term)))));
+        if (freshSeeds.length) pushSection('Tu momento actual', clean(await Promise.all(freshSeeds.map(s => mixFromSeed(s, 40)))));
+        if (seeds.length) { const bs = pick(seeds, 4); pushSection('Porque te gusta ' + (bs[0]?.artist || 'tu música'), clean(await Promise.all(bs.map(s => mixFromSeed(s, 40))))); }
+        if (favs.length) {
           const favSeeds = favs.slice(0, 5);
           try {
-            const radios = await Promise.all(favSeeds.map(id => api.radio(id, 30).catch(() => [])));
+            const radios = await Promise.all(favSeeds.map(id => api.radio(id, 40).catch(() => [])));
             const merged = capPerArtist(dedupeByTitle(radios.flat().map(normalizeTrack)), 4).filter(t => t.id).slice(0, 50);
-            if (merged.length >= 6) pushSection('Tus favoritos expandidos', [{ label: 'Mix de Favoritos', tracks: merged }]);
+            if (merged.length >= 8) pushSection('Tus favoritos expandidos', [{ label: 'Mix de Favoritos', tracks: merged }]);
           } catch {}
         }
-        // 5) Descubrimiento para ti
-        { const disc = await buildDiscovery(); if (disc) pushSection('Descubrimiento para ti', [disc]); }
-        // 6) Tu momento actual — fresh seeds by recency
-        const freshSeeds = [];
-        { const seenA = new Set(); for (const id of recent) { const t = trackById(id); if (!t) continue; const a = (t.artist || '').toLowerCase(); if (!a || seenA.has(a)) continue; seenA.add(a); freshSeeds.push(t); if (freshSeeds.length >= 6) break; } }
-        if (freshSeeds.length) {
-          pushSection('Tu momento actual', clean(await Promise.all(freshSeeds.map(mixBecause))));
-        }
+        { const disc = await buildDiscovery(seeds.length ? seeds : freshSeeds, 'Descubrimiento para ti'); if (disc) pushSection('Descubrimiento para ti', [disc]); }
+        // Secciones por género elegido en el onboarding (profundidad personalizada).
+        for (const p of prefs.slice(0, 5)) { if (!alive()) break; pushSection(p.label, await genreCards(p.q, 4)); }
+        // Tendencias actuales (coherentes, basadas en radio).
+        pushSection('Tendencias ahora', clean(await Promise.all(pick(SEED_ROWS, 6).map(s => mixFromQuery(s.label, s.q)))));
+      } else if (prefs.length) {
+        // ── NUEVO CON ONBOARDING: feed personalizado por sus géneros desde el día 1 ──
+        pushSection('Basado en tus gustos', clean(await Promise.all(prefs.map(p => mixFromQuery(p.label, p.q)))));
+        for (const p of prefs.slice(0, 8)) { if (!alive()) break; pushSection(p.label, await genreCards(p.q, 4)); }
+        const baseTracks = await resolvePrefTracks(prefs.slice(0, 5));
+        { const disc = await buildDiscovery(baseTracks, 'Descubre para ti'); if (disc) pushSection('Descubre para ti', [disc]); }
+        pushSection('Tendencias ahora', clean(await Promise.all(pick(SEED_ROWS, 6).map(s => mixFromQuery(s.label, s.q)))));
       } else {
-        // ── USERS WITHOUT HISTORY ──
-        if (onboardPrefs && onboardPrefs.length > 0) {
-          // Has onboarding preferences
-          pushSection('Basado en tus gustos', clean(await Promise.all(onboardPrefs.map(p => mixFromSearch(p.label, p.q)))));
-          // "Descubre más" — related searches from prefs
-          const relatedQueries = onboardPrefs.slice(0, 4).map(p => ({ label: 'Más ' + p.label, q: p.q + ' similar' }));
-          pushSection('Descubre más', clean(await Promise.all(relatedQueries.map(r => mixFromSearch(r.label, r.q)))));
-        } else {
-          // Generic feed for truly new users who skipped onboarding
-          pushSection('Explora géneros', clean(await Promise.all(pick(GENRES, 8).map(g => mixFromSearch(g.label, g.q)))));
-          pushSection('Estados de ánimo', clean(await Promise.all(pick(MOODS, 10).map(m => mixFromSearch('Mix ' + m.label, m.q)))));
-          pushSection('Novedades', clean(await Promise.all(pick(SEED_ROWS, 6).map(s => mixFromSearch(s.label, s.q)))));
-        }
+        // ── SIN historial ni preferencias: genérico coherente ──
+        pushSection('Éxitos del momento', clean(await Promise.all(pick(SEED_ROWS, 6).map(s => mixFromQuery(s.label, s.q)))));
+        pushSection('Explora géneros', clean(await Promise.all(pick(GENRES, 8).map(g => mixFromQuery(g.label, g.q)))));
+        pushSection('Estados de ánimo', clean(await Promise.all(pick(MOODS, 8).map(m => mixFromQuery('Mix ' + m.label, m.q)))));
+        pushSection('Para descubrir', clean(await Promise.all(pick(DISCOVERY, 6).map(d => mixFromQuery(d.label, d.q)))));
       }
       if (alive()) setHomeLoading(false);
     })();
@@ -2545,7 +2573,7 @@ export default function App() {
     hydrateTracks, playStats: playStatsRef.current,
     customPalettes, activeCustomId, setActiveCustomId, activePalette, addPalette, updatePalette, deletePalette,
     displayName, saveProfileName, deleteAccount, avatar, saveAvatar,
-    onboardPrefs, setOnboardPrefs, GENRES,
+    onboardPrefs, setOnboardPrefs, GENRES: ONBOARDING_GENRES,
   };
 
   const playerProps = { track, playing, togglePlay, next, prev, time, dur, seek, vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved: track ? favs.includes(track.id) : false, toggleFav, T, loadingAudio, nextCover, prevCover };
