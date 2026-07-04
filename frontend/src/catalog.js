@@ -7,7 +7,17 @@ import { FALLBACK_COVER } from './constants.js';
 
 const _catalog = new Map();
 
-export function cacheTrack(t) { if (t && t.id) _catalog.set(t.id, t); return t; }
+const hasCover = (c) => !!c && c !== FALLBACK_COVER;
+export function cacheTrack(t) {
+  if (t && t.id) {
+    const prev = _catalog.get(t.id);
+    // Nunca degradar una carátula real ya conocida a vacío: la misma pista puede
+    // llegar con artwork desde búsqueda y sin él desde radio; conservamos la buena.
+    if (prev && hasCover(prev.cover) && !hasCover(t.cover)) t = { ...t, cover: prev.cover };
+    _catalog.set(t.id, t);
+  }
+  return t;
+}
 export function cacheTracks(arr) { (arr || []).forEach(cacheTrack); return arr || []; }
 export const trackById = (id) => _catalog.get(id) || null;
 export const allCached = () => [..._catalog.values()];
@@ -40,7 +50,7 @@ export function saveMeta() {
 
 // Invalidación de caché: si subimos la versión, descartamos metadata/feed viejos
 // (p.ej. pistas de radio cacheadas sin carátula por un bug previo) una sola vez.
-const CACHE_VERSION = '3';
+const CACHE_VERSION = '4';
 try {
   if (localStorage.getItem('velocity.cacheVer') !== CACHE_VERSION) {
     localStorage.removeItem('velocity.meta');
@@ -60,7 +70,10 @@ export function normalizeTrack(t) {
     album: t.album || 'Sencillo',
     albumId: t.albumId || null,
     genre: t.genre || '',
-    cover: t.artworkUrl || t.cover || FALLBACK_COVER,
+    // Sin artwork → cadena vacía (CoverImg muestra el fallback al renderizar).
+    // No usar FALLBACK_COVER aquí: es un data: URL que saveMeta borra a '',
+    // dejando pistas sin carátula tras persistir.
+    cover: t.artworkUrl || t.cover || '',
     durationSeconds: t.durationSeconds || t.duration || 0,
   };
   n.url = api.streamUrl({ artist: n.artist, title: n.title, id: n.id });
