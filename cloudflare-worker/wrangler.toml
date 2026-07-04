@@ -1,0 +1,10 @@
+name = "velocity-router"
+main = "router.js"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+# El Worker se despliega en la zona de velocitymusic.uk
+# e intercepta TODO el tráfico del dominio raíz.
+routes = [
+  { pattern = "velocitymusic.uk/*", zone_name = "velocitymusic.uk" }
+]
