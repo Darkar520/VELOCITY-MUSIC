@@ -26,10 +26,28 @@ New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $mutex = New-Object System.Threading.Mutex($false, 'Global\VelocityMusicGuardian')
 if (-not $mutex.WaitOne(0)) { exit 0 }
 
-# ── Evitar suspensión ──
+# ── Evitar suspensión (SO + wake lock por software) ──
 try {
   powercfg /change standby-timeout-ac 0   | Out-Null
+  powercfg /change standby-timeout-dc 0   | Out-Null
   powercfg /change hibernate-timeout-ac 0 | Out-Null
+  powercfg /change hibernate-timeout-dc 0 | Out-Null
+} catch {}
+# SetThreadExecutionState: ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED
+# Impide que Windows suspenda el sistema mientras este proceso esté vivo.
+try {
+  $code = @'
+using System;using System.Runtime.InteropServices;
+public class SleepBlock {
+  [DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint esFlags);
+  public const uint ES_CONTINUOUS      = 0x80000000;
+  public const uint ES_SYSTEM_REQUIRED = 0x00000001;
+  public const uint ES_AWAYMODE        = 0x00000040;
+  public static void Prevent() { SetThreadExecutionState(ES_CONTINUOUS|ES_SYSTEM_REQUIRED|ES_AWAYMODE); }
+}
+'@
+  Add-Type -TypeDefinition $code -Language CSharp
+  [SleepBlock]::Prevent()
 } catch {}
 
 function Test-Backend { [bool](Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue) }
