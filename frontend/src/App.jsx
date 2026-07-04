@@ -1622,26 +1622,43 @@ export default function App() {
   }, []);
 
   // ── Carga inicial tras autenticación ──
+  // Clave de caché por usuario para que distintas cuentas no compartan datos.
+  const libCacheKey = () => { try { return 'velocity.lib.' + (JSON.parse(localStorage.getItem('velocity.token') || 'null')?.split('.')[1] || 'u'); } catch { return 'velocity.lib.u'; } };
+  // Restaurar biblioteca desde caché local (disponible aunque el backend esté caído).
+  const restoreLibCache = () => {
+    try {
+      const raw = localStorage.getItem(libCacheKey());
+      if (!raw) return;
+      const c = JSON.parse(raw);
+      if (c.favs)       setFavs(c.favs);
+      if (c.playlists)  setPlaylists(c.playlists);
+      if (c.savedAlbums) setSavedAlbums(c.savedAlbums);
+      if (c.recent)     setRecent(c.recent);
+      if (c.tracks)     c.tracks.forEach(normalizeTrack);
+    } catch {}
+  };
   useEffect(() => {
     if (!authed) return;
+    restoreLibCache(); // mostrar datos cacheados inmediatamente
     let cancel = false;
     (async () => {
       try {
         const [fav, pls, hist] = await Promise.all([
-          api.favorites().catch(() => []),
-          api.playlists().catch(() => []),
-          api.history().catch(() => []),
+          api.favorites().catch(() => null),
+          api.playlists().catch(() => null),
+          api.history().catch(() => null),
         ]);
         if (cancel) return;
-        setFavs(fav);
-        setRecent(hist.map(h => h.trackId));
+        // Si alguna petición falló (backend caído), la caché ya está restaurada — no pisar.
+        if (fav !== null)  setFavs(fav);
+        if (hist !== null) setRecent(hist.map(h => h.trackId));
         api.savedAlbums().then(a => { if (!cancel) setSavedAlbums(a); }).catch(() => {});
         // cargar pistas de cada playlist
-        const withTracks = await Promise.all(pls.map(async p => {
+        const withTracks = await Promise.all((pls || []).map(async p => {
           const ids = await api.playlistTracks(p.id).catch(() => []);
           return { id: p.id, name: p.name, trackIds: ids };
         }));
-        if (!cancel) setPlaylists(withTracks);
+        if (!cancel && pls !== null) setPlaylists(withTracks);
 
         // ── Sincronización de metadatos entre dispositivos ──
         // 1) Subir lo que este dispositivo ya conoce (para otros dispositivos).
@@ -1660,10 +1677,33 @@ export default function App() {
           }
           if (!cancel) { saveMeta(); setCatVer(v => v + 1); }
         }
+        // ── Guardar biblioteca en caché local (offline fallback) ──
+        if (!cancel && fav !== null) {
+          try {
+            const tracks = [..._catalog.values()].map(slimTrack).filter(Boolean);
+            localStorage.setItem(libCacheKey(), JSON.stringify({
+              favs: fav,
+              playlists: withTracks,
+              savedAlbums: await api.savedAlbums().catch(() => []),
+              recent: (hist || []).map(h => h.trackId),
+              tracks,
+            }));
+          } catch {}
+        }
       } catch {}
     })();
     return () => { cancel = true; };
   }, [authed]);
+
+  // ── Persistir biblioteca en caché local al cambiar favoritos/playlists/álbumes ──
+  useEffect(() => {
+    if (!authed || !favs.length) return;
+    try {
+      const cur = JSON.parse(localStorage.getItem(libCacheKey()) || '{}');
+      const tracks = [..._catalog.values()].map(slimTrack).filter(Boolean);
+      localStorage.setItem(libCacheKey(), JSON.stringify({ ...cur, favs, playlists, savedAlbums, tracks }));
+    } catch {}
+  }, [favs, playlists, savedAlbums]);
 
   // ── Feed personalizado (mixes según lo que escuchas, guardas y descargas) ──
   const feedSigRef = useRef('');
