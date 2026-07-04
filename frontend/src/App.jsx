@@ -2618,7 +2618,7 @@ export default function App() {
   // Manejo resiliente de errores de reproducción: reintenta una vez con URL
   // fresca (evade caché de borde) y, si vuelve a fallar, salta a la siguiente
   // pista de la cola en lugar de detener todo. Reduce al máximo los cortes.
-  const MAX_PLAY_RETRIES = 2;
+  const MAX_PLAY_RETRIES = 4;
   const consecutiveFailsRef = useRef(0);
   const handleAudioError = () => {
     selfPauseRef.current = false;
@@ -2628,30 +2628,33 @@ export default function App() {
     const st = playErrorRef.current;
     const n = (st.id === cur) ? st.n : 0;
     const isBlob = typeof a.currentSrc === 'string' && a.currentSrc.startsWith('blob:');
-    // Reintentos con espera creciente (resolución en frío puede tardar).
+    // Reintentos agresivos: la prioridad es reproducir LA canción seleccionada.
+    // 4 intentos con espera creciente (1.2s, 2.5s, 4s, 6s). Cubre: resolución
+    // en frío, URL expirada, backend saturado transitoriamente, rate-limit.
     if (n < MAX_PLAY_RETRIES && !isBlob) {
       const attempt = n + 1;
       playErrorRef.current = { id: cur, n: attempt };
       setLoadingAudio(true);
-      const delay = attempt === 1 ? 1200 : 2500;
+      const delays = [1200, 2500, 4000, 6000];
+      const delay = delays[Math.min(attempt - 1, delays.length - 1)];
       setTimeout(() => {
         if (!audioRef.current || trackRef.current?.id !== cur) return;
         try {
           const q = ({ high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' }[quality] || 'high');
           const base = api.streamUrl({ artist: track.artist, title: track.title, id: track.id, quality: q });
-          audioRef.current.src = attempt >= 2 ? (base + '&_r=' + Date.now()) : base;
+          // Primeros 2 intentos: URL normal (backend ya resolvió → caché).
+          // Últimos 2: cache-bust para forzar re-resolución fresca.
+          audioRef.current.src = attempt > 2 ? (base + '&_r=' + Date.now()) : base;
           audioRef.current.load();
           const p = audioRef.current.play(); if (p && p.catch) p.catch(() => {});
         } catch {}
       }, delay);
       return;
     }
-    // Agotados reintentos: saltar con protección contra cascada.
-    // Si muchas pistas fallan seguidas (backend saturado/caído), detener tras 4
-    // saltos consecutivos para no quedarse en un loop infinito de saltos.
+    // Agotados 4 reintentos (~14s de intentos): saltar con protección anti-cascada.
     playErrorRef.current = { id: cur, n: 0 };
     consecutiveFailsRef.current += 1;
-    if (consecutiveFailsRef.current > 4) {
+    if (consecutiveFailsRef.current > 3) {
       consecutiveFailsRef.current = 0;
       setLoadingAudio(false); setPlaying(false);
       showToast('Varias pistas no disponibles. Verifica tu conexión.');
@@ -2661,9 +2664,8 @@ export default function App() {
     const ids = queue && queue.length ? queue : [];
     const i = ids.indexOf(cur);
     if (ids.length > 1 && i !== -1) {
-      // Pequeña espera antes de saltar (da tiempo al backend de liberar concurrencia).
-      showToast('Pista no disponible · saltando…');
-      setTimeout(() => next(), 800);
+      showToast('Pista no disponible · siguiente…');
+      setTimeout(() => next(), 1000);
     } else { setPlaying(false); showToast('No se pudo reproducir esta pista'); }
   };
 
