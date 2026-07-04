@@ -147,8 +147,9 @@ function WrappedView({ ctx }) {
 // HOME TAB
 // ═══════════════════════════════════════════════════════════════
 function HomeTab({ ctx }) {
-  const { track, playing, play, T, recent, homeRows, homeLoading, favs, toggleFav, onMenu, goMix, startAiDj } = ctx;
+  const { track, playing, play, T, recent, homeRows, homeLoading, favs, toggleFav, onMenu, goMix, startAiDj, onboardPrefs, setOnboardPrefs, GENRES: GENRES_LIST } = ctx;
   const [djBusy, setDjBusy] = useState(false);
+  const [onboardSel, setOnboardSel] = useState([]);
   const recentTracks = dedupeByTitle(recent.map(trackById).filter(Boolean));
   const recentIds = recentTracks.map(t => t.id);
   const hour = new Date().getHours();
@@ -156,6 +157,26 @@ function HomeTab({ ctx }) {
 
   return (
     <div className="fade-up" style={{ paddingBottom:8 }}>
+      {onboardPrefs === null && !recent.length && !favs.length && (
+        <div style={{ padding:'20px 0 30px', textAlign:'center' }}>
+          <div style={{ fontSize:22, fontWeight:900, color:'var(--txt-0)', marginBottom:6 }}>¿Qué te gusta escuchar?</div>
+          <div style={{ fontSize:12.5, color:'var(--txt-2)', marginBottom:20 }}>Elige al menos 3 para personalizar tu feed</div>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:10, justifyContent:'center', marginBottom:22 }}>
+            {(GENRES_LIST || GENRES).map(g => {
+              const active = onboardSel.some(s => s.q === g.q);
+              return (
+                <button key={g.q} onClick={() => setOnboardSel(prev => active ? prev.filter(s => s.q !== g.q) : [...prev, { label: g.label, q: g.q }])} className="btn-tap" style={{ padding:'8px 16px', borderRadius:99, border: active ? `2px solid ${T.accent}` : '1.5px solid var(--line)', background: active ? hex2rgba(T.accent, .18) : 'var(--surf-1)', color: active ? T.accent : 'var(--txt-1)', fontSize:13, fontWeight:700, cursor:'pointer', transition:'all .15s ease' }}>
+                  {g.label}
+                </button>
+              );
+            })}
+          </div>
+          <button disabled={onboardSel.length < 3} onClick={() => setOnboardPrefs(onboardSel)} className="btn-tap" style={{ padding:'12px 36px', borderRadius:99, border:'none', background: onboardSel.length >= 3 ? T.accent : 'var(--surf-2)', color: onboardSel.length >= 3 ? '#000' : 'var(--txt-3)', fontSize:14, fontWeight:800, cursor: onboardSel.length >= 3 ? 'pointer' : 'not-allowed', opacity: onboardSel.length >= 3 ? 1 : .5, transition:'all .2s ease' }}>
+            Continuar
+          </button>
+        </div>
+      )}
+
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:22, paddingTop:4 }}>
         <div>
           <div style={{ fontSize:24, fontWeight:900, color:'var(--txt-0)', letterSpacing:-.6 }}>{greet}</div>
@@ -1488,6 +1509,9 @@ export default function App() {
   const [lyricOffset, setLyricOffset] = usePersisted('velocity.lyricOffset', 0);
   const [recentSearches, setRecentSearches] = usePersisted('velocity.searches', []);
   const [settings, setSettings] = usePersisted('velocity.settings', { autoplay:true, normalize:false });
+  // Preferencias de onboarding: artistas/géneros elegidos al inicio para
+  // arrancar con un feed 100% personalizado desde el día 1.
+  const [onboardPrefs, setOnboardPrefs] = usePersisted('velocity.onboard', null);
 
   // datos del backend
   const [favs, setFavs] = useState([]);
@@ -1767,8 +1791,6 @@ export default function App() {
       const pick = (arr, n) => { const a = [...arr]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a.slice(0, n); };
       const oneOf = (arr) => arr[Math.floor(Math.random() * arr.length)];
       const cap1 = (s) => (s || '').charAt(0).toUpperCase() + (s || '').slice(1);
-      // Descubrimiento basado en radio de varias semillas + una búsqueda adyacente,
-      // excluyendo lo ya conocido. Mezcla profunda para una lista rica y variada.
       const buildDiscovery = async () => {
         if (!seeds.length) return null;
         const known = new Set([...recent, ...favs, ...downloaded, ...seeds.map(s => s.id)]);
@@ -1781,51 +1803,61 @@ export default function App() {
           return out.length >= 6 ? { label: 'Descubrimiento Semanal', tracks: out } : null;
         } catch { return null; }
       };
-      // Radio "porque escuchaste": lista por cada semilla, etiquetada con el artista.
       const mixBecause = async (seed) => { try { const rel = await api.radio(seed.id, 50); const tracks = capPerArtist(dedupeByTitle([seed, ...rel.map(normalizeTrack)]), 8).filter(t => t.id).slice(0, 50); return tracks.length >= 5 ? { label: seed.artist || seed.title || 'Mezcla', tracks } : null; } catch { return null; } };
       const sections = [];
       const pushSection = (section, mixes) => { if (!mixes.length || !alive()) return; sections.push({ section, mixes }); setHomeRows([...sections]); setHomeLoading(false); };
-      const hasPersonal = seeds.length > 0 || topSearches.length > 0;
 
-      // ── NÚCLEO PERSONAL (prioridad) ──
-      // 1) Mezclas por lo que más escuchas (una por artista semilla).
-      pushSection('Hecho para ti', clean(await Promise.all(seeds.map(mixFromSeed))));
-      // 2) Inspirado en tus búsquedas recientes (señal fuerte de intención).
-      if (topSearches.length) {
-        pushSection('Inspirado en tus búsquedas', clean(await Promise.all(topSearches.map(term => mixFromSearch(cap1(term), term)))));
-      }
-      // 3) Radio por semilla: "porque escuchaste X".
-      if (seeds.length) pushSection(oneOf(['Porque te gusta', 'Basado en tus gustos', 'Tu radio']), clean(await Promise.all(pick(seeds, 4).map(mixBecause))));
-      // 4) Descubrimiento profundo a partir de tu perfil.
-      { const disc = await buildDiscovery(); pushSection('Tu descubrimiento', disc ? [disc] : []); }
+      const hasHistory = seeds.length > 0 || topSearches.length > 0 || favs.length > 0;
 
-      // ── EXPLORACIÓN (genéricas, reducidas para usuarios con historial) ──
-      const explore = [];
-      // Fila fresca y personalizada (reemplaza la regional "Latinoamérica"):
-      // semillas por RECENCIA (lo que escuchas AHORA), distintas de "Hecho para ti".
-      const freshSeeds = [];
-      { const seenA = new Set(); for (const id of recent) { const t = trackById(id); if (!t) continue; const a = (t.artist || '').toLowerCase(); if (!a || seenA.has(a)) continue; seenA.add(a); freshSeeds.push(t); if (freshSeeds.length >= 6) break; } }
-      if (freshSeeds.length) {
-        explore.push({ title: oneOf(['Novedades para ti', 'Fresco para ti', 'Tu mezcla del momento']), build: () => Promise.all(freshSeeds.map(mixBecause)) });
+      if (hasHistory) {
+        // ── USERS WITH HISTORY ──
+        // 1) Hecho para ti — mix from each seed
+        pushSection('Hecho para ti', clean(await Promise.all(seeds.map(mixFromSeed))));
+        // 2) Inspirado en tus búsquedas
+        if (topSearches.length > 0) {
+          pushSection('Inspirado en tus búsquedas', clean(await Promise.all(topSearches.map(term => mixFromSearch(cap1(term), term)))));
+        }
+        // 3) Porque te gusta [artist]
+        if (seeds.length) {
+          const becauseSeeds = pick(seeds, 3);
+          const becauseResults = clean(await Promise.all(becauseSeeds.map(mixBecause)));
+          if (becauseResults.length) pushSection('Porque te gusta ' + (becauseSeeds[0]?.artist || ''), becauseResults);
+        }
+        // 4) Tus favoritos expandidos — radio of up to 5 fav tracks, merged into one 50-track mix
+        if (favs.length > 0) {
+          const favSeeds = favs.slice(0, 5);
+          try {
+            const radios = await Promise.all(favSeeds.map(id => api.radio(id, 30).catch(() => [])));
+            const merged = capPerArtist(dedupeByTitle(radios.flat().map(normalizeTrack)), 4).filter(t => t.id).slice(0, 50);
+            if (merged.length >= 6) pushSection('Tus favoritos expandidos', [{ label: 'Mix de Favoritos', tracks: merged }]);
+          } catch {}
+        }
+        // 5) Descubrimiento para ti
+        { const disc = await buildDiscovery(); if (disc) pushSection('Descubrimiento para ti', [disc]); }
+        // 6) Tu momento actual — fresh seeds by recency
+        const freshSeeds = [];
+        { const seenA = new Set(); for (const id of recent) { const t = trackById(id); if (!t) continue; const a = (t.artist || '').toLowerCase(); if (!a || seenA.has(a)) continue; seenA.add(a); freshSeeds.push(t); if (freshSeeds.length >= 6) break; } }
+        if (freshSeeds.length) {
+          pushSection('Tu momento actual', clean(await Promise.all(freshSeeds.map(mixBecause))));
+        }
       } else {
-        explore.push({ title: 'Tendencias ahora', build: () => Promise.all(pick(SEED_ROWS, 6).map(s => mixFromSearch(s.label, s.q))) });
+        // ── USERS WITHOUT HISTORY ──
+        if (onboardPrefs && onboardPrefs.length > 0) {
+          // Has onboarding preferences
+          pushSection('Basado en tus gustos', clean(await Promise.all(onboardPrefs.map(p => mixFromSearch(p.label, p.q)))));
+          // "Descubre más" — related searches from prefs
+          const relatedQueries = onboardPrefs.slice(0, 4).map(p => ({ label: 'Más ' + p.label, q: p.q + ' similar' }));
+          pushSection('Descubre más', clean(await Promise.all(relatedQueries.map(r => mixFromSearch(r.label, r.q)))));
+        } else {
+          // Generic feed for truly new users who skipped onboarding
+          pushSection('Explora géneros', clean(await Promise.all(pick(GENRES, 8).map(g => mixFromSearch(g.label, g.q)))));
+          pushSection('Estados de ánimo', clean(await Promise.all(pick(MOODS, 10).map(m => mixFromSearch('Mix ' + m.label, m.q)))));
+          pushSection('Novedades', clean(await Promise.all(pick(SEED_ROWS, 6).map(s => mixFromSearch(s.label, s.q)))));
+        }
       }
-      if (hasPersonal) {
-        // Con historial: solo 2 filas de exploración (no saturar de genéricas).
-        explore.push({ title: oneOf(['Explora géneros', 'Por estilo']), build: () => Promise.all(pick(GENRES, 6).map(g => mixFromSearch(g.label, g.q))) });
-        explore.push({ title: oneOf(['Fuera de tu burbuja', 'Amplía tu gusto']), build: () => Promise.all(pick(DISCOVERY, 6).map(d => mixFromSearch(d.label, d.q))) });
-      } else {
-        // Usuario nuevo (sin historial): feed genérico completo para no dejarlo vacío.
-        explore.push({ title: 'Estados de ánimo', build: () => Promise.all(pick(MOODS, 10).map(m => mixFromSearch('Mix ' + m.label, m.q))) });
-        explore.push({ title: 'Explora géneros', build: () => Promise.all(pick(GENRES, 8).map(g => mixFromSearch(g.label, g.q))) });
-        explore.push({ title: 'Décadas', build: () => Promise.all(pick(ERAS, 6).map(e => mixFromSearch(e.label, e.q))) });
-        explore.push({ title: 'Novedades', build: () => Promise.all(pick(SEED_ROWS, 6).map(s => mixFromSearch(s.label, s.q))) });
-        explore.push({ title: 'Fuera de tu burbuja', build: () => Promise.all(pick(DISCOVERY, 6).map(d => mixFromSearch(d.label, d.q))) });
-      }
-      for (const sec of explore) { if (!alive()) break; pushSection(sec.title, clean(await sec.build())); }
       if (alive()) setHomeLoading(false);
     })();
-  }, [authed, recent, favs, downloaded, recentSearches, feedNonce]);
+  }, [authed, recent, favs, downloaded, recentSearches, onboardPrefs, feedNonce]);
 
   // Refresco dinámico del feed al volver tras un rato.
   useEffect(() => { let h = 0; const v = () => { if (document.visibilityState === 'hidden') h = Date.now(); else if (h && Date.now() - h > 720000) { h = 0; setFeedNonce(n => n + 1); } }; document.addEventListener('visibilitychange', v); return () => document.removeEventListener('visibilitychange', v); }, []);
@@ -2513,6 +2545,7 @@ export default function App() {
     hydrateTracks, playStats: playStatsRef.current,
     customPalettes, activeCustomId, setActiveCustomId, activePalette, addPalette, updatePalette, deletePalette,
     displayName, saveProfileName, deleteAccount, avatar, saveAvatar,
+    onboardPrefs, setOnboardPrefs, GENRES,
   };
 
   const playerProps = { track, playing, togglePlay, next, prev, time, dur, seek, vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved: track ? favs.includes(track.id) : false, toggleFav, T, loadingAudio, nextCover, prevCover };
