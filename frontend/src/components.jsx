@@ -64,14 +64,22 @@ export function DownloadAllButton({ ids, downloaded, downloading, onClick, T }) 
 export function CoverImg({ src, alt = '', radius = 12, className = '', style = {}, size = 512 }) {
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
-  // Reiniciar estado al cambiar de portada: evita que un fallo previo deje el
-  // fallback pegado en las siguientes canciones (bug del reproductor grande).
-  useEffect(() => { setLoaded(false); setFailed(false); }, [src]);
+  const imgRef = useRef(null);
   const real = !failed && src ? hiResCover(src, size) : FALLBACK_COVER;
+  // Reiniciar estado al cambiar de portada. CLAVE: si la imagen ya está en la
+  // caché del navegador, el evento `onLoad` NO se vuelve a disparar tras un
+  // re-render/remontaje (reordenar cola, navegar, re-render de listas), dejando
+  // la carátula invisible (opacity 0). Comprobar `complete` cubre ese caso.
+  useEffect(() => {
+    setFailed(false);
+    const img = imgRef.current;
+    if (img && img.complete && img.naturalWidth > 0) setLoaded(true);
+    else setLoaded(false);
+  }, [real]);
   return (
     <div style={{ position:'relative', overflow:'hidden', borderRadius:radius, background:'var(--surf-2)', ...style }}>
       {!loaded && <div style={{ position:'absolute', inset:0, background:'linear-gradient(110deg, var(--surf-1) 30%, var(--surf-2) 50%, var(--surf-1) 70%)' }} />}
-      <img src={real} alt={alt} loading="lazy" decoding="async" className={className}
+      <img ref={imgRef} src={real} alt={alt} loading="lazy" decoding="async" className={className}
         onLoad={() => setLoaded(true)} onError={() => { setFailed(true); setLoaded(true); }}
         referrerPolicy="no-referrer"
         style={{ width:'100%', height:'100%', objectFit:'cover', display:'block', opacity: loaded ? 1 : 0, transition:'opacity .35s ease' }} />

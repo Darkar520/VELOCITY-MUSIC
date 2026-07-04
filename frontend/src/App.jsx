@@ -2266,7 +2266,13 @@ export default function App() {
   const goAlbum = (albumId, name, artist, songTitle) => {
     setExpanded(false); setView({ type:'album', albumId, name, artist });
     setDetailData(null); setDetailLoading(true);
-    const loadAlbum = (aid) => api.album(aid).then(d => setDetailData({ type:'album', name: d.name || name, artist: d.artist || artist, artistId: d.artistId, cover: d.cover, year: d.year, tracks: (d.tracks || []).map(normalizeTrack) }));
+    // Las pistas de álbum (YT Music) suelen no traer carátula propia: heredan la
+    // del álbum para que no aparezcan sin portada al abrir el detalle.
+    const loadAlbum = (aid) => api.album(aid).then(d => {
+      const albumCover = d.cover || '';
+      const tracks = (d.tracks || []).map(t => normalizeTrack({ ...t, artworkUrl: t.artworkUrl || t.cover || albumCover }));
+      setDetailData({ type:'album', name: d.name || name, artist: d.artist || artist, artistId: d.artistId, cover: d.cover, year: d.year, tracks });
+    });
     (async () => {
       try {
         let aid = albumId;
@@ -2353,9 +2359,14 @@ export default function App() {
         title: track.title || '',
         artist: track.artist || '',
         album: track.album || '',
-        artwork: track.cover && !track.cover.startsWith('data:') ? [
+        // Solo carátulas HTTP(S) sirven en la notificación del SO (data:/blob: no).
+        // Fallback al ícono de la app para que nunca quede sin imagen.
+        artwork: (track.cover && /^https?:/.test(track.cover)) ? [
           { src: track.cover.replace(/=w\d+-h\d+/, '=w512-h512').replace(/=s\d+/, '=s512'), sizes: '512x512', type: 'image/jpeg' },
-        ] : [],
+        ] : [
+          { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },
+          { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
+        ],
       });
     }
     const a = () => audioRef.current;
