@@ -1753,7 +1753,7 @@ export default function App() {
     const alive = () => myToken === feedTokenRef.current;
     setHomeLoading(true);
     (async () => {
-      const mixFromSeed = async (seed) => { try { const rel = await api.radio(seed.id, 50); const tracks = capPerArtist(dedupeByTitle([seed, ...rel.map(normalizeTrack)]), 3).filter(t => t.id).slice(0, 50); return tracks.length >= 4 ? { label: seed.artist || 'Mezcla', tracks } : null; } catch { return null; } };
+      const mixFromSeed = async (seed) => { try { const rel = await api.radio(seed.id, 50); const tracks = capPerArtist(dedupeByTitle([seed, ...rel.map(normalizeTrack)]), 8).filter(t => t.id).slice(0, 50); return tracks.length >= 4 ? { label: seed.artist || 'Mezcla', tracks } : null; } catch { return null; } };
       const mixFromSearch = async (label, q) => { try { const raw = await api.search(q); const tracks = dedupeByTitle(raw.slice(0, 50).map(normalizeTrack)).filter(t => t.id); return tracks.length >= 4 ? { label, tracks } : null; } catch { return null; } };
       const clean = (arr) => arr.filter(Boolean);
       const pick = (arr, n) => { const a = [...arr]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a.slice(0, n); };
@@ -1765,15 +1765,15 @@ export default function App() {
         const known = new Set([...recent, ...favs, ...downloaded, ...seeds.map(s => s.id)]);
         try {
           const rels = await Promise.all(seeds.slice(0, 5).map(s => api.radio(s.id, 50).catch(() => [])));
-          let tracks = capPerArtist(dedupeByTitle(rels.flat().map(normalizeTrack)), 2).filter(t => t.id && !known.has(t.id));
-          if (tracks.length < 16 && seeds[0]) { try { const raw = await api.search((seeds[0].artist || 'mix') + ' similar artists'); tracks = capPerArtist(dedupeByTitle([...tracks, ...raw.map(normalizeTrack).filter(t => t.id && !known.has(t.id))]), 2); } catch {} }
+          let tracks = capPerArtist(dedupeByTitle(rels.flat().map(normalizeTrack)), 3).filter(t => t.id && !known.has(t.id));
+          if (tracks.length < 16 && seeds[0]) { try { const raw = await api.search((seeds[0].artist || 'mix') + ' similar artists'); tracks = capPerArtist(dedupeByTitle([...tracks, ...raw.map(normalizeTrack).filter(t => t.id && !known.has(t.id))]), 3); } catch {} }
           for (let i = tracks.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [tracks[i], tracks[j]] = [tracks[j], tracks[i]]; }
           const out = tracks.slice(0, 50);
           return out.length >= 6 ? { label: 'Descubrimiento Semanal', tracks: out } : null;
         } catch { return null; }
       };
       // Radio "porque escuchaste": lista por cada semilla, etiquetada con el artista.
-      const mixBecause = async (seed) => { try { const rel = await api.radio(seed.id, 50); const tracks = capPerArtist(dedupeByTitle([seed, ...rel.map(normalizeTrack)]), 2).filter(t => t.id).slice(0, 50); return tracks.length >= 5 ? { label: seed.artist || seed.title || 'Mezcla', tracks } : null; } catch { return null; } };
+      const mixBecause = async (seed) => { try { const rel = await api.radio(seed.id, 50); const tracks = capPerArtist(dedupeByTitle([seed, ...rel.map(normalizeTrack)]), 8).filter(t => t.id).slice(0, 50); return tracks.length >= 5 ? { label: seed.artist || seed.title || 'Mezcla', tracks } : null; } catch { return null; } };
       const sections = [];
       const pushSection = (section, mixes) => { if (!mixes.length || !alive()) return; sections.push({ section, mixes }); setHomeRows([...sections]); setHomeLoading(false); };
 
