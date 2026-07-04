@@ -17,12 +17,15 @@ export const hex2rgba = (hex, a) => {
 // Degradado del tema.
 export const grad = (T, ang = 135) => `linear-gradient(${ang}deg, ${T.accent}, ${T.accent2})`;
 
-// Eleva cualquier portada de YouTube Music/iTunes a alta resolución al mostrarla.
-export const hiResCover = (url) => {
+// Ajusta la portada de YouTube Music/iTunes al tamaño pedido (por defecto 512px).
+// Pedir el tamaño real de render (en vez de 1200px siempre) acelera mucho la
+// carga, sobre todo en miniaturas de listas.
+export const hiResCover = (url, size = 512) => {
   if (!url || typeof url !== 'string') return url;
-  if (/=w\d+-h\d+/.test(url)) return url.replace(/=w\d+-h\d+/, '=w1200-h1200');
-  if (/=s\d+/.test(url)) return url.replace(/=s\d+/, '=s1200');
-  if (/\d+x\d+bb\.(jpg|png)/i.test(url)) return url.replace(/\d+x\d+bb\.(jpg|png)/i, '1200x1200bb.$1');
+  const s = Math.max(64, Math.min(1200, Math.round(size)));
+  if (/=w\d+-h\d+/.test(url)) return url.replace(/=w\d+-h\d+/, `=w${s}-h${s}`);
+  if (/=s\d+/.test(url)) return url.replace(/=s\d+/, `=s${s}`);
+  if (/\d+x\d+bb\.(jpg|png)/i.test(url)) return url.replace(/\d+x\d+bb\.(jpg|png)/i, `${s}x${s}bb.$1`);
   return url;
 };
 

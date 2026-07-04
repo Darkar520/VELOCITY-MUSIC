@@ -61,10 +61,13 @@ export function DownloadAllButton({ ids, downloaded, downloading, onClick, T }) 
 }
 
 // Imagen de carátula robusta: carga diferida, estado de carga y fallback al fallar.
-export function CoverImg({ src, alt = '', radius = 12, className = '', style = {} }) {
+export function CoverImg({ src, alt = '', radius = 12, className = '', style = {}, size = 512 }) {
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
-  const real = !failed && src ? hiResCover(src) : FALLBACK_COVER;
+  // Reiniciar estado al cambiar de portada: evita que un fallo previo deje el
+  // fallback pegado en las siguientes canciones (bug del reproductor grande).
+  useEffect(() => { setLoaded(false); setFailed(false); }, [src]);
+  const real = !failed && src ? hiResCover(src, size) : FALLBACK_COVER;
   return (
     <div style={{ position:'relative', overflow:'hidden', borderRadius:radius, background:'var(--surf-2)', ...style }}>
       {!loaded && <div style={{ position:'absolute', inset:0, background:'linear-gradient(110deg, var(--surf-1) 30%, var(--surf-2) 50%, var(--surf-1) 70%)' }} />}

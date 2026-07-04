@@ -741,9 +741,9 @@ function CoverSwipe({ next, prev, playing, glowF, ambientRgba, art, track, loadi
   const transition = slideTo ? 'transform .34s cubic-bezier(.22,1,.36,1)' : 'none';
   const groupTx = slideTo === 'next' ? -w : slideTo === 'prev' ? w : (slideTo === 'back' ? 0 : dragX);
 
-  const coverFace = (src, alt) => (
+  const coverFace = (src, alt, size = 512) => (
     <div style={{ position:'relative', width:'100%', height:'100%', borderRadius:28, overflow:'hidden', boxShadow:`0 24px 70px ${ambientRgba(.30)}` }}>
-      <CoverImg src={src} alt={alt || ''} radius={28} style={{ width:'100%', height:'100%' }} />
+      <CoverImg src={src} alt={alt || ''} radius={28} size={size} style={{ width:'100%', height:'100%' }} />
       <div style={{ position:'absolute', inset:0, borderRadius:28, boxShadow:'inset 0 1px 0 #ffffff22, inset 0 0 0 1px #ffffff10', pointerEvents:'none' }} />
     </div>
   );
@@ -761,7 +761,7 @@ function CoverSwipe({ next, prev, playing, glowF, ambientRgba, art, track, loadi
         <div onTransitionEnd={onTransitionEnd} style={{ position:'absolute', inset:0, transform:`translateX(${groupTx}px)`, transition, willChange:'transform' }}>
           {prevCover && <div style={{ position:'absolute', top:0, left:'-104%', width:'100%', height:'100%' }}>{coverFace(prevCover)}</div>}
           <div style={{ position:'absolute', inset:0 }}>
-            {coverFace(track.cover, track.title)}
+            {coverFace(track.cover, track.title, 900)}
             {loadingAudio && <div style={{ position:'absolute', inset:0, borderRadius:28, display:'flex', alignItems:'center', justifyContent:'center', background:'#0006' }}><Spinner c="#fff" sz={32} /></div>}
           </div>
           {nextCover && <div style={{ position:'absolute', top:0, left:'104%', width:'100%', height:'100%' }}>{coverFace(nextCover)}</div>}
@@ -1730,6 +1730,35 @@ export default function App() {
     const ids = queue.length ? queue : [track.id];
     prefetchNext(track.id, ids, qParam);
   }, [track?.id, queue, quality]);
+
+  // ── Continuidad en segundo plano: extender la cola ANTES de que acabe ──
+  // Si la pista actual es la última de la cola, se anexan relacionadas AHORA
+  // (en primer plano), de modo que al terminar (aunque el celular esté
+  // bloqueado) `next()` sea síncrono y la reproducción no se detenga.
+  const autoExtendRef = useRef(null);
+  useEffect(() => {
+    if (!track || !settings.autoplay) return;
+    const ids = queue.length ? queue : [track.id];
+    const i = ids.indexOf(track.id);
+    if (i !== -1 && i < ids.length - 1) return;           // aún hay siguiente
+    if (autoExtendRef.current === track.id) return;        // ya se pidió para esta
+    autoExtendRef.current = track.id;
+    (async () => {
+      try {
+        const raw = await api.radio(track.id);
+        let more = capPerArtist(dedupeByTitle(raw.map(normalizeTrack)), 3)
+          .filter(t => t.id && t.id !== track.id && !ids.includes(t.id));
+        if (!more.length) {
+          const rawS = await api.search(track.artist || track.title);
+          more = rawS.map(normalizeTrack).filter(t => t.id && t.id !== track.id && !ids.includes(t.id));
+        }
+        if (!more.length) return;
+        more.slice(0, 20).forEach(t => cacheTrack(t));
+        const addIds = more.slice(0, 20).map(t => t.id);
+        setQueue(q => { const base = q && q.length ? q : [track.id]; const merged = [...base]; addIds.forEach(id => { if (!merged.includes(id)) merged.push(id); }); return merged; });
+      } catch {}
+    })();
+  }, [track?.id, queue, settings.autoplay]);
 
   // ── Media Session: estado de posición (barra de progreso en pantalla bloqueada) ──
   useEffect(() => {
