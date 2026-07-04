@@ -1811,15 +1811,24 @@ export default function App() {
           return tracks.length >= 6 ? { label, tracks } : null;
         } catch { return null; }
       };
-      // Sección de un género: varias mezclas sembradas por artistas DISTINTOS del
-      // género (cada tarjeta = un artista real del estilo). Profundo, sin ruido.
+      // Mezcla BARATA desde una consulta de GÉNERO/ánimo (1 sola llamada de
+      // búsqueda). Coherente para géneros (no homónimos) y no abusa de la API.
+      const mixFromSearch = async (label, q) => {
+        try {
+          const raw = await api.search(q);
+          const tracks = dedupeByTitle(raw.map(normalizeTrack)).filter(t => t.id).slice(0, 40);
+          return tracks.length >= 6 ? { label, tracks } : null;
+        } catch { return null; }
+      };
+      // Sección de un género con varias tarjetas: 1 búsqueda del género → toma los
+      // artistas distintos y una tarjeta por artista (búsqueda del artista, barata).
       const genreCards = async (q, n = 4) => {
         try {
           const raw = await api.search(q);
           const cand = dedupeByTitle(raw.map(normalizeTrack)).filter(t => t.id);
-          const gs = []; const seen = new Set();
-          for (const t of cand) { const a = (t.artist || '').toLowerCase(); if (!a || seen.has(a)) continue; seen.add(a); gs.push(t); if (gs.length >= n) break; }
-          return clean(await Promise.all(gs.map(s => mixFromSeed(s, 40))));
+          const artists = []; const seen = new Set();
+          for (const t of cand) { const a = (t.artist || '').trim(); const k = a.toLowerCase(); if (!a || seen.has(k)) continue; seen.add(k); artists.push(a); if (artists.length >= n) break; }
+          return clean(await Promise.all(artists.map(a => mixFromSearch(a, a))));
         } catch { return []; }
       };
       // Descubrimiento: relacionadas a un conjunto de pistas base, excluyendo lo ya conocido.
@@ -1850,11 +1859,12 @@ export default function App() {
       const freshSeeds = [];
       { const seenA = new Set(); for (const id of recent) { const t = trackById(id); if (!t) continue; const a = (t.artist || '').toLowerCase(); if (!a || seenA.has(a)) continue; seenA.add(a); freshSeeds.push(t); if (freshSeeds.length >= 6) break; } }
 
+      // PERSONAL: radio (relacionadas reales) — pocas, de alto valor.
+      // EXPLORACIÓN (géneros/ánimos/tendencias): búsqueda directa barata y coherente.
       if (hasHistory) {
-        // ── PERSONAL (muchos carruseles, todos derivados de tus datos) ──
         if (seeds.length) pushSection('Hecho para ti', clean(await Promise.all(seeds.slice(0, 6).map(s => mixFromSeed(s, 50)))));
         if (topSearches.length) pushSection('Inspirado en tus búsquedas', clean(await Promise.all(topSearches.map(term => mixFromQuery(cap1(term), term)))));
-        if (freshSeeds.length) pushSection('Tu momento actual', clean(await Promise.all(freshSeeds.map(s => mixFromSeed(s, 40)))));
+        if (freshSeeds.length) pushSection('Tu momento actual', clean(await Promise.all(freshSeeds.slice(0, 5).map(s => mixFromSeed(s, 40)))));
         if (seeds.length) { const bs = pick(seeds, 4); pushSection('Porque te gusta ' + (bs[0]?.artist || 'tu música'), clean(await Promise.all(bs.map(s => mixFromSeed(s, 40))))); }
         if (favs.length) {
           const favSeeds = favs.slice(0, 5);
@@ -1865,23 +1875,25 @@ export default function App() {
           } catch {}
         }
         { const disc = await buildDiscovery(seeds.length ? seeds : freshSeeds, 'Descubrimiento para ti'); if (disc) pushSection('Descubrimiento para ti', [disc]); }
-        // Secciones por género elegido en el onboarding (profundidad personalizada).
-        for (const p of prefs.slice(0, 5)) { if (!alive()) break; pushSection(p.label, await genreCards(p.q, 4)); }
-        // Tendencias actuales (coherentes, basadas en radio).
-        pushSection('Tendencias ahora', clean(await Promise.all(pick(SEED_ROWS, 6).map(s => mixFromQuery(s.label, s.q)))));
+        // Exploración por tus géneros elegidos (búsqueda barata, fiable, coherente).
+        if (prefs.length) pushSection('Tus géneros', clean(await Promise.all(prefs.slice(0, 10).map(p => mixFromSearch(p.label, p.q)))));
+        for (const p of prefs.slice(0, 3)) { if (!alive()) break; pushSection('Lo mejor de ' + p.label, await genreCards(p.q, 4)); }
+        pushSection('Estados de ánimo', clean(await Promise.all(pick(MOODS, 8).map(m => mixFromSearch('Mix ' + m.label, m.q)))));
+        pushSection('Tendencias ahora', clean(await Promise.all(pick(SEED_ROWS, 6).map(s => mixFromSearch(s.label, s.q)))));
       } else if (prefs.length) {
-        // ── NUEVO CON ONBOARDING: feed personalizado por sus géneros desde el día 1 ──
-        pushSection('Basado en tus gustos', clean(await Promise.all(prefs.map(p => mixFromQuery(p.label, p.q)))));
-        for (const p of prefs.slice(0, 8)) { if (!alive()) break; pushSection(p.label, await genreCards(p.q, 4)); }
-        const baseTracks = await resolvePrefTracks(prefs.slice(0, 5));
+        // ── NUEVO CON ONBOARDING: personalizado por sus géneros desde el día 1 ──
+        pushSection('Basado en tus gustos', clean(await Promise.all(prefs.map(p => mixFromSearch(p.label, p.q)))));
+        for (const p of prefs.slice(0, 6)) { if (!alive()) break; pushSection('Lo mejor de ' + p.label, await genreCards(p.q, 4)); }
+        const baseTracks = await resolvePrefTracks(prefs.slice(0, 4));
         { const disc = await buildDiscovery(baseTracks, 'Descubre para ti'); if (disc) pushSection('Descubre para ti', [disc]); }
-        pushSection('Tendencias ahora', clean(await Promise.all(pick(SEED_ROWS, 6).map(s => mixFromQuery(s.label, s.q)))));
+        pushSection('Estados de ánimo', clean(await Promise.all(pick(MOODS, 8).map(m => mixFromSearch('Mix ' + m.label, m.q)))));
+        pushSection('Tendencias ahora', clean(await Promise.all(pick(SEED_ROWS, 6).map(s => mixFromSearch(s.label, s.q)))));
       } else {
         // ── SIN historial ni preferencias: genérico coherente ──
-        pushSection('Éxitos del momento', clean(await Promise.all(pick(SEED_ROWS, 6).map(s => mixFromQuery(s.label, s.q)))));
-        pushSection('Explora géneros', clean(await Promise.all(pick(GENRES, 8).map(g => mixFromQuery(g.label, g.q)))));
-        pushSection('Estados de ánimo', clean(await Promise.all(pick(MOODS, 8).map(m => mixFromQuery('Mix ' + m.label, m.q)))));
-        pushSection('Para descubrir', clean(await Promise.all(pick(DISCOVERY, 6).map(d => mixFromQuery(d.label, d.q)))));
+        pushSection('Éxitos del momento', clean(await Promise.all(pick(SEED_ROWS, 6).map(s => mixFromSearch(s.label, s.q)))));
+        pushSection('Explora géneros', clean(await Promise.all(pick(GENRES, 8).map(g => mixFromSearch(g.label, g.q)))));
+        pushSection('Estados de ánimo', clean(await Promise.all(pick(MOODS, 8).map(m => mixFromSearch('Mix ' + m.label, m.q)))));
+        pushSection('Para descubrir', clean(await Promise.all(pick(DISCOVERY, 6).map(d => mixFromSearch(d.label, d.q)))));
       }
       if (alive()) setHomeLoading(false);
     })();
