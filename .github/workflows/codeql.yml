@@ -1,0 +1,49 @@
+name: CodeQL Security Analysis
+
+# Escanea el código en busca de vulnerabilidades de seguridad (inyecciones,
+# secretos expuestos, prototype pollution, ReDoS, etc.) usando el motor de
+# análisis estático de GitHub. Se ejecuta en cada PR a main/develop y
+# semanalmente para detectar nuevas vulnerabilidades en dependencias.
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    # Lunes a las 06:00 UTC — escaneo semanal para detectar CVEs nuevos.
+    - cron: '0 6 * * 1'
+
+jobs:
+  analyze:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # Queries de seguridad estándar + extended (más cobertura).
+          queries: security-extended
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
