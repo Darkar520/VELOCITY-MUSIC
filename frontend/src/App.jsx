@@ -10,6 +10,32 @@ import { Icon } from './Icons.jsx';
 import { EQViz, Spinner, ProgressRing, DownloadAllButton, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider, SettingCard, ToggleRow, ColorField } from './components.jsx';
 import { Avatar, PixelAvatar, AVATARS } from './avatars.jsx';
 
+// ── Error Boundary global: evita que un crash de React quede en pantalla negra.
+// Si el componente lanza un error no capturado, muestra un botón de recarga
+// en lugar de un div vacío negro. Imprescindible para el login de Google y
+// cambios de estado bruscos (logout, etc.).
+class AppErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(e) { return { error: e }; }
+  componentDidCatch(e) { console.error('[Velocity] Error capturado:', e); }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div style={{ minHeight:'100dvh', background:'#04060a', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:16, fontFamily:'Inter,sans-serif', padding:24 }}>
+        <div style={{ fontSize:32 }}>⚡</div>
+        <div style={{ fontSize:16, fontWeight:800, color:'#f4f7fb' }}>Algo salió mal</div>
+        <div style={{ fontSize:12, color:'#8b97a8', textAlign:'center', maxWidth:280 }}>
+          {String(this.state.error?.message || this.state.error || 'Error desconocido')}
+        </div>
+        <button onClick={() => window.location.reload()} style={{ marginTop:8, background:'#10d9a0', border:'none', borderRadius:12, padding:'12px 28px', fontSize:13, fontWeight:800, color:'#04060a', cursor:'pointer' }}>
+          Recargar la app
+        </button>
+      </div>
+    );
+  }
+}
+export { AppErrorBoundary };
+
 
 // ═══════════════════════════════════════════════════════════════
 // AUTH SCREEN — login / registro
