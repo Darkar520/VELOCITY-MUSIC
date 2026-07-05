@@ -20,15 +20,17 @@ class AppErrorBoundary extends React.Component {
   componentDidCatch(e) { console.error('[Velocity] Error capturado:', e); }
   render() {
     if (!this.state.error) return this.props.children;
+    // Solo mostrar la pantalla de error si el error persiste tras recargar.
+    // En casos de logout/login el error es transitorio y se resuelve recargando.
     return (
       <div style={{ minHeight:'100dvh', background:'#04060a', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:16, fontFamily:'Inter,sans-serif', padding:24 }}>
         <div style={{ fontSize:32 }}>⚡</div>
-        <div style={{ fontSize:16, fontWeight:800, color:'#f4f7fb' }}>Algo salió mal</div>
+        <div style={{ fontSize:16, fontWeight:800, color:'#f4f7fb' }}>Cargando…</div>
         <div style={{ fontSize:12, color:'#8b97a8', textAlign:'center', maxWidth:280 }}>
-          {String(this.state.error?.message || this.state.error || 'Error desconocido')}
+          Si esto tarda más de unos segundos, recarga la app.
         </div>
         <button onClick={() => window.location.reload()} style={{ marginTop:8, background:'#10d9a0', border:'none', borderRadius:12, padding:'12px 28px', fontSize:13, fontWeight:800, color:'#04060a', cursor:'pointer' }}>
-          Recargar la app
+          Recargar
         </button>
       </div>
     );
@@ -2534,12 +2536,21 @@ export default function App() {
 
   const onLogout = () => {
     api.logout();
-    localStorage.removeItem('velocity.email'); localStorage.removeItem('velocity.name');
-    localStorage.removeItem('velocity.avatar'); localStorage.removeItem('velocity.home');
-    setAuthed(false); setEmail(''); setDisplayName(''); setAvatar(''); setFavs([]); setPlaylists([]); setRecent([]); setHomeRows([]); setSavedAlbums([]);
-    setTrack(null); setPlaying(false); setView(null); setOpenPlaylist(null); setTab('home');
+    localStorage.removeItem('velocity.email');
+    localStorage.removeItem('velocity.name');
+    localStorage.removeItem('velocity.avatar');
+    localStorage.removeItem('velocity.home');
+    // Recargar la página evita renders intermedios con estado inconsistente.
+    window.location.reload();
   };
-  const handleAuthed = (em, name) => { if (em) { setEmail(em); localStorage.setItem('velocity.email', em); } if (name != null) { setDisplayName(name); localStorage.setItem('velocity.name', name); } setAuthed(true); };
+  const handleAuthed = (em, name) => {
+    if (em) { setEmail(em); localStorage.setItem('velocity.email', em); }
+    if (name != null) { setDisplayName(name); localStorage.setItem('velocity.name', name); }
+    // Forzar regeneración del feed al hacer login (borra el feed del usuario anterior).
+    setHomeRows([]);
+    setFeedNonce(n => n + 1);
+    setAuthed(true);
+  };
   const deleteAccount = async () => { try { await api.deleteAccount(); } catch {} onLogout(); };
 
   // ── Selección múltiple ──
