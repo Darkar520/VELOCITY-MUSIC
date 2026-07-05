@@ -1212,6 +1212,22 @@ function DetailView({ view, ctx }) {
   useEffect(() => { setShowAll(false); }, [view]);
   const d = detailData && detailData.type === view.type ? detailData : null;
 
+  // Fuzzy match: verifica si una pista está descargada por ID exacto o por
+  // título+artista normalizados. Resuelve el mismatch entre IDs de YT Music
+  // y los IDs con los que se guardó la descarga en IndexedDB.
+  const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const isDownloaded = React.useCallback((t) => {
+    if (!t) return false;
+    if (downloaded.has(t.id)) return true;
+    // Fallback: comparar título+artista normalizados contra las metas cacheadas.
+    const tk = norm(t.title) + '|' + norm(t.artist);
+    for (const id of downloaded) {
+      const cached = trackById(id);
+      if (cached && norm(cached.title) + '|' + norm(cached.artist) === tk) return true;
+    }
+    return false;
+  }, [downloaded]);
+
   const Back = () => (
     <button onClick={() => setView(null)} className="press" style={{ display:'flex', alignItems:'center', gap:6, background:'none', border:'none', cursor:'pointer', color:'var(--txt-1)', marginBottom:18, paddingTop:4, fontSize:13, fontWeight:700 }}><Icon.ChevL c="var(--txt-1)" sz={18} /> Atrás</button>
   );
@@ -1244,7 +1260,7 @@ function DetailView({ view, ctx }) {
           </div>
         )}
         <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-          {songs.map(t => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => play(t, ids)} onSwipeRemove={removeFromQueue} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
+          {songs.map(t => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => play(t, ids)} onSwipeRemove={removeFromQueue} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={isDownloaded(t)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
         </div>
       </div>
     );
@@ -1281,7 +1297,7 @@ function DetailView({ view, ctx }) {
             </>}
             <SectionHeader label="Canciones populares" accent={T.accent} action={!selecting && <button onClick={() => startSelection()} className="press" style={{ background:'none', border:'none', cursor:'pointer', color:T.accent, fontSize:11.5, fontWeight:800 }}>Seleccionar</button>} />
             <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-              {songs.map(t => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => play(t, all.map(s=>s.id))} onSwipeRemove={removeFromQueue} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
+              {songs.map(t => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => play(t, all.map(s=>s.id))} onSwipeRemove={removeFromQueue} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={isDownloaded(t)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
             </div>
             {!showAll && all.length > 25 && (
               <button onClick={() => setShowAll(true)} className="press" style={{ display:'block', margin:'16px auto 0', background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:99, padding:'10px 22px', cursor:'pointer', color:'var(--txt-0)', fontSize:12.5, fontWeight:700 }}>Ver más canciones</button>
@@ -1328,7 +1344,7 @@ function DetailView({ view, ctx }) {
             </div>
           )}
           <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-            {songs.map((t, i) => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => play(t, songs.map(s=>s.id))} onSwipeRemove={removeFromQueue} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
+            {songs.map((t, i) => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => play(t, songs.map(s=>s.id))} onSwipeRemove={removeFromQueue} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={isDownloaded(t)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
           </div>
         </>
       )}
@@ -1829,10 +1845,17 @@ export default function App() {
   // ── Feed personalizado (mixes según lo que escuchas, guardas y descargas) ──
   const feedSigRef = useRef('');
   const feedTokenRef = useRef(0);
+  // Limpiar la firma guardada cada vez que feedNonce cambia (nuevo login u otro trigger)
+  // para garantizar que el efecto siempre regenere el feed, ignorando homeRows cacheado.
+  const prevFeedNonceRef = useRef(feedNonce);
+  if (prevFeedNonceRef.current !== feedNonce) {
+    prevFeedNonceRef.current = feedNonce;
+    feedSigRef.current = '';
+  }
   useEffect(() => {
     if (!authed) return;
-    // Esperar a que la biblioteca esté cargada para no generar feed genérico
-    // con datos vacíos — que es lo que causaba los carruseles genéricos.
+    // NO arrancar hasta que la biblioteca esté lista: sin ella los seeds estarán
+    // vacíos y se generaría un feed genérico aunque el usuario tenga historial.
     if (!libReadyRef.current) {
       const retry = setTimeout(() => setFeedNonce(n => n + 1), 800);
       return () => clearTimeout(retry);
@@ -1842,12 +1865,22 @@ export default function App() {
     favs.forEach(id => { score[id] = (score[id] || 0) + 6; });
     [...downloaded].forEach(id => { score[id] = (score[id] || 0) + 4; });
     const ranked = Object.keys(score).map(trackById).filter(Boolean).sort((a, b) => score[b.id] - score[a.id]);
-    const seeds = []; const seenArtist = new Set();
-    for (const t of ranked) { const a = (t.artist || '').toLowerCase(); if (seenArtist.has(a)) continue; seenArtist.add(a); seeds.push(t); if (seeds.length >= 5) break; }
+    // Tomar hasta 8 seeds con shuffle: artistas distintos, sin repetición,
+    // orden aleatorio para que el feed cambie entre sesiones.
+    const seedPool = []; const seenArtist = new Set();
+    for (const t of ranked) { const a = (t.artist || '').toLowerCase(); if (seenArtist.has(a)) continue; seenArtist.add(a); seedPool.push(t); if (seedPool.length >= 8) break; }
+    // Shuffle del pool de seeds para rotación real entre sesiones.
+    for (let i = seedPool.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [seedPool[i], seedPool[j]] = [seedPool[j], seedPool[i]]; }
+    const seeds = seedPool.slice(0, 6);
     const topSearches = [...new Set((recentSearches || []).map(s => (s || '').trim()).filter(Boolean))].slice(0, 6);
     const prefsSig = Array.isArray(onboardPrefs) ? onboardPrefs.map(p => p.q).join(',') : '';
-    const sig = seeds.map(s => s.id).join('|') + '::' + topSearches.join('|') + '::' + prefsSig + '#' + feedNonce;
-    if (sig === feedSigRef.current && homeRows.length) return;
+    // Incluir un slot temporal en la firma que cambia cada 6h para forzar
+    // variación aunque el historial del usuario no haya cambiado.
+    const timeSlot = Math.floor(Date.now() / (6 * 3600 * 1000));
+    const sig = seeds.map(s => s.id).join('|') + '::' + topSearches.join('|') + '::' + prefsSig + '#' + feedNonce + '@' + timeSlot;
+    // No bloquear si feedSigRef fue limpiado (nuevo login): solo comparar cuando
+    // hay contenido Y la firma es exactamente la misma.
+    if (feedSigRef.current && sig === feedSigRef.current && homeRows.length) return;
     feedSigRef.current = sig;
     const myToken = ++feedTokenRef.current;
     const alive = () => myToken === feedTokenRef.current;
@@ -1857,41 +1890,43 @@ export default function App() {
       const pick = (arr, n) => { const a = [...arr]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a.slice(0, n); };
       const oneOf = (arr) => arr[Math.floor(Math.random() * arr.length)];
       const cap1 = (s) => (s || '').charAt(0).toUpperCase() + (s || '').slice(1);
+      // Slot de variación temporal: cambia cada 6h → queries distintas sin acción del usuario.
+      const vary = () => Math.floor(Date.now() / (6 * 3600 * 1000)) % 5;
+      // Sufijos para rotar variantes de una misma query y obtener resultados distintos.
+      const VARY_SFXS = ['', ' hits', ' top songs', ' best', ' popular'];
+      const vSfx = VARY_SFXS[vary()];
       // Mezcla desde una PISTA semilla: su radio (relacionadas reales), coherente.
-      const mixFromSeed = async (seed, limit = 40) => {
+      const mixFromSeed = async (seed, limit = 50) => {
         try {
           const rel = await api.radio(seed.id, limit);
           const tracks = capPerArtist(dedupeByTitle([seed, ...rel.map(normalizeTrack)]), 8).filter(t => t.id).slice(0, limit);
           return tracks.length >= 6 ? { label: seed.artist || seed.title || 'Mezcla', tracks } : null;
         } catch { return null; }
       };
-      // Mezcla desde una CONSULTA (búsqueda o etiqueta): resuelve la pista real más
-      // relevante y arma la lista con SU radio. Evita el ruido de homónimos
-      // (p.ej. "Life Goes On" ya no junta canciones distintas con el mismo nombre).
+      // Mezcla desde una CONSULTA: resuelve la pista real más relevante y arma la
+      // lista con su radio. Incluye variación temporal en la query.
       const mixFromQuery = async (label, q) => {
         try {
-          const raw = await api.search(q);
+          const raw = await api.search(q + vSfx);
           const base = raw.map(normalizeTrack).find(t => t.id);
           if (!base) return null;
-          const rel = await api.radio(base.id, 40);
-          const tracks = capPerArtist(dedupeByTitle([base, ...rel.map(normalizeTrack)]), 6).filter(t => t.id).slice(0, 40);
+          const rel = await api.radio(base.id, 50);
+          const tracks = capPerArtist(dedupeByTitle([base, ...rel.map(normalizeTrack)]), 6).filter(t => t.id).slice(0, 50);
           return tracks.length >= 6 ? { label, tracks } : null;
         } catch { return null; }
       };
-      // Mezcla BARATA desde una consulta de GÉNERO/ánimo (1 sola llamada de
-      // búsqueda). Coherente para géneros (no homónimos) y no abusa de la API.
+      // Mezcla BARATA desde consulta de GÉNERO/ánimo. Variación temporal incluida.
       const mixFromSearch = async (label, q) => {
         try {
-          const raw = await api.search(q);
-          const tracks = dedupeByTitle(raw.map(normalizeTrack)).filter(t => t.id).slice(0, 40);
+          const raw = await api.search(q + vSfx);
+          const tracks = dedupeByTitle(raw.map(normalizeTrack)).filter(t => t.id).slice(0, 50);
           return tracks.length >= 6 ? { label, tracks } : null;
         } catch { return null; }
       };
-      // Sección de un género con varias tarjetas: 1 búsqueda del género → toma los
-      // artistas distintos y una tarjeta por artista (búsqueda del artista, barata).
+      // Sección de un género con varias tarjetas por artista.
       const genreCards = async (q, n = 4) => {
         try {
-          const raw = await api.search(q);
+          const raw = await api.search(q + vSfx);
           const cand = dedupeByTitle(raw.map(normalizeTrack)).filter(t => t.id);
           const artists = []; const seen = new Set();
           for (const t of cand) { const a = (t.artist || '').trim(); const k = a.toLowerCase(); if (!a || seen.has(k)) continue; seen.add(k); artists.push(a); if (artists.length >= n) break; }
@@ -1904,7 +1939,7 @@ export default function App() {
         if (!bases.length) return null;
         const known = new Set([...recent, ...favs, ...[...downloaded], ...bases.map(s => s.id)]);
         try {
-          const rels = await Promise.all(bases.slice(0, 5).map(s => api.radio(s.id, 40).catch(() => [])));
+          const rels = await Promise.all(bases.slice(0, 5).map(s => api.radio(s.id, 50).catch(() => [])));
           let tracks = capPerArtist(dedupeByTitle(rels.flat().map(normalizeTrack)), 3).filter(t => t.id && !known.has(t.id));
           for (let i = tracks.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [tracks[i], tracks[j]] = [tracks[j], tracks[i]]; }
           const out = tracks.slice(0, 50);
@@ -1931,26 +1966,26 @@ export default function App() {
       if (hasHistory) {
         if (seeds.length) pushSection('Hecho para ti', clean(await Promise.all(seeds.slice(0, 6).map(s => mixFromSeed(s, 50)))));
         if (topSearches.length) pushSection('Inspirado en tus búsquedas', clean(await Promise.all(topSearches.map(term => mixFromQuery(cap1(term), term)))));
-        if (freshSeeds.length) pushSection('Tu momento actual', clean(await Promise.all(freshSeeds.slice(0, 5).map(s => mixFromSeed(s, 40)))));
-        if (seeds.length) { const bs = pick(seeds, 4); pushSection('Porque te gusta ' + (bs[0]?.artist || 'tu música'), clean(await Promise.all(bs.map(s => mixFromSeed(s, 40))))); }
+        if (freshSeeds.length) pushSection('Tu momento actual', clean(await Promise.all(freshSeeds.slice(0, 5).map(s => mixFromSeed(s, 50)))));
+        if (seeds.length) { const bs = pick(seeds, 4); pushSection('Porque te gusta ' + (bs[0]?.artist || 'tu música'), clean(await Promise.all(bs.map(s => mixFromSeed(s, 50))))); }
         if (favs.length) {
           const favSeeds = favs.slice(0, 5);
           try {
-            const radios = await Promise.all(favSeeds.map(id => api.radio(id, 40).catch(() => [])));
+            const radios = await Promise.all(favSeeds.map(id => api.radio(id, 50).catch(() => [])));
             const merged = capPerArtist(dedupeByTitle(radios.flat().map(normalizeTrack)), 4).filter(t => t.id).slice(0, 50);
             if (merged.length >= 8) pushSection('Tus favoritos expandidos', [{ label: 'Mix de Favoritos', tracks: merged }]);
           } catch {}
         }
         { const disc = await buildDiscovery(seeds.length ? seeds : freshSeeds, 'Descubrimiento para ti'); if (disc) pushSection('Descubrimiento para ti', [disc]); }
-        // Exploración por tus géneros elegidos (búsqueda barata, fiable, coherente).
+        // Combinar prefs de onboarding con historial personal para usuarios con historial.
         if (prefs.length) pushSection('Tus géneros', clean(await Promise.all(prefs.slice(0, 10).map(p => mixFromSearch(p.label, p.q)))));
-        for (const p of prefs.slice(0, 3)) { if (!alive()) break; pushSection('Lo mejor de ' + p.label, await genreCards(p.q, 4)); }
+        for (const p of pick(prefs, 3)) { if (!alive()) break; pushSection('Lo mejor de ' + p.label, await genreCards(p.q, 4)); }
         pushSection('Estados de ánimo', clean(await Promise.all(pick(MOODS, 8).map(m => mixFromSearch('Mix ' + m.label, m.q)))));
         pushSection('Tendencias ahora', clean(await Promise.all(pick(SEED_ROWS, 6).map(s => mixFromSearch(s.label, s.q)))));
       } else if (prefs.length) {
-        // ── NUEVO CON ONBOARDING: personalizado por sus géneros desde el día 1 ──
+        // ── CON ONBOARDING sin historial: personalizado por géneros desde el día 1 ──
         pushSection('Basado en tus gustos', clean(await Promise.all(prefs.map(p => mixFromSearch(p.label, p.q)))));
-        for (const p of prefs.slice(0, 6)) { if (!alive()) break; pushSection('Lo mejor de ' + p.label, await genreCards(p.q, 4)); }
+        for (const p of pick(prefs, 6)) { if (!alive()) break; pushSection('Lo mejor de ' + p.label, await genreCards(p.q, 4)); }
         const baseTracks = await resolvePrefTracks(prefs.slice(0, 4));
         { const disc = await buildDiscovery(baseTracks, 'Descubre para ti'); if (disc) pushSection('Descubre para ti', [disc]); }
         pushSection('Estados de ánimo', clean(await Promise.all(pick(MOODS, 8).map(m => mixFromSearch('Mix ' + m.label, m.q)))));
