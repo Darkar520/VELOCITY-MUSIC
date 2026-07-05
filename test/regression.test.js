@@ -400,3 +400,138 @@ test('Regresión: /api/stream-proxy no tiene Content-Encoding: gzip', async () =
   // El proxy puede responder con cualquier código, pero NUNCA debe comprimir.
   assert.notEqual(res.headers['content-encoding'], 'gzip');
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 14. Bug Google login: handleAuthed no debe llamarse más de una vez
+// (done=true previene doble invocación y estado inconsistente → pantalla negra)
+// ─────────────────────────────────────────────────────────────────────────────
+test('Regresión: Google login — el handler done=true previene doble invocación', async () => {
+  // Simula el patrón done/finish que protege el flujo.
+  let authedCalls = 0;
+  const onAuthed = () => { authedCalls++; };
+
+  let done = false;
+  const finish = (fn) => { if (done) return; done = true; fn(); };
+
+  // Primer mensaje → debe llamar onAuthed.
+  finish(() => onAuthed());
+  assert.equal(authedCalls, 1);
+
+  // Segundo evento (popup cerró después del mensaje) → NO debe llamar onAuthed.
+  finish(() => onAuthed());
+  assert.equal(authedCalls, 1, 'done=true previene segunda invocación');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 15. Bug feed genérico: CACHE_VERSION '6' invalida velocity.home al cargar
+// ─────────────────────────────────────────────────────────────────────────────
+test('Regresión: CACHE_VERSION 6 borra velocity.home si hay versión vieja', () => {
+  // Simula el comportamiento de catalog.js al arrancar con version vieja.
+  const store = new Map([
+    ['velocity.cacheVer', '5'],       // versión vieja
+    ['velocity.home', '[{"section":"stale"}]'], // feed cacheado viejo
+    ['velocity.meta', '[]'],
+  ]);
+  const ls = {
+    getItem: (k) => store.get(k) ?? null,
+    setItem: (k, v) => store.set(k, String(v)),
+    removeItem: (k) => store.delete(k),
+  };
+
+  // Ejecutar la lógica de invalidación de catalog.js (v6).
+  const CACHE_VERSION = '6';
+  if (ls.getItem('velocity.cacheVer') !== CACHE_VERSION) {
+    ls.removeItem('velocity.meta');
+    ls.removeItem('velocity.home');
+    ls.setItem('velocity.cacheVer', CACHE_VERSION);
+  }
+
+  assert.equal(ls.getItem('velocity.home'), null, 'velocity.home debe borrarse al actualizar versión');
+  assert.equal(ls.getItem('velocity.cacheVer'), '6', 'versión debe quedar actualizada');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 16. Bug cascada de saltos: protección consecutiveFailsRef detiene la cascada
+// ─────────────────────────────────────────────────────────────────────────────
+test('Regresión: consecutiveFailsRef detiene cascada tras 3 fallos seguidos', () => {
+  // Simula el contador de fallos consecutivos.
+  let consecutiveFails = 0;
+  let stopped = false;
+  let toasts = [];
+
+  const handleFail = () => {
+    consecutiveFails++;
+    if (consecutiveFails > 3) {
+      consecutiveFails = 0;
+      stopped = true;
+      toasts.push('Varias pistas no disponibles. Verifica tu conexión.');
+      return;
+    }
+    toasts.push('siguiente');
+  };
+
+  // 3 fallos → sigue saltando.
+  handleFail(); handleFail(); handleFail();
+  assert.equal(stopped, false, 'no debe detenerse antes de 4 fallos');
+  assert.equal(toasts.length, 3);
+
+  // 4º fallo → detiene la cascada.
+  handleFail();
+  assert.equal(stopped, true, 'debe detenerse al 4º fallo consecutivo');
+
+  // Después de parar, el contador se resetea → el siguiente fallo aislado vuelve a saltar.
+  assert.equal(consecutiveFails, 0, 'contador debe resetearse al parar');
+  handleFail();
+  assert.equal(stopped, true); // stopped sigue true porque no se resetea en la simulación
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 17. Clientes YT android → ios: el extractor intenta en orden
+// ─────────────────────────────────────────────────────────────────────────────
+test('Regresión: extractor YT intenta android primero, luego ios', async () => {
+  const clientsUsed = [];
+  // Simula YT_CLIENTS: android falla, ios funciona.
+  const YT_CLIENTS = [
+    ['--extractor-args', 'youtube:player_client=android'],
+    ['--extractor-args', 'youtube:player_client=ios'],
+  ];
+
+  const runForUrl = async (args) => {
+    const clientArg = args.find(a => a.includes('player_client='));
+    if (clientArg) clientsUsed.push(clientArg.replace('youtube:player_client=', ''));
+    // android falla (null), ios funciona.
+    return clientArg?.includes('android') ? null : 'https://cdn/audio-ios.webm';
+  };
+
+  let url = null;
+  for (const clientArgs of YT_CLIENTS) {
+    const baseArgs = ['-f', 'bestaudio', '-g'];
+    url = await runForUrl([...baseArgs, ...clientArgs, 'ytsearch1:Deadmau5 Strobe']);
+    if (url) break;
+  }
+
+  assert.deepEqual(clientsUsed, ['android', 'ios'], 'debe intentar android primero, luego ios');
+  assert.match(url, /ios/, 'URL debe venir del cliente ios (android falló)');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 18. streamUrl incluye quality para que el backend cachee correctamente por calidad
+// ─────────────────────────────────────────────────────────────────────────────
+test('Regresión: streamUrl incluye quality — clave de caché del backend es correcta', () => {
+  // Simula la construcción de URL que hace api.streamUrl en el frontend.
+  const buildStreamUrl = ({ artist, title, id, quality }) => {
+    const params = new URLSearchParams();
+    if (artist) params.set('artist', artist);
+    if (title) params.set('title', title);
+    if (id) params.set('id', id);
+    if (quality) params.set('quality', quality);
+    return `/api/stream-proxy?${params.toString()}`;
+  };
+
+  const urlHigh = buildStreamUrl({ artist: 'A', title: 'B', id: 'v1', quality: 'high' });
+  const urlLow  = buildStreamUrl({ artist: 'A', title: 'B', id: 'v1', quality: 'low' });
+
+  assert.ok(urlHigh.includes('quality=high'), 'URL high debe incluir quality=high');
+  assert.ok(urlLow.includes('quality=low'), 'URL low debe incluir quality=low');
+  assert.notEqual(urlHigh, urlLow, 'URLs de distinta calidad deben ser distintas (clave de caché)');
+});

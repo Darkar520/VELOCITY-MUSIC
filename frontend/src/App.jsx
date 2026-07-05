@@ -31,9 +31,26 @@ function AuthScreen({ onAuthed, T }) {
     const url = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=' + encodeURIComponent(googleClientId) + '&redirect_uri=' + encodeURIComponent(redirect) + '&response_type=id_token&scope=openid%20email%20profile&nonce=' + Date.now();
     const w = 480, h = 600, left = (screen.width - w) / 2, top2 = (screen.height - h) / 2;
     const popup = window.open(url, 'google-login', 'width=' + w + ',height=' + h + ',top=' + top2 + ',left=' + left);
-    const onMsg = async (e) => { if (!e.data || !e.data.idToken) return; window.removeEventListener('message', onMsg); try { const data = await api.googleLogin(e.data.idToken); onAuthed(data.email || '', data.displayName || ''); } catch (err2) { setErr(err2.message || 'No se pudo iniciar con Google.'); setBusy(false); } };
+    let done = false;  // evita doble invocación si el popup cierra y llega mensaje a la vez
+    const finish = (fn) => { if (done) return; done = true; clearInterval(check); window.removeEventListener('message', onMsg); fn(); };
+    const onMsg = async (e) => {
+      if (!e.data || !e.data.idToken) return;
+      finish(async () => {
+        try {
+          const data = await api.googleLogin(e.data.idToken);
+          // Llamar onAuthed primero monta la app; setBusy nunca se invoca en un
+          // componente desmontado (done=true protege la doble invocación).
+          onAuthed(data.email || '', data.displayName || '');
+        } catch (err2) {
+          setBusy(false);
+          setErr(err2.message || 'No se pudo iniciar con Google.');
+        }
+      });
+    };
     window.addEventListener('message', onMsg);
-    const check = setInterval(() => { if (popup && popup.closed) { clearInterval(check); window.removeEventListener('message', onMsg); setBusy(false); } }, 500);
+    const check = setInterval(() => {
+      if (popup && popup.closed) finish(() => setBusy(false));
+    }, 500);
   };
 
   const guestLogin = async () => {
@@ -2490,7 +2507,9 @@ export default function App() {
   };
 
   const onLogout = () => {
-    api.logout(); localStorage.removeItem('velocity.email'); localStorage.removeItem('velocity.name'); localStorage.removeItem('velocity.avatar');
+    api.logout();
+    localStorage.removeItem('velocity.email'); localStorage.removeItem('velocity.name');
+    localStorage.removeItem('velocity.avatar'); localStorage.removeItem('velocity.home');
     setAuthed(false); setEmail(''); setDisplayName(''); setAvatar(''); setFavs([]); setPlaylists([]); setRecent([]); setHomeRows([]); setSavedAlbums([]);
     setTrack(null); setPlaying(false); setView(null); setOpenPlaylist(null); setTab('home');
   };
