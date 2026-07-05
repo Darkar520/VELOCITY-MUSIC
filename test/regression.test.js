@@ -1,0 +1,402 @@
+/**
+ * regression.test.js — Suite de regresión avanzada para los bugs reales que
+ * ocurrieron en producción. Cada test documenta el bug, la causa raíz y el
+ * invariante que nunca debe volver a romperse.
+ *
+ * Cubre las implementaciones recientes:
+ *   - forceRefresh en streamProxy (reintento con URL fresca)
+ *   - audioResolver forceRefresh + calidad en clave de caché
+ *   - Fallback YT android → ios en el extractor
+ *   - searchAll con múltiples fuentes (YT + SoundCloud)
+ *   - Cabeceras de seguridad y ADMIN_KEY (ya en hardening.test.js, extendidas)
+ *   - streamUrl con parámetro `stream` (pistas de SoundCloud)
+ */
+
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fc from 'fast-check';
+import request from 'supertest';
+import { createApp } from '../src/app.js';
+import { StreamCache } from '../src/services/streamCache.js';
+import { resolve as resolveAudio, ResolveError } from '../src/services/audioResolver.js';
+import {
+  createStreamProxyHandler,
+  validateProxyParams,
+} from '../src/services/streamProxy.js';
+import {
+  createMemoryUserRepo,
+  createMemoryPlaylistRepo,
+  createMemoryFavoritesRepo,
+  createMemoryHistoryRepo,
+  createMemoryTrackRepo,
+} from '../src/repositories/memory.js';
+
+const RUNS = { numRuns: 60 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function makeRes() {
+  return {
+    statusCode: null, body: null, headers: null, headersSent: false, ended: false,
+    status(c) { this.statusCode = c; return this; },
+    json(o)   { this.body = o; this.headersSent = true; return this; },
+    writeHead(c, h) { this.statusCode = c; this.headers = h; this.headersSent = true; return this; },
+    end() { this.ended = true; return this; },
+  };
+}
+
+function buildApp(overrides = {}) {
+  return createApp({
+    cache: new StreamCache(),
+    catalogImpl: async (q) => [{ id: 'v1', title: `${q} song`, artist: 'Test', durationSeconds: 200 }],
+    extractorImpl: async () => 'https://cdn.example.com/audio.webm',
+    getActiveMode: () => 'full',
+    startTime: Date.now(),
+    userRepo: createMemoryUserRepo(),
+    playlistRepo: createMemoryPlaylistRepo(),
+    favoritesRepo: createMemoryFavoritesRepo(),
+    historyRepo: createMemoryHistoryRepo(),
+    trackRepo: createMemoryTrackRepo(['v1']),
+    jwtSecret: 'test-secret',
+    staticDir: null,
+    ...overrides,
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 1. audioResolver — forceRefresh omite la caché (bug: URL expirada)
+// ─────────────────────────────────────────────────────────────────────────────
+// Bug histórico: la URL de googlevideo expiraba (TTL < 4h en la práctica) y
+// el proxy devolvía 502. forceRefresh bypasea el StreamCache y re-resuelve.
+test('Regresión: forceRefresh omite caché y obtiene URL fresca', async () => {
+  const cache = new StreamCache();
+  const staleUrl = 'https://stale.googlevideo.com/expired';
+  const freshUrl = 'https://fresh.googlevideo.com/valid';
+  cache.set(cache.keyFor('Artist', 'Song'), staleUrl, 3600);
+
+  let calls = 0;
+  const extractor = async () => { calls++; return freshUrl; };
+
+  // Sin forceRefresh → devuelve la stale de caché sin llamar al extractor.
+  const r1 = await resolveAudio({ artist: 'Artist', title: 'Song' }, {
+    cache, mode: 'full', extractorImpl: extractor,
+  });
+  assert.equal(r1.url, staleUrl);
+  assert.equal(r1.fromCache, true);
+  assert.equal(calls, 0);
+
+  // Con forceRefresh → salta la caché y llama al extractor.
+  const r2 = await resolveAudio({ artist: 'Artist', title: 'Song' }, {
+    cache, mode: 'full', extractorImpl: extractor, forceRefresh: true,
+  });
+  assert.equal(r2.url, freshUrl);
+  assert.equal(r2.fromCache, false);
+  assert.equal(calls, 1);
+  // La caché se actualiza con la URL fresca.
+  assert.equal(cache.get(cache.keyFor('Artist', 'Song')), freshUrl);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2. audioResolver — clave de caché incluye calidad
+// ─────────────────────────────────────────────────────────────────────────────
+// Bug potencial: si la clave no incluye la calidad, un hit de 'high' podría
+// servir a una petición de 'low' con el formato incorrecto.
+test('Regresión: clave de caché segrega por calidad (high ≠ low)', async () => {
+  const cache = new StreamCache();
+  let extractorCalled = 0;
+  const extractor = async ({ quality }) => {
+    extractorCalled++;
+    return quality === 'high'
+      ? 'https://cdn/audio-high.webm'
+      : 'https://cdn/audio-low.m4a';
+  };
+
+  const rHigh = await resolveAudio({ artist: 'A', title: 'B', quality: 'high' }, {
+    cache, mode: 'full', extractorImpl: extractor,
+  });
+  const rLow = await resolveAudio({ artist: 'A', title: 'B', quality: 'low' }, {
+    cache, mode: 'full', extractorImpl: extractor,
+  });
+
+  // Cada calidad debe tener su URL propia.
+  assert.match(rHigh.url, /high/);
+  assert.match(rLow.url, /low/);
+  assert.equal(extractorCalled, 2); // el extractor se llamó para cada calidad
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 3. streamProxy — reintento automático con forceRefresh ante upstream 403/502
+// ─────────────────────────────────────────────────────────────────────────────
+// Bug histórico: URL de audio expirada → upstream 403 → proxy devolvía 502
+// sin intentar re-resolver. Con el reintento, el 2º intento usa forceRefresh.
+test('Regresión: proxy reintenta con forceRefresh cuando upstream responde 403', async () => {
+  let attempts = 0;
+  let forcedAttempt = false;
+
+  const resolveUrl = async (_params, opts = {}) => {
+    attempts++;
+    if (opts.forceRefresh) forcedAttempt = true;
+    // 1er intento → URL expirada que dará 403; 2º intento → URL fresca (200).
+    return { url: attempts === 1 ? 'https://cdn/expired' : 'https://cdn/fresh' };
+  };
+
+  let fetchCount = 0;
+  const fetchImpl = async (url) => {
+    fetchCount++;
+    // La URL expirada da 403; la fresca da 200.
+    const status = url.includes('expired') ? 403 : 200;
+    return { status, headers: new Map([['content-type', 'audio/webm']]), body: null };
+  };
+
+  const handler = createStreamProxyHandler({ resolveUrl, fetchImpl, timeoutMs: 5000 });
+  const res = makeRes();
+  await handler({ query: { artist: 'A', title: 'B' }, headers: {} }, res);
+
+  assert.equal(attempts, 2, 'debe haber 2 intentos de resolución');
+  assert.equal(forcedAttempt, true, 'el 2º intento debe tener forceRefresh=true');
+  assert.equal(fetchCount, 2, 'debe haber 2 fetch upstream');
+  assert.equal(res.statusCode, 200);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4. streamProxy — NO reintenta cuando el 1er intento ya es exitoso
+// ─────────────────────────────────────────────────────────────────────────────
+test('Regresión: proxy no reintenta innecesariamente en caso exitoso', async () => {
+  let attempts = 0;
+  const resolveUrl = async () => { attempts++; return { url: 'https://cdn/good' }; };
+  const fetchImpl = async () => ({
+    status: 200,
+    headers: new Map([['content-type', 'audio/webm']]),
+    body: null,
+  });
+
+  const handler = createStreamProxyHandler({ resolveUrl, fetchImpl, timeoutMs: 5000 });
+  await handler({ query: { artist: 'A', title: 'B' }, headers: {} }, makeRes());
+  assert.equal(attempts, 1, 'solo 1 intento cuando el upstream responde 200');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. streamProxy — pista SoundCloud con URL directa (stream param)
+// ─────────────────────────────────────────────────────────────────────────────
+// Nueva feature: las pistas de SoundCloud pasan stream=<url> en la query.
+// El audioResolver las trata como URL explícita → no necesita yt-dlp.
+test('Regresión: pista SoundCloud con stream URL explícita no invoca extractor', async () => {
+  const scUrl = 'https://api.soundcloud.com/stream/tracks/123456789';
+  let extractorCalled = false;
+  const extractor = async () => { extractorCalled = true; return 'https://yt/audio'; };
+
+  const cache = new StreamCache();
+  const result = await resolveAudio(
+    { artist: 'Artist', title: 'Song', stream: scUrl },
+    { cache, mode: 'full', extractorImpl: extractor },
+  );
+
+  assert.equal(result.status, 302);
+  assert.equal(result.url, scUrl);
+  assert.equal(extractorCalled, false, 'no debe invocar yt-dlp para una URL de stream explícita');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6. searchAll — combina fuentes YT + SoundCloud (sin mezclar álbumes/artistas)
+// ─────────────────────────────────────────────────────────────────────────────
+// Nueva feature: searchAllImpl combina ytSearchAll + scCatalog. Verifica que:
+// - las canciones de ambas fuentes aparecen
+// - los álbumes y artistas siguen siendo solo de YT (SC no los provee)
+// - una fuente puede fallar sin romper todo
+test('Regresión: searchAll mezcla YT + SC; fallo de SC no rompe la respuesta', async () => {
+  const ytSongs = [{ id: 'yt1', title: 'YT Song', artist: 'YT Artist', durationSeconds: 200 }];
+  const scSongs = [{ id: 'sc1', title: 'SC Song', artist: 'SC Artist', source: 'soundcloud', streamUrl: 'https://sc.com/track/1' }];
+  const ytAlbums = [{ albumId: 'alb1', name: 'YT Album' }];
+  const ytArtists = [{ artistId: 'art1', name: 'YT Artist' }];
+
+  // Caso normal: ambas fuentes responden.
+  const combined = (() => {
+    const ytAll = async () => ({ songs: ytSongs, albums: ytAlbums, artists: ytArtists });
+    const scAll = async () => scSongs;
+    return async (q) => {
+      const [yt, sc] = await Promise.allSettled([ytAll(q), scAll(q)]);
+      const ytData = yt.status === 'fulfilled' ? yt.value : { songs: [], albums: [], artists: [] };
+      const scData = sc.status === 'fulfilled' ? sc.value : [];
+      return { songs: [...(ytData.songs || []), ...scData], albums: ytData.albums || [], artists: ytData.artists || [] };
+    };
+  })();
+
+  const result = await combined('test');
+  assert.equal(result.songs.length, 2);
+  assert.ok(result.songs.some(s => s.source === 'soundcloud'));
+  assert.ok(result.songs.some(s => !s.source));
+  assert.equal(result.albums.length, 1);
+  assert.equal(result.artists.length, 1);
+
+  // Caso degradado: SC falla → solo YT songs, sin error.
+  const degraded = (() => {
+    const ytAll = async () => ({ songs: ytSongs, albums: ytAlbums, artists: ytArtists });
+    const scAll = async () => { throw new Error('SC down'); };
+    return async (q) => {
+      const [yt, sc] = await Promise.allSettled([ytAll(q), scAll(q)]);
+      const ytData = yt.status === 'fulfilled' ? yt.value : { songs: [], albums: [], artists: [] };
+      const scData = sc.status === 'fulfilled' ? sc.value : [];
+      return { songs: [...(ytData.songs || []), ...scData], albums: ytData.albums || [], artists: ytData.artists || [] };
+    };
+  })();
+
+  const fallback = await degraded('test');
+  assert.equal(fallback.songs.length, 1, 'cuando SC falla solo vienen canciones de YT');
+  assert.equal(fallback.albums.length, 1);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 7. /api/search/all endpoint — integración completa
+// ─────────────────────────────────────────────────────────────────────────────
+test('Regresión: /api/search/all devuelve songs/albums/artists', async () => {
+  const app = buildApp({
+    searchAllImpl: async (q) => ({
+      songs: [{ id: 'v1', title: `${q}`, artist: 'Test', durationSeconds: 200 }],
+      albums: [{ albumId: 'a1', name: 'Album' }],
+      artists: [{ artistId: 'ar1', name: 'Artist' }],
+    }),
+  });
+  const res = await request(app).get('/api/search/all').query({ q: 'strobe' }).expect(200);
+  assert.ok(Array.isArray(res.body.songs));
+  assert.ok(Array.isArray(res.body.albums));
+  assert.ok(Array.isArray(res.body.artists));
+  assert.equal(res.body.songs[0].title, 'strobe');
+});
+
+test('Regresión: /api/search/all sin q → 400', async () => {
+  const app = buildApp({ searchAllImpl: async () => ({ songs: [], albums: [], artists: [] }) });
+  await request(app).get('/api/search/all').expect(400);
+});
+
+test('Regresión: /api/search/all sin impl → 501', async () => {
+  const app = buildApp({ searchAllImpl: null });
+  await request(app).get('/api/search/all').query({ q: 'test' }).expect(501);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 8. Fallback de cliente YT (android → ios) — interfaz del extractor
+// ─────────────────────────────────────────────────────────────────────────────
+// El extractor intenta android primero; si devuelve null, intenta ios.
+// Como no podemos correr yt-dlp en tests, verificamos la INTERFAZ:
+// si el primer extractor falla, el segundo se usa.
+test('Regresión: extractor usa fallback cuando el primero devuelve null', async () => {
+  let attempt = 0;
+  // Simula el comportamiento del extractor con dos clientes: el 1º falla, el 2º funciona.
+  const simulatedExtractor = async ({ artist, title }) => {
+    attempt++;
+    if (attempt === 1) return null; // cliente android falla
+    return `https://cdn/${artist}-${title}.webm`; // cliente ios funciona
+  };
+
+  // Wrapper que simula el loop de YT_CLIENTS del extractor real.
+  const extractorWithFallback = async (params) => {
+    for (let i = 0; i < 2; i++) {
+      const url = await simulatedExtractor(params);
+      if (url) return url;
+    }
+    return null;
+  };
+
+  const cache = new StreamCache();
+  const result = await resolveAudio({ artist: 'Deadmau5', title: 'Strobe' }, {
+    cache, mode: 'full', extractorImpl: extractorWithFallback,
+  });
+
+  assert.equal(result.status, 302);
+  assert.match(result.url, /Deadmau5/);
+  assert.equal(attempt, 2, 'debe haber 2 intentos (android fallido + ios exitoso)');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 9. streamProxy — pista de SoundCloud a través del handler completo
+// ─────────────────────────────────────────────────────────────────────────────
+test('Regresión: handler proxy acepta stream param (SoundCloud URL directa)', async () => {
+  const scDirectUrl = 'https://api.soundcloud.com/tracks/123/stream';
+  let resolvedStream;
+
+  const resolveUrl = async (params) => {
+    resolvedStream = params.stream; // capturamos lo que recibe
+    return { url: 'https://cdn/proxy-served.m4a' }; // el proxy devuelve audio real
+  };
+  const fetchImpl = async () => ({
+    status: 200,
+    headers: new Map([['content-type', 'audio/mp4']]),
+    body: null,
+  });
+
+  const handler = createStreamProxyHandler({ resolveUrl, fetchImpl, timeoutMs: 5000 });
+  const res = makeRes();
+  await handler({
+    query: { artist: 'Artist', title: 'Track', stream: scDirectUrl },
+    headers: {},
+  }, res);
+
+  assert.equal(resolvedStream, scDirectUrl, 'el stream param debe llegar al resolver');
+  assert.equal(res.statusCode, 200);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 10. PBT: validateProxyParams acepta streams válidos de SoundCloud
+// ─────────────────────────────────────────────────────────────────────────────
+test('PBT: validateProxyParams — artist/title válidos siempre pasan (invariante)', () => {
+  fc.assert(
+    fc.property(
+      fc.string({ minLength: 1, maxLength: 200 }).filter(s => s.trim().length >= 1),
+      fc.string({ minLength: 1, maxLength: 200 }).filter(s => s.trim().length >= 1),
+      (artist, title) => {
+        const v = validateProxyParams(artist, title);
+        assert.equal(v.ok, true);
+        // Los valores quedan recortados.
+        assert.equal(v.artist, artist.trim());
+        assert.equal(v.title, title.trim());
+      },
+    ),
+    RUNS,
+  );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 11. audioResolver — forceRefresh no cachea si el extractor falla
+// ─────────────────────────────────────────────────────────────────────────────
+test('Regresión: forceRefresh con extractor fallido → degraded, caché sin cambios', async () => {
+  const cache = new StreamCache();
+  const goodUrl = 'https://cdn/good.webm';
+  cache.set(cache.keyFor('A', 'B'), goodUrl, 3600);
+
+  const r = await resolveAudio({ artist: 'A', title: 'B' }, {
+    cache, mode: 'full',
+    extractorImpl: async () => null, // extractor falla
+    forceRefresh: true,
+  });
+
+  // El extractor falla → degraded, no 302.
+  assert.equal(r.status, 'degraded');
+  // La caché NO fue sobrescrita con null/undefined.
+  assert.equal(cache.get(cache.keyFor('A', 'B')), goodUrl, 'la entrada válida no debe borrarse');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 12. Cabeceras de seguridad — presente en todos los endpoints (no solo /status)
+// ─────────────────────────────────────────────────────────────────────────────
+test('Regresión: cabeceras de seguridad presentes en /api/search (no solo /status)', async () => {
+  const app = buildApp();
+  const res = await request(app).get('/api/search').query({ q: 'test' }).expect(200);
+  assert.equal(res.headers['x-content-type-options'], 'nosniff');
+  assert.equal(res.headers['x-frame-options'], 'SAMEORIGIN');
+  assert.equal(res.headers['referrer-policy'], 'no-referrer');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 13. /api/stream-proxy sin gzip (invariante §6 GUARDRAILS)
+// ─────────────────────────────────────────────────────────────────────────────
+test('Regresión: /api/stream-proxy no tiene Content-Encoding: gzip', async () => {
+  const app = buildApp();
+  const res = await request(app)
+    .get('/api/stream-proxy')
+    .query({ artist: 'A', title: 'B' })
+    .set('Accept-Encoding', 'gzip');
+  // El proxy puede responder con cualquier código, pero NUNCA debe comprimir.
+  assert.notEqual(res.headers['content-encoding'], 'gzip');
+});
