@@ -47,12 +47,14 @@ export const api = {
   },
   // URL de streaming (proxy que resuelve con yt-dlp). Se usa como src del <audio>.
   // quality: 'high' | 'medium' | 'low' (mapeado desde la preferencia del usuario)
-  streamUrl({ artist, title, id, quality }) {
+  // stream: URL directa (opcional, para SoundCloud/fuentes sin resolución).
+  streamUrl({ artist, title, id, quality, stream }) {
     const params = new URLSearchParams();
     if (artist) params.set('artist', artist);
     if (title) params.set('title', title);
     if (id) params.set('id', id);
     if (quality) params.set('quality', quality);
+    if (stream) params.set('stream', stream);  // URL directa: no requiere yt-dlp
     return `/api/stream-proxy?${params.toString()}`;
   },
   // Precarga (warm-up) de la resolución de una pista en la caché del backend.

@@ -65,15 +65,15 @@ export function probeYtDlp() {
 }
 
 /**
- * Resuelve una URL directa de stream con fallbacks en cascada:
+ * Resuelve una URL directa de stream con fallback de cliente:
  *   1. YouTube (cliente android) — primario, evita PO tokens
  *   2. YouTube (cliente ios)     — fingerprint distinto, resiste rate-limit
- *   3. SoundCloud               — indie/underground; IPs raramente bloqueadas
  *
- * Devuelve la primera URL válida o null si todos los extractores fallan.
- * Con videoId (YT específico) solo intenta los clientes de YouTube.
+ * SoundCloud NO se usa como fallback aquí: tiene diferente biblioteca
+ * (indie/underground) y daría resultados distintos para artistas mainstream.
+ * Se ofrece como fuente separada en la búsqueda.
  *
- * @returns {Promise<string|null>} URL directa, o null si falla.
+ * @returns {Promise<string|null>} URL directa, o null si ambos clientes fallan.
  */
 export function createYtDlpExtractor() {
   return async function extractorImpl({ artist, title, videoId, quality }) {
@@ -83,18 +83,11 @@ export function createYtDlpExtractor() {
     const baseArgs = ['-f', audioFormatSelector(quality), '-g', '--no-playlist',
       '--extractor-retries', '1', '--socket-timeout', '20'];
 
-    // 1+2) Intentar con cada cliente de YouTube en orden (android → ios).
+    // Intentar con cada cliente de YouTube en orden (android → ios).
     for (const clientArgs of YT_CLIENTS) {
       const url = await runForUrl([...baseArgs, ...clientArgs, ytTarget]);
       if (url) return url;
     }
-
-    // 3) Fallback a SoundCloud — solo si no tenemos videoId específico de YT.
-    if (!videoId) {
-      const url = await runForUrl([...baseArgs, `scsearch1:${artist} - ${title}`]);
-      if (url) return url;
-    }
-
     return null;
   };
 }
@@ -243,4 +236,66 @@ function safeParse(line) {
 function pickThumb(thumbnails) {
   if (!Array.isArray(thumbnails) || thumbnails.length === 0) return null;
   return thumbnails[thumbnails.length - 1].url ?? null;
+}
+
+/**
+ * Catálogo de SoundCloud vía yt-dlp (`scsearchN:`).
+ * SoundCloud tiene una biblioteca fuerte de música indie, underground,
+ * remixes, DJs, artistas emergentes y géneros de nicho que no siempre
+ * están en YouTube Music. Se usa como FUENTE ADICIONAL en la búsqueda,
+ * no como fallback del extractor de YouTube.
+ */
+export function createSoundCloudCatalog() {
+  return async function soundCloudCatalog(query, limit = 10) {
+    const args = [
+      `scsearch${limit}:${query}`,
+      '--dump-json', '--flat-playlist', '--no-warnings',
+    ];
+    const lines = await runForLines(args);
+    return lines
+      .map((line) => safeParse(line))
+      .filter(Boolean)
+      .map((j) => {
+        const id = j.id ?? null;
+        const url = j.url ?? j.webpage_url ?? null;
+        let title = j.title ?? null;
+        let artist = j.uploader ?? j.artist ?? j.creator ?? null;
+        if (!artist && title && title.includes(' - ')) {
+          const [a, ...rest] = title.split(' - ');
+          artist = a.trim();
+          title = rest.join(' - ').trim();
+        }
+        title = cleanTitle(title, artist);
+        const artworkUrl =
+          pickThumb(j.thumbnails) ??
+          j.thumbnail ??
+          (j.artwork_url || null);
+        return {
+          id,
+          title,
+          artist,
+          album: null,
+          durationSeconds: j.duration ?? null,
+          artworkUrl,
+          // URL directa de SoundCloud para el stream proxy (no videoId de YT).
+          // El extractor primario la resolverá como URL explícita si llega en `stream`.
+          streamUrl: url,
+          source: 'soundcloud',
+        };
+      })
+      .filter((t) => t.id && t.title);
+  };
+}
+
+/**
+ * Resuelve la URL de audio de una pista de SoundCloud dado su ID o URL.
+ * Se usa cuando el usuario reproduce una pista encontrada desde SoundCloud.
+ */
+export function createSoundCloudExtractor() {
+  return async function scExtractor({ stream, quality }) {
+    if (!stream) return null;
+    const baseArgs = ['-f', audioFormatSelector(quality), '-g', '--no-playlist',
+      '--extractor-retries', '1', '--socket-timeout', '20'];
+    return runForUrl([...baseArgs, stream]);
+  };
 }

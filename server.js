@@ -6,7 +6,7 @@ import { StreamCache } from './src/services/streamCache.js';
 import { createLimiter, createInflight } from './src/lib/concurrency.js';
 import { normalizeText } from './src/lib/normalize.js';
 import { resolveActiveMode } from './src/services/resolutionMode.js';
-import { probeYtDlp, createYtDlpExtractor, createYtDlpCatalog, YT_DLP_BIN_DIR } from './src/extractors/ytdlp.js';
+import { probeYtDlp, createYtDlpExtractor, createYtDlpCatalog, createSoundCloudCatalog, YT_DLP_BIN_DIR } from './src/extractors/ytdlp.js';
 import { createYTMusicCatalog, createYTMusicArtist, createYTMusicAlbum, createYTMusicLyrics, createYTMusicSearchAll, createYTMusicRadio, createYTMusicSong } from './src/extractors/ytmusic.js';
 import { installYtDlpByDownload } from './src/services/extractorSetup.js';
 import {
@@ -139,7 +139,27 @@ export async function bootstrap() {
     albumImpl: createYTMusicAlbum(),
     radioImpl: createYTMusicRadio(),
     lyricsByIdImpl: createYTMusicLyrics(),
-    searchAllImpl: createYTMusicSearchAll(),
+    searchAllImpl: (() => {
+      const ytSearchAll = createYTMusicSearchAll();
+      const scCatalog = createSoundCloudCatalog();
+      // Búsqueda combinada: YouTube Music (principal) + SoundCloud (indie/underground).
+      // Los resultados de SC se añaden a las canciones con una etiqueta de fuente,
+      // para que el frontend pueda distinguirlos (source='soundcloud') si hace falta.
+      return async (q, limit) => {
+        const [ytData, scTracks] = await Promise.allSettled([
+          ytSearchAll(q, limit),
+          scCatalog(q, Math.min(limit ?? 10, 10)),
+        ]);
+        const yt = ytData.status === 'fulfilled' ? ytData.value : { songs: [], albums: [], artists: [] };
+        const sc = scTracks.status === 'fulfilled' ? scTracks.value : [];
+        // Mezclar canciones de SC al final de las de YT (no reemplazar, ampliar).
+        return {
+          songs: [...(yt.songs || []), ...sc],
+          albums: yt.albums || [],
+          artists: yt.artists || [],
+        };
+      };
+    })(),
     songByIdImpl: createYTMusicSong(),
     getActiveMode: () => activeMode,
     setActiveMode: refreshMode,

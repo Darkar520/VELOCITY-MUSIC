@@ -76,6 +76,11 @@ export function normalizeTrack(t) {
     cover: t.artworkUrl || t.cover || '',
     durationSeconds: t.durationSeconds || t.duration || 0,
   };
-  n.url = api.streamUrl({ artist: n.artist, title: n.title, id: n.id });
+  n.url = api.streamUrl({
+    artist: n.artist, title: n.title, id: n.id,
+    // SoundCloud: pasar la URL directa para evitar la resolución con yt-dlp.
+    stream: (t.source === 'soundcloud' && t.streamUrl) ? t.streamUrl : undefined,
+  });
+  if (t.source) n.source = t.source;
   return cacheTrack(n);
 }
