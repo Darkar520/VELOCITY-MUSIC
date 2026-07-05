@@ -1468,7 +1468,15 @@ export default function App() {
 
   // reproducción
   const [tab, setTab] = useState('home');
-  const [track, setTrack] = useState(() => { const s = loadPlayerState(); return s ? s.track : null; });
+  const [track, setTrack] = useState(() => {
+    const s = loadPlayerState();
+    if (!s || !s.track) return null;
+    // Enriquecer con el cover del catálogo (loadMeta ya lo pobló): el estado
+    // guardado puede tener cover vacío si saveMeta lo strippeó (data:/blob:).
+    const cached = trackById(s.track.id);
+    if (cached && cached.cover && !s.track.cover) return { ...s.track, cover: cached.cover };
+    return s.track;
+  });
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(() => { const s = loadPlayerState(); return s ? (s.t || 0) : 0; });
   const [dur, setDur] = useState(0);
@@ -1665,6 +1673,13 @@ export default function App() {
         metas.forEach(cacheTrack);
         const ids = await offline.listIds();
         setDownloaded(new Set(ids));
+        // Refrescar el cover del track actual si el catálogo ahora tiene uno mejor.
+        setTrack(prev => {
+          if (!prev || !prev.id) return prev;
+          const c = trackById(prev.id);
+          if (c && c.cover && !prev.cover) return { ...prev, cover: c.cover };
+          return prev;
+        });
         // Si la última pista restaurada está descargada, reproducir desde el blob offline.
         try {
           const s = loadPlayerState();
