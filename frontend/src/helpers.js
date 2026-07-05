@@ -51,14 +51,18 @@ export function capPerArtist(tracks, max = 3) {
   return out;
 }
 
-// Metadatos "ligeros" (sin url, específica de cada dispositivo/calidad) para
+// Metadatos "ligeros" (sin url de stream ni data:/blob: URLs pesadas) para
 // sincronizar la biblioteca del usuario entre dispositivos vía backend.
 export function slimTrack(t) {
   if (!t || !t.id) return null;
+  // No incluir data:/blob: URLs en el cover: pueden pesar decenas de KB y
+  // sobrecargarían la API de sincronización (bug detectado en los tests).
+  const cover = (typeof t.cover === 'string' && (t.cover.startsWith('data:') || t.cover.startsWith('blob:')))
+    ? '' : (t.cover || '');
   return {
     id: t.id, title: t.title || '', artist: t.artist || '', artistId: t.artistId || null,
     album: t.album || '', albumId: t.albumId || null, genre: t.genre || '',
-    cover: t.cover || '', durationSeconds: t.durationSeconds || t.duration || 0,
+    cover, durationSeconds: t.durationSeconds || t.duration || 0,
   };
 }
 
