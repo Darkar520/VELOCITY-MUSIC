@@ -20,18 +20,12 @@ class AppErrorBoundary extends React.Component {
   componentDidCatch(e) { console.error('[Velocity] Error capturado:', e); }
   render() {
     if (!this.state.error) return this.props.children;
-    // Solo mostrar la pantalla de error si el error persiste tras recargar.
-    // En casos de logout/login el error es transitorio y se resuelve recargando.
+    // Solo mostrar fallback si hay un crash real — recarga automática en 3s.
+    setTimeout(() => window.location.reload(), 3000);
     return (
-      <div style={{ minHeight:'100dvh', background:'#04060a', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:16, fontFamily:'Inter,sans-serif', padding:24 }}>
-        <div style={{ fontSize:32 }}>⚡</div>
-        <div style={{ fontSize:16, fontWeight:800, color:'#f4f7fb' }}>Cargando…</div>
-        <div style={{ fontSize:12, color:'#8b97a8', textAlign:'center', maxWidth:280 }}>
-          Si esto tarda más de unos segundos, recarga la app.
-        </div>
-        <button onClick={() => window.location.reload()} style={{ marginTop:8, background:'#10d9a0', border:'none', borderRadius:12, padding:'12px 28px', fontSize:13, fontWeight:800, color:'#04060a', cursor:'pointer' }}>
-          Recargar
-        </button>
+      <div style={{ minHeight:'100dvh', background:'#04060a', display:'flex', alignItems:'center', justifyContent:'center', fontFamily:'Inter,sans-serif' }}>
+        <div style={{ width:32, height:32, border:'3px solid #10d9a0', borderTopColor:'transparent', borderRadius:'50%', animation:'spin 0.8s linear infinite' }} />
+        <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
       </div>
     );
   }
@@ -1541,6 +1535,7 @@ export default function App() {
   // Sesión de mezcla: al terminar una mezcla, saltar a otra mezcla relacionada.
   const mixSessionRef = useRef({ label: null, used: new Set() });
   const homeRowsRef = useRef([]);         // acceso al feed sin cierre obsoleto
+  const libReadyRef = useRef(false);      // biblioteca cargada → feed puede usar datos reales
   const persistRef = useRef({});
   const pendingRef = useRef(null);
   if (!pendingRef.current) { pendingRef.current = new Set(); try { JSON.parse(localStorage.getItem('velocity.pendingDl') || '[]').forEach(x => pendingRef.current.add(x)); } catch {} }
@@ -1640,13 +1635,15 @@ export default function App() {
     checkVersion();
     return () => { stop = true; clearInterval(iv); document.removeEventListener('visibilitychange', onVis); if (typeof cleanupSW === 'function') cleanupSW(); };
   }, []);
-  // El aviso (UpdateBanner) SIEMPRE se muestra cuando hay versión nueva, para que
-  // el usuario lo vea y pueda actualizar. Si la música está pausada, además se
-  // auto-aplica tras unos segundos (transparente); si suena, no cortamos: el
-  // usuario decide con el botón.
+  // El aviso (UpdateBanner) SIEMPRE se muestra cuando hay versión nueva.
+  // Auto-aplica SOLO si la música está pausada Y el usuario lleva > 30s en la app
+  // (evita recargar justo después de login/primera carga).
+  const mountedAtRef = useRef(Date.now());
   useEffect(() => {
     if (!updateReady || playing) return;
-    const t = setTimeout(() => applyUpdate(), 6000);
+    const elapsed = Date.now() - mountedAtRef.current;
+    const delay = Math.max(0, 30000 - elapsed); // espera mínimo 30s desde el montaje
+    const t = setTimeout(() => applyUpdate(), delay + 2000);
     return () => clearTimeout(t);
   }, [updateReady, playing]);
 
@@ -1817,6 +1814,8 @@ export default function App() {
           }
         }
       } catch {}
+      // Marcar la biblioteca como lista para que el feed use datos reales.
+      if (!cancel) libReadyRef.current = true;
     })();
     return () => { cancel = true; };
   }, [authed]);
@@ -1832,6 +1831,12 @@ export default function App() {
   const feedTokenRef = useRef(0);
   useEffect(() => {
     if (!authed) return;
+    // Esperar a que la biblioteca esté cargada para no generar feed genérico
+    // con datos vacíos — que es lo que causaba los carruseles genéricos.
+    if (!libReadyRef.current) {
+      const retry = setTimeout(() => setFeedNonce(n => n + 1), 800);
+      return () => clearTimeout(retry);
+    }
     const score = {};
     recent.forEach((id, i) => { score[id] = (score[id] || 0) + Math.max(1, 12 - i * 0.4); });
     favs.forEach(id => { score[id] = (score[id] || 0) + 6; });
