@@ -133,7 +133,7 @@ export async function bootstrap() {
     // Fallback a yt-dlp si ytmusic-api falla.
     catalogImpl: catalogWithFallback,
     catalogTimeoutMs: 12000,
-    resolveTimeoutMs: 35000,
+    resolveTimeoutMs: 80000, // android(25s) + ios(25s) + SoundCloud(25s) + margen
     extractorImpl,
     artistImpl: createYTMusicArtist(),
     albumImpl: createYTMusicAlbum(),

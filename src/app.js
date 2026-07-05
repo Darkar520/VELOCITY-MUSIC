@@ -417,7 +417,7 @@ export function createApp(deps = {}) {
   // ---- Proxy de streaming ----
   app.get(
     '/api/stream-proxy',
-    createStreamProxyHandler({ resolveUrl: (params, opts) => doResolve(params, opts), timeoutMs: 20000 }),
+    createStreamProxyHandler({ resolveUrl: (params, opts) => doResolve(params, opts), timeoutMs: 85000 }),
   );
 
   // ---- Estado ----

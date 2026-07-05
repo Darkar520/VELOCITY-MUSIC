@@ -20,8 +20,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const YT_DLP_BIN_DIR = path.join(__dirname, '..', '..', 'bin');
 
 // Cliente de YouTube a usar: el cliente `android` evita los PO tokens y reduce
-// los errores HTTP 429 (rate limit) frente al cliente web por defecto.
+// Clientes de YouTube en orden de preferencia para el extractor.
+// android: evita PO tokens, menos throttling que web.
+// ios: fingerprint distinto, segunda línea ante rate-limit de android.
 const EXTRACTOR_ARGS = ['--extractor-args', 'youtube:player_client=android'];
+const YT_CLIENTS = [
+  ['--extractor-args', 'youtube:player_client=android'],
+  ['--extractor-args', 'youtube:player_client=ios'],
+];
 
 /**
  * Resuelve la ruta del binario yt-dlp:
@@ -59,26 +65,37 @@ export function probeYtDlp() {
 }
 
 /**
- * Resuelve una URL directa de stream de pista completa para (artist, title).
- * Aplica la Audio_Format_Preference (Opus/webm → AAC/m4a → mejor audio) y NO
- * recodifica (`-g`).
+ * Resuelve una URL directa de stream con fallbacks en cascada:
+ *   1. YouTube (cliente android) — primario, evita PO tokens
+ *   2. YouTube (cliente ios)     — fingerprint distinto, resiste rate-limit
+ *   3. SoundCloud               — indie/underground; IPs raramente bloqueadas
+ *
+ * Devuelve la primera URL válida o null si todos los extractores fallan.
+ * Con videoId (YT específico) solo intenta los clientes de YouTube.
  *
  * @returns {Promise<string|null>} URL directa, o null si falla.
  */
 export function createYtDlpExtractor() {
   return async function extractorImpl({ artist, title, videoId, quality }) {
-    // Si tenemos el ID exacto del vídeo, resolvemos esa pista directamente
-    // (coincidencia exacta). Si no, buscamos la mejor coincidencia.
-    const target = videoId
+    const ytTarget = videoId
       ? `https://www.youtube.com/watch?v=${videoId}`
       : `ytsearch1:${artist} - ${title} (Official Audio)`;
-    // --extractor-retries: reintenta la extracción ante fallos transitorios de
-    // YouTube (reduce los "no se pudo reproducir" en frío). --socket-timeout:
-    // no quedarse colgado en una conexión estancada (falla rápido → reintenta).
-    const args = ['-f', audioFormatSelector(quality), '-g', '--no-playlist',
-      '--extractor-retries', '2', '--socket-timeout', '20',
-      ...EXTRACTOR_ARGS, target];
-    return runForUrl(args);
+    const baseArgs = ['-f', audioFormatSelector(quality), '-g', '--no-playlist',
+      '--extractor-retries', '1', '--socket-timeout', '20'];
+
+    // 1+2) Intentar con cada cliente de YouTube en orden (android → ios).
+    for (const clientArgs of YT_CLIENTS) {
+      const url = await runForUrl([...baseArgs, ...clientArgs, ytTarget]);
+      if (url) return url;
+    }
+
+    // 3) Fallback a SoundCloud — solo si no tenemos videoId específico de YT.
+    if (!videoId) {
+      const url = await runForUrl([...baseArgs, `scsearch1:${artist} - ${title}`]);
+      if (url) return url;
+    }
+
+    return null;
   };
 }
 
@@ -139,10 +156,9 @@ function runYtDlp(args, { mode = 'url', timeoutMs = 30000 } = {}) {
 }
 
 function runForUrl(args) {
-  // 45s: yt-dlp con --extractor-retries 2 y --socket-timeout 20 puede tardar
-  // ~40s en el peor caso (2 reintentos × 20s + resolución normal). Antes 30s
-  // mataba el proceso en frío antes de que terminara.
-  return runYtDlp(args, { mode: 'url', timeoutMs: 45000 });
+  // 25s por extractor: android → ios → SoundCloud pueden encadenarse. El
+  // audioResolver tiene su propio timeout (35s) para limitar el total.
+  return runYtDlp(args, { mode: 'url', timeoutMs: 25000 });
 }
 
 /**
