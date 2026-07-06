@@ -19,15 +19,40 @@ import { audioFormatSelector } from '../services/audioFormat.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const YT_DLP_BIN_DIR = path.join(__dirname, '..', '..', 'bin');
 
-// Cliente de YouTube a usar: el cliente `android` evita los PO tokens y reduce
-// Clientes de YouTube en orden de preferencia para el extractor.
-// android: evita PO tokens, menos throttling que web.
-// ios: fingerprint distinto, segunda línea ante rate-limit de android.
+// Clientes de YouTube en orden de preferencia para máxima resiliencia.
+// Cada cliente tiene distintos límites, fingerprints y tokens:
+//   android : evita PO tokens, menos throttling que web. Cliente primario.
+//   ios     : fingerprint distinto, segunda línea ante rate-limit de android.
+//   tv      : cliente de Smart TV, sin PO tokens, alta disponibilidad.
+//   web     : cliente web estándar, amplio soporte pero requiere PO tokens.
+//   mweb    : cliente web móvil, último recurso con límites relajados.
 const EXTRACTOR_ARGS = ['--extractor-args', 'youtube:player_client=android'];
 const YT_CLIENTS = [
   ['--extractor-args', 'youtube:player_client=android'],
   ['--extractor-args', 'youtube:player_client=ios'],
+  ['--extractor-args', 'youtube:player_client=tv'],
+  ['--extractor-args', 'youtube:player_client=web'],
+  ['--extractor-args', 'youtube:player_client=mweb'],
 ];
+
+// User-Agents reales por cliente para rotar fingerprint y evitar bloqueos.
+// yt-dlp usa el UA interno de cada cliente por defecto, pero añadimos
+// --user-agent como override para los clientes web/mweb donde el UA importa.
+const CLIENT_UA = {
+  android: 'com.google.android.youtube/19.09.37 (Linux; U; Android 14; SM-S918B)',
+  ios: 'com.google.ios.youtube/19.09.3 (iPhone15,3; U; CPU iOS 17_5_1 like Mac OS X)',
+  tv: 'Mozilla/5.0 (PlayStation; PlayStation 4/12.0) AppleWebKit/605.1.15',
+  web: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+  mweb: 'Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36',
+};
+
+// Backoff exponencial entre clientes: 0ms, 500ms, 1000ms, 2000ms, 4000ms.
+// El primer intento es inmediato; cada cliente siguiente espera más para
+// dar tiempo a que el rate-limit del anterior se recupere.
+const BACKOFF_BASE_MS = 500;
+function backoffMs(index) {
+  return index === 0 ? 0 : BACKOFF_BASE_MS * Math.pow(2, index - 1);
+}
 
 /**
  * Resuelve la ruta del binario yt-dlp:
@@ -65,11 +90,17 @@ export function probeYtDlp() {
 }
 
 /**
- * Resuelve una URL directa de stream con fallback de cliente:
- *   1. YouTube (cliente android) — primario, evita PO tokens
- *   2. YouTube (cliente ios)     — fingerprint distinto, resiste rate-limit
- *   3. SoundCloud (si `scFallback` está definido y los dos clientes YT fallaron)
- *      — último recurso para pistas que YT no puede servir temporalmente.
+ * Resuelve una URL directa de stream con cascada de clientes + backoff:
+ *   1. YouTube android   — primario, evita PO tokens
+ *   2. YouTube ios       — fingerprint distinto (backoff 500ms)
+ *   3. YouTube tv        — cliente Smart TV (backoff 1s)
+ *   4. YouTube web       — cliente web estándar (backoff 2s)
+ *   5. YouTube mweb      — cliente móvil (backoff 4s)
+ *   6. SoundCloud        — último recurso si todos los YT fallaron
+ *
+ * Entre cada cliente se aplica backoff exponencial para dar tiempo a que
+ * el rate-limit del cliente anterior se recupere. Cada cliente usa su
+ * User-Agent correspondiente para rotar el fingerprint.
  *
  * @returns {Promise<string|null>} URL directa, o null si todo falla.
  */
@@ -79,16 +110,24 @@ export function createYtDlpExtractor({ scFallback } = {}) {
       ? `https://www.youtube.com/watch?v=${videoId}`
       : `ytsearch1:${artist} - ${title} (Official Audio)`;
     const baseArgs = ['-f', audioFormatSelector(quality), '-g', '--no-playlist',
-      '--extractor-retries', '1', '--socket-timeout', '20'];
+      '--extractor-retries', '2', '--socket-timeout', '15'];
 
-    // Intentar con cada cliente de YouTube en orden (android → ios).
-    for (const clientArgs of YT_CLIENTS) {
-      const url = await runForUrl([...baseArgs, ...clientArgs, ytTarget]);
+    for (let i = 0; i < YT_CLIENTS.length; i++) {
+      const clientArgs = YT_CLIENTS[i];
+      const clientName = clientArgs[1].split('=')[1];
+
+      // Backoff exponencial antes de cada cliente (excepto el primero).
+      if (i > 0) await sleep(backoffMs(i));
+
+      // Añadir User-Agent correspondiente al cliente.
+      const ua = CLIENT_UA[clientName];
+      const uaArgs = ua ? ['--user-agent', ua] : [];
+
+      const url = await runForUrl([...baseArgs, ...clientArgs, ...uaArgs, ytTarget]);
       if (url) return url;
     }
 
     // Último recurso: SoundCloud para la misma búsqueda.
-    // Solo si se pasó el extractor de SC como opción y no hay videoId fijo.
     if (typeof scFallback === 'function' && !videoId) {
       try {
         const scUrl = await scFallback({ artist, title, quality });
@@ -98,6 +137,11 @@ export function createYtDlpExtractor({ scFallback } = {}) {
 
     return null;
   };
+}
+
+/** Sleep helper para backoff entre clientes. */
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -157,9 +201,10 @@ function runYtDlp(args, { mode = 'url', timeoutMs = 30000 } = {}) {
 }
 
 function runForUrl(args) {
-  // 25s por extractor: android → ios → SoundCloud pueden encadenarse. El
-  // audioResolver tiene su propio timeout (35s) para limitar el total.
-  return runYtDlp(args, { mode: 'url', timeoutMs: 25000 });
+  // 15s por cliente: con 5 clientes + backoff, el total máximo es
+  // ~75s de ejecución + ~7s de backoff = ~82s. El audioResolver
+  // tiene resolveTimeoutMs=95s para cubrir todo el encadenamiento.
+  return runYtDlp(args, { mode: 'url', timeoutMs: 15000 });
 }
 
 /**

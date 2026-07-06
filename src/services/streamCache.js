@@ -2,10 +2,10 @@ import { readFileSync, writeFileSync, existsSync, renameSync, mkdirSync } from '
 import path from 'node:path';
 import { normalizeText } from '../lib/normalize.js';
 
-export const DEFAULT_CACHE_TTL_SECONDS = 60 * 60 * 4; // 14400
+export const DEFAULT_CACHE_TTL_SECONDS = 60 * 60 * 5; // 18000 (5h)
 export const MIN_TTL_SECONDS = 1;
-export const MAX_TTL_SECONDS = 604800; // 7 días
-export const MAX_ENTRIES = 10000;
+export const MAX_TTL_SECONDS = 604800 * 2; // 14 días
+export const MAX_ENTRIES = 25000;
 
 /**
  * Caché de streams clave→valor con TTL y expulsión LRU.
