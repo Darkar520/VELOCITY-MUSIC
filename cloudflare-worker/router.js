@@ -24,14 +24,19 @@ export default {
     const isBackend = BACKEND_PREFIXES.some(p => path.startsWith(p));
 
     if (isBackend) {
-      // Reenviar al tunnel tal cual. Si la laptop está apagada,
-      // el tunnel devolverá un error 5xx (el worker lo pasa al cliente).
-      const backendUrl = new URL(request.url);
-      // El tunnel ya maneja velocitymusic.uk → localhost:3000,
-      // así que simplemente dejamos pasar la request original.
-      // Este bloque no se ejecuta en Worker routes que excluyen /api —
-      // solo aplica si el Worker intercepta todo el tráfico.
-      return fetch(request);
+      // Reenviar al tunnel preservando method, headers y body.
+      // Se construye un nuevo Request explícitamente para garantizar
+      // que el body de POST/DELETE se reenvíe correctamente (en algunos
+      // casos fetch(request) puede perder el body al reutilizarse el stream).
+      const init = {
+        method: request.method,
+        headers: request.headers,
+        redirect: 'follow',
+      };
+      if (!['GET', 'HEAD'].includes(request.method)) {
+        init.body = request.body;
+      }
+      return fetch(new Request(request.url, init));
     }
 
     // ── Frontend (Pages) ─────────────────────────────────────
