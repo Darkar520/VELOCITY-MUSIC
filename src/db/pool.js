@@ -25,11 +25,14 @@ const { Pool } = pg;
 let _pool = null;
 
 function buildPoolConfig() {
-  const maxConn = Number(process.env.PG_MAX_POOL_SIZE) || 2;
+  const maxConn = Number(process.env.PG_MAX_POOL_SIZE) || 3;
 
   const tlsOptions = {
-    // Supabase, Neon y Render requieren SSL. Deshabilitar solo en localhost.
-    ssl: process.env.PGSSL === '0' || process.env.PGHOST === 'localhost'
+    // Supabase, Neon y Render requieren SSL. Deshabilitar en localhost o con PGSSL=0.
+    // Con DATABASE_URL que apunte a localhost, también se desactiva SSL.
+    ssl: (process.env.PGSSL === '0' ||
+          process.env.PGHOST === 'localhost' ||
+          (process.env.DATABASE_URL || '').includes('@localhost:'))
       ? false
       : { rejectUnauthorized: false },
     // Supabase cierra idle connections en ~60 s → nosotros cerramos a los 45 s.
