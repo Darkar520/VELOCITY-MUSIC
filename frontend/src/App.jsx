@@ -1188,11 +1188,12 @@ function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next, prev,
       <div style={panelStyle} onTouchStart={!desktop ? onPanelTouchStart : undefined} onTouchEnd={!desktop ? onPanelTouchEnd : undefined}>
         {!desktop && <div style={{ width:44, height:5, borderRadius:99, background:'var(--surf-2)', margin:'0 auto 12px', flexShrink:0 }} />}
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16, flexShrink:0 }}>
-          <button aria-label="Cerrar" onClick={onClose} className="btn-tap glass" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:38, height:38, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}><Icon.ChevD c="var(--txt-1)" sz={18} /></button>
-          <div style={{ textAlign:'center' }}>
+          <button aria-label="Cerrar" onClick={onClose} className="btn-tap glass" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:38, height:38, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}><Icon.ChevD c="var(--txt-1)" sz={18} /></button>
+          <div style={{ textAlign:'center', flex:1, minWidth:0 }}>
             <div style={{ fontSize:9, fontWeight:900, letterSpacing:3, color:'var(--txt-2)', textTransform:'uppercase' }}>Reproduciendo desde</div>
-            <div style={{ fontSize:12, fontWeight:700, color:'var(--txt-0)', marginTop:3 }}>{track.album}</div>
+            <div style={{ fontSize:12, fontWeight:700, color:'var(--txt-0)', marginTop:3, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.album || track.artist}</div>
           </div>
+          <div style={{ width:38, height:38, flexShrink:0 }} />
         </div>
 
         <div style={{ display:'flex', gap:6, background:'var(--surf-1)', borderRadius:12, padding:4, marginBottom:16, flexShrink:0, alignSelf:'center' }}>
@@ -1943,24 +1944,36 @@ export default function App() {
   }, [authed]);
 
   // ── SSE: escuchar "now playing" de otros dispositivos en tiempo real ──
+  // Con reconexión automática: si la conexión se cae, se reintententa tras 3s.
   useEffect(() => {
     if (!authed) return;
     let es = null;
-    try {
-      es = api.subscribeNowPlaying();
-      es.onmessage = (e) => {
-        try {
-          const data = JSON.parse(e.data);
-          if (data.stopped) { setRemotePlaying(null); return; }
-          // No mostrar si es mi propio dispositivo (evitar eco).
-          if (data.trackId === trackRef.current?.id && data.playing) return;
-          setRemotePlaying(data);
-        } catch {}
-      };
-      es.onerror = () => { try { es.close(); } catch {} };
-      sseRef.current = es;
-    } catch {}
-    return () => { try { es?.close(); } catch {} };
+    let reconnectTimer = null;
+    let stopped = false;
+    const connect = () => {
+      if (stopped) return;
+      try {
+        es = api.subscribeNowPlaying();
+        es.onmessage = (e) => {
+          try {
+            const data = JSON.parse(e.data);
+            if (data.stopped || !data.playing) { setRemotePlaying(null); return; }
+            // No mostrar si es mi propio dispositivo reproduciendo la misma pista.
+            if (data.trackId === trackRef.current?.id && data.playing) return;
+            setRemotePlaying(data);
+          } catch {}
+        };
+        es.onerror = () => {
+          try { es.close(); } catch {}
+          if (!stopped) reconnectTimer = setTimeout(connect, 3000);
+        };
+        sseRef.current = es;
+      } catch {
+        if (!stopped) reconnectTimer = setTimeout(connect, 3000);
+      }
+    };
+    connect();
+    return () => { stopped = true; clearTimeout(reconnectTimer); try { es?.close(); } catch {} };
   }, [authed]);
 
   // ── Re-persistir la caché al modificar biblioteca (fav/playlist/álbum/recientes) ──
@@ -2204,16 +2217,50 @@ export default function App() {
   useEffect(() => { if (audioRef.current) audioRef.current.volume = vol; }, [vol]);
 
   // ── Enumerar dispositivos de salida de audio ──
+  // Sin permiso de micrófono, enumerateDevices() devuelve deviceIds pero labels
+  // vacíos. Intentamos obtener permiso una vez con getUserMedia({audio:true})
+  // para poder mostrar los nombres reales (ej: "AirPods", "Altavoz Bluetooth").
+  // Si el usuario rechaza, seguimos funcionando con deviceIds.
+  const outputsPermRef = useRef(false);
   useEffect(() => {
     if (!navigator.mediaDevices?.enumerateDevices) return;
     const update = () => navigator.mediaDevices.enumerateDevices().then(devs => {
-      setOutputs(devs.filter(d => d.kind === 'audiooutput').map(d => ({ deviceId: d.deviceId, label: d.label || 'Dispositivo de audio' })));
+      const outs = devs.filter(d => d.kind === 'audiooutput').map(d => ({
+        deviceId: d.deviceId,
+        label: d.label || '',
+      }));
+      // Si los labels siguen vacíos, asignar nombres genéricos por posición.
+      if (outs.length && !outs.some(o => o.label)) {
+        outs.forEach((o, i) => { o.label = i === 0 ? 'Altavoz del dispositivo' : `Salida de audio ${i + 1}`; });
+      }
+      setOutputs(outs);
     }).catch(() => {});
     update();
-    // Re-enumerar cuando cambian los permisos (ej: conectar Bluetooth).
+    // Re-enumerar cuando cambian los dispositivos (ej: conectar/desconectar Bluetooth).
     navigator.mediaDevices.addEventListener?.('devicechange', update);
     return () => navigator.mediaDevices.removeEventListener?.('devicechange', update);
   }, []);
+  // Solicitar permiso de audio una vez al primer play para obtener labels reales.
+  useEffect(() => {
+    if (outputsPermRef.current || !playing) return;
+    outputsPermRef.current = true;
+    if (navigator.mediaDevices?.getUserMedia) {
+      navigator.mediaDevices.getUserMedia({ audio: true })
+        .then(stream => { stream.getTracks().forEach(t => t.stop()); })
+        .then(() => {
+          // Re-enumerar ahora que tenemos permiso y los labels estarán disponibles.
+          if (navigator.mediaDevices?.enumerateDevices) {
+            navigator.mediaDevices.enumerateDevices().then(devs => {
+              setOutputs(devs.filter(d => d.kind === 'audiooutput').map(d => ({
+                deviceId: d.deviceId,
+                label: d.label || 'Dispositivo de audio',
+              })));
+            }).catch(() => {});
+          }
+        })
+        .catch(() => {});
+    }
+  }, [playing]);
 
   // ── Aplicar sinkId al elemento audio ──
   useEffect(() => {
@@ -2459,7 +2506,20 @@ export default function App() {
     if (opts.mixLabel) mixSessionRef.current = { label: opts.mixLabel, used: new Set([opts.mixLabel]) };
     else if (!opts.keepMix) mixSessionRef.current = { label: null, used: new Set() };
   };
-  const togglePlay = () => { if (track) setPlaying(p => !p); };
+  const togglePlay = () => {
+    if (!track) return;
+    setPlaying(p => {
+      const np = !p;
+      // Notificar a otros dispositivos el cambio de estado.
+      api.updateNowPlaying({
+        trackId: track.id, title: track.title, artist: track.artist, cover: track.cover,
+        position: audioRef.current?.currentTime || 0, duration: track.durationSeconds || 0,
+        playing: np, deviceName: navigator.userAgent.includes('Mobile') ? 'Móvil' : 'Web',
+        quality: '',
+      });
+      return np;
+    });
+  };
   const orderIds = queue.length ? queue : (track ? [track.id] : []);
   const next = () => {
     if (!track || !orderIds.length) return;
@@ -2625,7 +2685,10 @@ export default function App() {
     const currentSettings = settingsRef.current;
 
     if (repeat && audioRef.current) { audioRef.current.currentTime = 0; audioRef.current.volume = vol; audioRef.current.play().catch(() => {}); return; }
-    if (!currentSettings.autoplay) { setPlaying(false); return; }
+    if (!currentSettings.autoplay) {
+      api.updateNowPlaying({ trackId: '', title: '', artist: '', cover: '', position: 0, duration: 0, playing: false, deviceName: '', quality: '' });
+      setPlaying(false); return;
+    }
 
     const ids = currentQueue.length ? currentQueue : (currentTrack ? [currentTrack.id] : []);
     const i = ids.indexOf(currentTrack?.id);
@@ -2642,10 +2705,10 @@ export default function App() {
         if (nxt) { play(nxt, [...ids, ...addIds], { keepMix: true }); return; }
       }
     }
+    // Fin de la cola sin continuación → notificar stop a otros dispositivos.
+    api.updateNowPlaying({ trackId: '', title: '', artist: '', cover: '', position: 0, duration: 0, playing: false, deviceName: '', quality: '' });
     setPlaying(false);
   };
-
-  // ── Favoritos (backend + cola offline) ──
   // Cola de favoritos pendientes: si el backend no está disponible, guardamos
   // los cambios en localStorage y los sincronizamos al volver la conexión.
   const pendingFavsRef = useRef(null);
@@ -3204,7 +3267,7 @@ export default function App() {
         </div>
       </div>
       {expandedPlayer}{addModal}{trackMenu}{queuePanel}{selectionBar}{updateBanner}
-      {remotePlaying && !track && (
+      {remotePlaying && remotePlaying.trackId && remotePlaying.trackId !== track?.id && (
         <div className="fade-up" style={{ position:'fixed', bottom:80, left:12, right:12, zIndex:80, background:'var(--surf-0)', border:`1px solid ${hex2rgba(T.accent,.3)}`, borderRadius:16, padding:'12px 14px', display:'flex', alignItems:'center', gap:12, boxShadow:'0 8px 24px #000a' }}>
           <img src={remotePlaying.cover ? hiResCover(remotePlaying.cover, 64) : FALLBACK_COVER} alt="" referrerPolicy="no-referrer" style={{ width:44, height:44, borderRadius:10, objectFit:'cover', flexShrink:0 }} />
           <div style={{ flex:1, minWidth:0 }}>
@@ -3227,25 +3290,29 @@ function DeviceChip({ outputs, sinkId, setOutput, T }) {
   const [open, setOpen] = useState(false);
   const list = (outputs || []).filter(o => o.deviceId);
   const current = list.find(o => o.deviceId === sinkId);
-  const label = current?.label || (list.find(o => o.deviceId === 'default')?.label) || 'Este dispositivo';
-  const isBT = /blue|airpod|buds|head|auric/i.test(label);
+  const defaultDev = list.find(o => o.deviceId === 'default');
+  const label = current?.label || defaultDev?.label || (list.length === 1 ? list[0]?.label : '') || 'Este dispositivo';
+  const isBT = /blue|airpod|buds|head|auric|airpod|pods|earbuds|wireless|bt-/i.test(label);
   const Ico = isBT ? Icon.Headph : Icon.Speaker;
-  const canPick = list.length > 1 && list.some(o => o.label);
+  const canPick = list.length > 1;
   return (
     <div style={{ position:'relative' }}>
       <button onClick={() => canPick && setOpen(o => !o)} className="press" style={{ display:'flex', alignItems:'center', gap:8, background:'var(--surf-1)', border:'1px solid var(--line-soft)', borderRadius:99, padding:'8px 14px', cursor: canPick ? 'pointer' : 'default', color:'var(--txt-1)', fontSize:11.5, fontWeight:700, maxWidth:200 }}>
         <Ico c={T.accent} sz={15} />
-        <span style={{ whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{label.replace(/\s*\(.*\)$/,'') || 'Salida de audio'}</span>
+        <span style={{ whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{label.replace(/\s*\(.*?\)$/g,'').replace(/-.*$/,'') || 'Salida de audio'}</span>
       </button>
       {open && canPick && (
         <div className="glass fade-up" style={{ position:'absolute', bottom:'calc(100% + 8px)', left:0, minWidth:220, background:'var(--surf-0)', border:'1px solid var(--line)', borderRadius:14, padding:6, zIndex:95, boxShadow:'0 20px 50px #000c' }}>
-          {list.map(o => (
-            <button key={o.deviceId} onClick={() => { setOutput(o.deviceId); setOpen(false); }} className="press" style={{ display:'flex', alignItems:'center', gap:10, width:'100%', padding:'9px 10px', borderRadius:10, background: o.deviceId===sinkId ? hex2rgba(T.accent,.12) : 'none', border:'none', cursor:'pointer', textAlign:'left' }}>
-              {/blue|airpod|buds|head|auric/i.test(o.label) ? <Icon.Headph c="var(--txt-1)" sz={15} /> : <Icon.Speaker c="var(--txt-1)" sz={15} />}
-              <span style={{ fontSize:12, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{o.label || 'Dispositivo'}</span>
-              {o.deviceId===sinkId && <Icon.Check c={T.accent} sz={15} />}
-            </button>
-          ))}
+          {list.map(o => {
+            const oBT = /blue|airpod|buds|head|auric|airpod|pods|earbuds|wireless|bt-/i.test(o.label);
+            return (
+              <button key={o.deviceId} onClick={() => { setOutput(o.deviceId); setOpen(false); }} className="press" style={{ display:'flex', alignItems:'center', gap:10, width:'100%', padding:'9px 10px', borderRadius:10, background: o.deviceId===sinkId ? hex2rgba(T.accent,.12) : 'none', border:'none', cursor:'pointer', textAlign:'left' }}>
+                {oBT ? <Icon.Headph c="var(--txt-1)" sz={15} /> : <Icon.Speaker c="var(--txt-1)" sz={15} />}
+                <span style={{ fontSize:12, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{o.label || 'Dispositivo'}</span>
+                {o.deviceId===sinkId && <Icon.Check c={T.accent} sz={15} />}
+              </button>
+            );
+          })}
         </div>
       )}
     </div>
