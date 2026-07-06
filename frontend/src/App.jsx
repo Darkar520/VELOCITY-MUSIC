@@ -3083,15 +3083,15 @@ export default function App() {
     </div>
   ) : null;
 
-  // Aviso visible de nueva versión: aparece siempre que hay una actualización.
+  // Aviso visible de nueva versión: aparece en la parte superior con mayor visibilidad.
   const updateBanner = updateReady ? (
-    <div className="fade-up glass" style={{ position:'fixed', left:'50%', transform:'translateX(-50%)', bottom:'calc(env(safe-area-inset-bottom, 16px) + 150px)', zIndex:120, display:'flex', alignItems:'center', gap:12, background:'var(--surf-1)', border:`1px solid ${hex2rgba(T.accent,.5)}`, borderRadius:16, padding:'10px 12px 10px 16px', boxShadow:'0 14px 40px #000c', maxWidth:'calc(100vw - 28px)' }}>
-      <div style={{ minWidth:0 }}>
-        <div style={{ fontSize:12.5, fontWeight:800, color:'var(--txt-0)' }}>Nueva versión disponible</div>
-        <div style={{ fontSize:10.5, color:'var(--txt-2)', marginTop:1 }}>Actualiza para tener lo último.</div>
+    <div className="fade-up" style={{ position:'fixed', top:'env(safe-area-inset-top, 0px)', left:0, right:0, zIndex:130, display:'flex', alignItems:'center', gap:10, background:`linear-gradient(135deg, ${hex2rgba(T.accent,.97)}, ${hex2rgba(T.accent2,.97)})`, padding:'11px 16px', boxShadow:'0 6px 24px #000a', backdropFilter:'blur(12px)', WebkitBackdropFilter:'blur(12px)' }}>
+      <div style={{ flex:1, minWidth:0 }}>
+        <div style={{ fontSize:12.5, fontWeight:900, color:'#04060a' }}>Nueva versión disponible</div>
+        <div style={{ fontSize:10, color:'#04060acc', marginTop:1 }}>Toca para actualizar ahora</div>
       </div>
-      <button onClick={applyUpdate} className="btn-tap" style={{ flexShrink:0, background:grad(T), border:'none', borderRadius:99, padding:'9px 18px', cursor:'pointer', color:'#04060a', fontSize:12, fontWeight:800, boxShadow:`0 6px 18px ${hex2rgba(T.accent,.4)}` }}>Actualizar</button>
-      <button aria-label="Después" onClick={() => setUpdateReady(false)} className="press" style={{ flexShrink:0, background:'var(--surf-2)', border:'none', borderRadius:'50%', width:30, height:30, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}><Icon.X c="var(--txt-1)" sz={15} /></button>
+      <button onClick={applyUpdate} className="btn-tap" style={{ flexShrink:0, background:'#04060a', border:'none', borderRadius:99, padding:'8px 18px', cursor:'pointer', color:T.accent, fontSize:12, fontWeight:900, boxShadow:'0 4px 12px #0004' }}>Actualizar</button>
+      <button aria-label="Después" onClick={() => setUpdateReady(false)} className="press" style={{ flexShrink:0, background:'#04060a22', border:'none', borderRadius:'50%', width:28, height:28, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}><Icon.X c="#04060a" sz={14} /></button>
     </div>
   ) : null;
 

@@ -552,6 +552,23 @@ export function createApp(deps = {}) {
   }
 
   // ---- Biblioteca (protegida) ----
+  // IMPORTANTE: las rutas con path literal (/api/playlists/saved) deben
+  // registrarse ANTES de las rutas con parámetro (:id), o Express captura
+  // "saved" como si fuera un id de playlist normal.
+  if (requireAuth && savedPlaylistsRepo) {
+    app.get('/api/playlists/saved', requireAuth, wrap(async (req, res) => {
+      res.json({ playlists: await savedPlaylistsRepo.list(req.userId) });
+    }));
+    app.post('/api/playlists/saved', requireAuth, wrap(async (req, res) => {
+      await savedPlaylistsRepo.add(req.userId, (req.body || {}).playlist);
+      res.status(201).json({ ok: true });
+    }));
+    app.delete('/api/playlists/saved/:playlistId', requireAuth, wrap(async (req, res) => {
+      await savedPlaylistsRepo.remove(req.userId, req.params.playlistId);
+      res.json({ ok: true });
+    }));
+  }
+
   if (requireAuth && playlistService) {
     app.get('/api/playlists', requireAuth, wrap(async (req, res) => {
       res.json({ playlists: await playlistService.list(req.userId) });
@@ -611,21 +628,6 @@ export function createApp(deps = {}) {
     }));
     app.delete('/api/albums/saved/:albumId', requireAuth, wrap(async (req, res) => {
       await savedAlbumsRepo.remove(req.userId, req.params.albumId);
-      res.json({ ok: true });
-    }));
-  }
-
-  // ---- Playlists/Mixes guardados en biblioteca (protegido) ----
-  if (requireAuth && savedPlaylistsRepo) {
-    app.get('/api/playlists/saved', requireAuth, wrap(async (req, res) => {
-      res.json({ playlists: await savedPlaylistsRepo.list(req.userId) });
-    }));
-    app.post('/api/playlists/saved', requireAuth, wrap(async (req, res) => {
-      await savedPlaylistsRepo.add(req.userId, (req.body || {}).playlist);
-      res.status(201).json({ ok: true });
-    }));
-    app.delete('/api/playlists/saved/:playlistId', requireAuth, wrap(async (req, res) => {
-      await savedPlaylistsRepo.remove(req.userId, req.params.playlistId);
       res.json({ ok: true });
     }));
   }

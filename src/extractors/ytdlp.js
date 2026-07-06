@@ -68,14 +68,12 @@ export function probeYtDlp() {
  * Resuelve una URL directa de stream con fallback de cliente:
  *   1. YouTube (cliente android) — primario, evita PO tokens
  *   2. YouTube (cliente ios)     — fingerprint distinto, resiste rate-limit
+ *   3. SoundCloud (si `scFallback` está definido y los dos clientes YT fallaron)
+ *      — último recurso para pistas que YT no puede servir temporalmente.
  *
- * SoundCloud NO se usa como fallback aquí: tiene diferente biblioteca
- * (indie/underground) y daría resultados distintos para artistas mainstream.
- * Se ofrece como fuente separada en la búsqueda.
- *
- * @returns {Promise<string|null>} URL directa, o null si ambos clientes fallan.
+ * @returns {Promise<string|null>} URL directa, o null si todo falla.
  */
-export function createYtDlpExtractor() {
+export function createYtDlpExtractor({ scFallback } = {}) {
   return async function extractorImpl({ artist, title, videoId, quality }) {
     const ytTarget = videoId
       ? `https://www.youtube.com/watch?v=${videoId}`
@@ -88,6 +86,16 @@ export function createYtDlpExtractor() {
       const url = await runForUrl([...baseArgs, ...clientArgs, ytTarget]);
       if (url) return url;
     }
+
+    // Último recurso: SoundCloud para la misma búsqueda.
+    // Solo si se pasó el extractor de SC como opción y no hay videoId fijo.
+    if (typeof scFallback === 'function' && !videoId) {
+      try {
+        const scUrl = await scFallback({ artist, title, quality });
+        if (scUrl) return scUrl;
+      } catch {}
+    }
+
     return null;
   };
 }

@@ -6,7 +6,7 @@ import { StreamCache } from './src/services/streamCache.js';
 import { createLimiter, createInflight } from './src/lib/concurrency.js';
 import { normalizeText } from './src/lib/normalize.js';
 import { resolveActiveMode } from './src/services/resolutionMode.js';
-import { probeYtDlp, createYtDlpExtractor, createYtDlpCatalog, createSoundCloudCatalog, YT_DLP_BIN_DIR } from './src/extractors/ytdlp.js';
+import { probeYtDlp, createYtDlpExtractor, createYtDlpCatalog, createSoundCloudCatalog, createSoundCloudExtractor, YT_DLP_BIN_DIR } from './src/extractors/ytdlp.js';
 import { createYTMusicCatalog, createYTMusicArtist, createYTMusicAlbum, createYTMusicLyrics, createYTMusicSearchAll, createYTMusicRadio, createYTMusicSong } from './src/extractors/ytmusic.js';
 import { installYtDlpByDownload } from './src/services/extractorSetup.js';
 import {
@@ -113,7 +113,11 @@ export async function bootstrap() {
   //    se lanza un solo yt-dlp y todas comparten el resultado.
   const resolveLimit = createLimiter(RESOLVE_CONCURRENCY);
   const resolveInflight = createInflight();
-  const baseExtractor = createYtDlpExtractor();
+  const baseExtractor = createYtDlpExtractor({
+    // SoundCloud como último recurso cuando ambos clientes YT fallan:
+    // busca la misma pista en SC como fallback de reproducción.
+    scFallback: createSoundCloudExtractor(),
+  });
   const extractorImpl = (args = {}) => {
     const q = args.quality ? `#${args.quality}` : '';
     const key = args.videoId
