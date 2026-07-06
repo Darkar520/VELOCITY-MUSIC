@@ -367,9 +367,46 @@ export async function searchAllYTMusic(query, limit = 20) {
     client.searchAlbums(query),
     client.searchArtists(query),
   ]);
-  const songs = songsR.status === 'fulfilled' ? songsR.value.slice(0, limit).map(mapYTMusicSong).filter(t => t.id && t.title) : [];
+  let songs = songsR.status === 'fulfilled' ? songsR.value.slice(0, limit).map(mapYTMusicSong).filter(t => t.id && t.title) : [];
   const albums = albumsR.status === 'fulfilled' ? albumsR.value.slice(0, 12).map(mapAlbumDetailed).filter(a => a.albumId) : [];
   const artists = artistsR.status === 'fulfilled' ? artistsR.value.slice(0, 12).map(mapArtistDetailed).filter(a => a.artistId) : [];
+
+  // Mejora para búsquedas de género/estilo: cuando los resultados de canciones
+  // no son representativos (artistas poco conocidos dominan el top), enriquecer
+  // con canciones de los artistas más representativos de los álbumes encontrados.
+  // Esto evita que "nu metal" devuelva artistas virales genéricos en vez de
+  // Linkin Park, Slipknot, etc. que sí aparecen en los álbumes del género.
+  if (songs.length > 0 && albums.length > 0) {
+    // Artistas presentes en canciones (los que ya tenemos)
+    const songArtistKeys = new Set(songs.map(s => (s.artist || '').toLowerCase().replace(/\s+/g, '')));
+    // Artistas de los álbumes que NO están en las canciones
+    const albumArtists = albums
+      .map(a => a.artist).filter(Boolean)
+      .filter(a => !songArtistKeys.has(a.toLowerCase().replace(/\s+/g, '')));
+    const missingArtists = [...new Set(albumArtists)].slice(0, 4);
+    if (missingArtists.length) {
+      // Traer 1-2 canciones por artista representativo del género
+      const extra = await Promise.all(missingArtists.map(async (artist) => {
+        try {
+          const r = await client.searchSongs(`${artist} ${query}`);
+          return r.slice(0, 2).map(mapYTMusicSong).filter(t => t.id && t.title);
+        } catch { return []; }
+      }));
+      const extraFlat = extra.flat();
+      if (extraFlat.length) {
+        // Intercalar: 1 canción del artista del género entre cada 3 del resultado original
+        const merged = [];
+        let ei = 0;
+        for (let i = 0; i < songs.length; i++) {
+          merged.push(songs[i]);
+          if ((i + 1) % 3 === 0 && ei < extraFlat.length) merged.push(extraFlat[ei++]);
+        }
+        while (ei < extraFlat.length) merged.push(extraFlat[ei++]);
+        songs = merged.slice(0, limit);
+      }
+    }
+  }
+
   return { songs, albums, artists };
 }
 

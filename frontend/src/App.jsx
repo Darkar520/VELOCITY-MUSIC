@@ -454,7 +454,7 @@ function SearchTab({ ctx }) {
 // ═══════════════════════════════════════════════════════════════
 function LibraryTab({ ctx }) {
   const { track, playing, play, T, favs, toggleFav, playlists, createPlaylist,
-          removeFromPlaylist, deletePlaylist, openPlaylist, setOpenPlaylist, addToTarget, onMenu, downloaded, downloading, downloadMany, savedAlbums, goAlbum, selecting, selection, toggleSelect, startSelection, hydrateTracks, addToQueue, removeFromQueue } = ctx;
+          removeFromPlaylist, deletePlaylist, openPlaylist, setOpenPlaylist, addToTarget, onMenu, downloaded, downloading, downloadMany, savedAlbums, goAlbum, goMix, savedPlaylists, savePlaylist, unsavePlaylist, isPlaylistSaved, selecting, selection, toggleSelect, startSelection, hydrateTracks, addToQueue, removeFromQueue } = ctx;
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
 
@@ -547,6 +547,24 @@ function LibraryTab({ ctx }) {
           <SectionHeader label="Álbumes Guardados" accent={T.accent} />
           <div style={{ display:'flex', gap:15, overflowX:'auto', paddingBottom:6 }}>
             {savedAlbums.map(a => <MediaCard key={a.albumId} cover={a.cover} title={a.name} subtitle={a.artist || 'Álbum'} T={T} onClick={() => goAlbum(a.albumId, a.name, a.artist, null, a.cover)} />)}
+          </div>
+        </>
+      )}
+
+      {savedPlaylists && savedPlaylists.length > 0 && (
+        <>
+          <SectionHeader label="Mixes Guardados" accent={T.accent} />
+          <div style={{ display:'flex', gap:15, overflowX:'auto', paddingBottom:6 }}>
+            {savedPlaylists.map(p => {
+              const tracks = p.trackIds.map(trackById).filter(Boolean);
+              const mix = { label: p.name, tracks };
+              let covers = [...new Set(tracks.map(t => t.cover).filter(c => c && !c.startsWith('data:')))].slice(0, 4);
+              if (!covers.length) covers = [FALLBACK_COVER];
+              while (covers.length < 4) covers.push(covers[covers.length - 1]);
+              return <MixCard key={p.playlistId} mix={mix} T={T}
+                onPlay={() => tracks.length && play(tracks[0], p.trackIds)}
+                onOpen={() => goMix(mix)} />;
+            })}
           </div>
         </>
       )}
@@ -1255,7 +1273,7 @@ function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next, prev,
 // DETAIL VIEW — artista / álbum (metadatos reales de YouTube Music)
 // ═══════════════════════════════════════════════════════════════
 function DetailView({ view, ctx }) {
-  const { T, track, playing, play, favs, toggleFav, addToTarget, onMenu, goArtist, goAlbum, setView, detailLoading, detailData, downloaded, downloading, downloadMany, isAlbumSaved, saveAlbum, unsaveAlbum, selecting, selection, toggleSelect, startSelection, addToQueue, removeFromQueue } = ctx;
+  const { T, track, playing, play, favs, toggleFav, addToTarget, onMenu, goArtist, goAlbum, setView, detailLoading, detailData, downloaded, downloading, downloadMany, isAlbumSaved, saveAlbum, unsaveAlbum, isPlaylistSaved, savePlaylist, unsavePlaylist, selecting, selection, toggleSelect, startSelection, addToQueue, removeFromQueue } = ctx;
   const [showAll, setShowAll] = useState(false);
   useEffect(() => { setShowAll(false); }, [view]);
   const d = detailData && detailData.type === view.type ? detailData : null;
@@ -1304,6 +1322,15 @@ function DetailView({ view, ctx }) {
           <div style={{ display:'flex', gap:8, marginBottom:18, flexWrap:'wrap' }}>
             <button onClick={() => play(songs[0], ids, { mixLabel: view.label })} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:8, background:grad(T), border:'none', borderRadius:99, padding:'10px 22px', cursor:'pointer', color:'#04060a', fontSize:12.5, fontWeight:800, boxShadow:`0 6px 18px ${hex2rgba(T.accent,.45)}` }}><Icon.Play c="#04060a" sz={16} /> Reproducir</button>
             <DownloadAllButton ids={ids} downloaded={downloaded} downloading={downloading} onClick={() => downloadMany(ids)} T={T} />
+            {(() => {
+              const pid = 'mix:' + (view.label || '').toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').slice(0, 60);
+              const saved = isPlaylistSaved && isPlaylistSaved(pid);
+              return (
+                <button onClick={() => saved ? unsavePlaylist(pid) : savePlaylist({ label: view.label, tracks: songs })} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:7, background: saved ? hex2rgba(T.accent,.14) : 'var(--surf-1)', border:`1px solid ${saved ? hex2rgba(T.accent,.4) : 'var(--line)'}`, borderRadius:99, padding:'10px 18px', cursor:'pointer', color: saved ? T.accent : 'var(--txt-1)', fontSize:12, fontWeight:700 }}>
+                  <Icon.Heart c={saved ? T.accent : 'var(--txt-1)'} filled={saved} sz={15} /> {saved ? 'Guardado' : 'Guardar'}
+                </button>
+              );
+            })()}
             {!selecting && <button onClick={() => startSelection()} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:7, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:99, padding:'10px 16px', cursor:'pointer', color:'var(--txt-1)', fontSize:12, fontWeight:700 }}><Icon.Check c={T.accent} sz={15} /> Seleccionar</button>}
           </div>
         )}
@@ -1634,6 +1661,7 @@ export default function App() {
   const [playlists, setPlaylists] = useState([]);
   const [recent, setRecent] = useState([]);
   const [savedAlbums, setSavedAlbums] = useState([]);
+  const [savedPlaylists, setSavedPlaylists] = useState([]);
   const [homeRows, setHomeRows] = usePersisted('velocity.home', []);
   const [homeLoading, setHomeLoading] = useState(false);
   const [feedNonce, setFeedNonce] = useState(0);
@@ -1827,7 +1855,7 @@ export default function App() {
   // Persistir la biblioteca en local: estructura ligera + metadatos SOLO de las
   // pistas de la biblioteca, sin carátulas pesadas (data:/blob:) para no exceder
   // la cuota de localStorage (esa era la causa del fallo: setItem lanzaba y se perdía).
-  const persistLibCache = (favIds, pls, albums, recentIds) => {
+  const persistLibCache = (favIds, pls, albums, savedPls, recentIds) => {
     try {
       const libIds = new Set([...(favIds || []), ...(recentIds || [])]);
       (pls || []).forEach(p => (p.trackIds || []).forEach(id => libIds.add(id)));
@@ -1835,7 +1863,7 @@ export default function App() {
         (typeof t.cover === 'string' && (t.cover.startsWith('data:') || t.cover.startsWith('blob:')))
           ? { ...t, cover: '' } : t
       );
-      localStorage.setItem(libCacheKey(), JSON.stringify({ favs: favIds || [], playlists: pls || [], savedAlbums: albums || [], recent: recentIds || [], tracks }));
+      localStorage.setItem(libCacheKey(), JSON.stringify({ favs: favIds || [], playlists: pls || [], savedAlbums: albums || [], savedPlaylists: savedPls || [], recent: recentIds || [], tracks }));
     } catch {}
   };
   // Restaurar biblioteca desde caché local (disponible aunque el backend esté caído).
@@ -1844,9 +1872,10 @@ export default function App() {
       const c = JSON.parse(localStorage.getItem(libCacheKey()) || 'null');
       if (!c) return;
       if (Array.isArray(c.tracks))      c.tracks.forEach(cacheTrack);   // poblar catálogo primero
-      if (Array.isArray(c.favs))        setFavs(c.favs);
-      if (Array.isArray(c.playlists))   setPlaylists(c.playlists);
-      if (Array.isArray(c.savedAlbums)) setSavedAlbums(c.savedAlbums);
+      if (Array.isArray(c.favs))          setFavs(c.favs);
+      if (Array.isArray(c.playlists))     setPlaylists(c.playlists);
+      if (Array.isArray(c.savedAlbums))   setSavedAlbums(c.savedAlbums);
+      if (Array.isArray(c.savedPlaylists)) setSavedPlaylists(c.savedPlaylists);
       if (Array.isArray(c.recent))      setRecent(c.recent);
     } catch {}
   };
@@ -1856,17 +1885,19 @@ export default function App() {
     let cancel = false;
     (async () => {
       try {
-        const [fav, pls, hist, albums] = await Promise.all([
+        const [fav, pls, hist, albums, savedPls] = await Promise.all([
           api.favorites().catch(() => null),
           api.playlists().catch(() => null),
           api.history().catch(() => null),
           api.savedAlbums().catch(() => null),
+          api.savedPlaylists().catch(() => null),
         ]);
         if (cancel) return;
         // Solo pisar el estado restaurado si la petición tuvo éxito (backend arriba).
-        if (fav !== null)    setFavs(fav);
-        if (hist !== null)   setRecent(hist.map(h => h.trackId));
-        if (albums !== null) setSavedAlbums(albums);
+        if (fav !== null)      setFavs(fav);
+        if (hist !== null)     setRecent(hist.map(h => h.trackId));
+        if (albums !== null)   setSavedAlbums(albums);
+        if (savedPls !== null) setSavedPlaylists(savedPls);
         const withTracks = pls === null ? null : await Promise.all(pls.map(async p => {
           const ids = await api.playlistTracks(p.id).catch(() => []);
           return { id: p.id, name: p.name, trackIds: ids };
@@ -1889,7 +1920,7 @@ export default function App() {
           }
           if (!cancel) {
             saveMeta(); setCatVer(v => v + 1);
-            persistLibCache(fav, withTracks || [], albums || [], recentIds);
+            persistLibCache(fav, withTracks || [], albums || [], savedPls || [], recentIds);
           }
         }
       } catch {}
@@ -1902,8 +1933,8 @@ export default function App() {
   // ── Re-persistir la caché al modificar biblioteca (fav/playlist/álbum/recientes) ──
   useEffect(() => {
     if (!authed) return;
-    persistLibCache(favs, playlists, savedAlbums, recent);
-  }, [favs, playlists, savedAlbums, recent]);
+    persistLibCache(favs, playlists, savedAlbums, savedPlaylists, recent);
+  }, [favs, playlists, savedAlbums, savedPlaylists, recent]);
 
   // ── Feed personalizado (mixes según lo que escuchas, guardas y descargas) ──
   const feedSigRef = useRef('');
@@ -2777,6 +2808,25 @@ export default function App() {
     try { await api.unsaveAlbum(albumId); showToast('Álbum quitado'); } catch {}
   };
 
+  // ── Mixes/Playlists guardados en biblioteca ──
+  const isPlaylistSaved = (pid) => savedPlaylists.some(p => p.playlistId === pid);
+  const savePlaylist = async (mix) => {
+    if (!mix) return;
+    // ID estable: basado en el label del mix (normalizado).
+    const pid = 'mix:' + (mix.label || '').toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').slice(0, 60);
+    if (isPlaylistSaved(pid)) { showToast('Ya está guardado'); return; }
+    const entry = { playlistId: pid, name: mix.label || 'Mix', cover: mix.tracks?.[0]?.cover || '', trackIds: (mix.tracks || []).map(t => t.id).filter(Boolean) };
+    setSavedPlaylists(s => [entry, ...s]);
+    // Subir los metadatos de las pistas del mix para hidratación entre dispositivos.
+    if (mix.tracks?.length) api.saveTracks(mix.tracks.map(slimTrack).filter(Boolean));
+    try { await api.savePlaylist(entry); showToast('Mix guardado en tu biblioteca'); }
+    catch { setSavedPlaylists(s => s.filter(p => p.playlistId !== pid)); showToast('No se pudo guardar el mix'); }
+  };
+  const unsavePlaylist = async (playlistId) => {
+    setSavedPlaylists(s => s.filter(p => p.playlistId !== playlistId));
+    try { await api.unsavePlaylist(playlistId); showToast('Mix quitado de biblioteca'); } catch {}
+  };
+
   const onLogout = () => {
     api.logout();
     localStorage.removeItem('velocity.email');
@@ -2910,6 +2960,7 @@ export default function App() {
     installApp, canInstall: !!installEvt, isIOS, isStandalone,
     addToQueue, removeFromQueue: removeFromQueueToast, download, removeDownload, downloadMany, clearDownloads, getDownloads, downloaded, downloading, openQueue: () => setShowQueue(true),
     savedAlbums, saveAlbum, unsaveAlbum, isAlbumSaved,
+    savedPlaylists, savePlaylist, unsavePlaylist, isPlaylistSaved,
     selecting, selection, toggleSelect, startSelection, clearSelection,
     hydrateTracks, playStats: playStatsRef.current,
     customPalettes, activeCustomId, setActiveCustomId, activePalette, addPalette, updatePalette, deletePalette,

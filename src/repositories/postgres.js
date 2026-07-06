@@ -265,3 +265,27 @@ export function createPgHistoryRepo(query) {
     },
   };
 }
+
+export function createPgSavedPlaylistsRepo(query) {
+  return {
+    async list(userId) {
+      const { rows } = await query(
+        'SELECT playlist_id, name, cover, track_ids FROM saved_playlists WHERE user_id = $1 ORDER BY saved_at DESC',
+        [userId],
+      );
+      return rows.map((r) => ({ playlistId: r.playlist_id, name: r.name, cover: r.cover, trackIds: r.track_ids || [] }));
+    },
+    async add(userId, playlist) {
+      if (!playlist || !playlist.playlistId) return;
+      await query(
+        `INSERT INTO saved_playlists (user_id, playlist_id, name, cover, track_ids)
+         VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, playlist_id) DO UPDATE
+         SET name = EXCLUDED.name, cover = EXCLUDED.cover, track_ids = EXCLUDED.track_ids`,
+        [userId, playlist.playlistId, playlist.name || '', playlist.cover || '', playlist.trackIds || []],
+      );
+    },
+    async remove(userId, playlistId) {
+      await query('DELETE FROM saved_playlists WHERE user_id = $1 AND playlist_id = $2', [userId, playlistId]);
+    },
+  };
+}

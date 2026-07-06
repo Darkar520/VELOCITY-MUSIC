@@ -93,3 +93,14 @@ CREATE TABLE IF NOT EXISTS listening_history (
 
 CREATE INDEX IF NOT EXISTS idx_history_user_time
   ON listening_history (user_id, played_at DESC);
+
+-- Playlists externas guardadas en biblioteca (mixes/playlists de la app guardados por el usuario).
+CREATE TABLE IF NOT EXISTS saved_playlists (
+  user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  playlist_id TEXT NOT NULL,               -- ID compuesto (ej. "mix:label" o UUID generado en el cliente)
+  name       TEXT NOT NULL DEFAULT '',
+  cover      TEXT NOT NULL DEFAULT '',
+  track_ids  TEXT[] NOT NULL DEFAULT '{}', -- IDs de las pistas en orden
+  saved_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, playlist_id)
+);

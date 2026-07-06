@@ -23,7 +23,7 @@ const DATA_DIR = process.env.VELOCITY_DATA_DIR
 const DB_FILE = path.join(DATA_DIR, 'velocity-db.json');
 
 function emptyStore() {
-  return { users: {}, emailIndex: {}, playlists: {}, favorites: {}, history: [], savedAlbums: {}, tracks: {}, searchLog: [], stats: { logins: 0, plays: 0, searches: 0 }, seq: 0 };
+  return { users: {}, emailIndex: {}, playlists: {}, favorites: {}, history: [], savedAlbums: {}, savedPlaylists: {}, tracks: {}, searchLog: [], stats: { logins: 0, plays: 0, searches: 0 }, seq: 0 };
 }
 
 let store = emptyStore();
@@ -364,6 +364,28 @@ export function createJsonTrackMetaRepo() {
     },
     async has(id) {
       return !!store.tracks[id];
+    },
+  };
+}
+
+export function createJsonSavedPlaylistsRepo() {
+  const ensure = (u) => { if (!store.savedPlaylists[u]) store.savedPlaylists[u] = []; return store.savedPlaylists[u]; };
+  return {
+    async list(userId) {
+      return [...ensure(userId)];
+    },
+    async add(userId, playlist) {
+      if (!playlist || !playlist.playlistId) return;
+      const list = ensure(userId);
+      const idx = list.findIndex(p => p.playlistId === playlist.playlistId);
+      const entry = { playlistId: playlist.playlistId, name: playlist.name || '', cover: playlist.cover || '', trackIds: playlist.trackIds || [], savedAt: Date.now() };
+      if (idx !== -1) list[idx] = entry;
+      else list.unshift(entry);
+      save();
+    },
+    async remove(userId, playlistId) {
+      store.savedPlaylists[userId] = ensure(userId).filter(p => p.playlistId !== playlistId);
+      save();
     },
   };
 }

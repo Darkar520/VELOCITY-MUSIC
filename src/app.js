@@ -50,6 +50,7 @@ export function createApp(deps = {}) {
     favoritesRepo,
     historyRepo,
     savedAlbumsRepo,
+    savedPlaylistsRepo,
     trackMetaRepo,
     songByIdImpl = null,
     statsRepo,
@@ -610,6 +611,21 @@ export function createApp(deps = {}) {
     }));
     app.delete('/api/albums/saved/:albumId', requireAuth, wrap(async (req, res) => {
       await savedAlbumsRepo.remove(req.userId, req.params.albumId);
+      res.json({ ok: true });
+    }));
+  }
+
+  // ---- Playlists/Mixes guardados en biblioteca (protegido) ----
+  if (requireAuth && savedPlaylistsRepo) {
+    app.get('/api/playlists/saved', requireAuth, wrap(async (req, res) => {
+      res.json({ playlists: await savedPlaylistsRepo.list(req.userId) });
+    }));
+    app.post('/api/playlists/saved', requireAuth, wrap(async (req, res) => {
+      await savedPlaylistsRepo.add(req.userId, (req.body || {}).playlist);
+      res.status(201).json({ ok: true });
+    }));
+    app.delete('/api/playlists/saved/:playlistId', requireAuth, wrap(async (req, res) => {
+      await savedPlaylistsRepo.remove(req.userId, req.params.playlistId);
       res.json({ ok: true });
     }));
   }

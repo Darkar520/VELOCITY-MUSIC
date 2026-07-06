@@ -22,6 +22,7 @@ import {
   createJsonFavoritesRepo,
   createJsonHistoryRepo,
   createJsonSavedAlbumsRepo,
+  createJsonSavedPlaylistsRepo,
   createJsonTrackMetaRepo,
   createJsonStatsRepo,
 } from './src/repositories/jsondb.js';
@@ -32,6 +33,7 @@ import {
   createPgFavoritesRepo,
   createPgHistoryRepo,
   createPgSavedAlbumsRepo,
+  createPgSavedPlaylistsRepo,
   createPgTrackMetaRepo,
   createPgStatsRepo,
 } from './src/repositories/postgres.js';
@@ -76,6 +78,7 @@ export async function bootstrap() {
         favoritesRepo: createPgFavoritesRepo(query),
         historyRepo: createPgHistoryRepo(query),
         savedAlbumsRepo: createPgSavedAlbumsRepo(query),
+        savedPlaylistsRepo: createPgSavedPlaylistsRepo(query),
         trackMetaRepo: createPgTrackMetaRepo(query),
         statsRepo: createPgStatsRepo(query),
         trackRepo: null,
@@ -87,10 +90,9 @@ export async function bootstrap() {
         favoritesRepo: createJsonFavoritesRepo(),
         historyRepo: createJsonHistoryRepo(),
         savedAlbumsRepo: createJsonSavedAlbumsRepo(),
+        savedPlaylistsRepo: createJsonSavedPlaylistsRepo(),
         trackMetaRepo: createJsonTrackMetaRepo(),
         statsRepo: createJsonStatsRepo(),
-        // trackRepo en null: el catálogo es YouTube Music (IDs dinámicos), por lo que
-        // no validamos existencia local de pista al guardar favoritos/listas/historial.
         trackRepo: null,
       };
 

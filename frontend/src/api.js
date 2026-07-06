@@ -225,6 +225,23 @@ export const api = {
     }));
   },
 
+  // ── Playlists/Mixes guardados en biblioteca ──
+  async savedPlaylists() {
+    const d = await jsonOrThrow(await fetch('/api/playlists/saved', { headers: authHeaders() }));
+    return d.playlists || [];
+  },
+  async savePlaylist(playlist) {
+    return jsonOrThrow(await fetch('/api/playlists/saved', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ playlist }),
+    }));
+  },
+  async unsavePlaylist(playlistId) {
+    return jsonOrThrow(await fetch(`/api/playlists/saved/${encodeURIComponent(playlistId)}`, {
+      method: 'DELETE', headers: authHeaders(),
+    }));
+  },
+
   // ── Metadatos de pistas (sincronización entre dispositivos) ──
   // Sube los metadatos de un lote de pistas para que otros dispositivos puedan
   // renderizar la biblioteca del usuario. Silencioso ante errores.
