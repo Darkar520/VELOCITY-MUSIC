@@ -324,6 +324,46 @@ function SearchTab({ ctx }) {
   const runGenre = (g) => { setQ(g.q); addSearch(g.label); };
   const empty = !res.songs.length && !res.albums.length && !res.artists.length;
 
+  // Generar mixes relacionados en background cuando hay resultados de canciones.
+  // Toma la canción top + artistas del resultado → radio de cada uno → mixes únicos.
+  useEffect(() => {
+    setRelatedMixes([]);
+    const songs = res.songs;
+    if (!songs.length) return;
+    let cancelled = false;
+    (async () => {
+      const mixes = [];
+      const usedArtists = new Set();
+      // Hasta 4 mixes: la pista top + los 3 artistas más representados.
+      const candidates = [];
+      // Pista top del resultado
+      if (songs[0]) candidates.push(songs[0]);
+      // Artistas distintos del resultado (top 3)
+      for (const t of songs) {
+        const ak = (t.artist || '').toLowerCase().replace(/\s+/g, '');
+        if (!ak || usedArtists.has(ak)) continue;
+        if (!candidates.find(c => (c.artist||'').toLowerCase().replace(/\s+/g,'') === ak)) candidates.push(t);
+        if (candidates.length >= 4) break;
+      }
+      for (const base of candidates) {
+        if (cancelled) break;
+        const ak = (base.artist || '').toLowerCase().replace(/\s+/g, '');
+        if (usedArtists.has(ak)) continue;
+        usedArtists.add(ak);
+        try {
+          const rel = await api.radio(base.id, 50);
+          if (cancelled) break;
+          const tracks = capPerArtist(dedupeByTitle([base, ...rel.map(normalizeTrack)]), 6).filter(t => t.id).slice(0, 50);
+          if (tracks.length >= 6) {
+            mixes.push({ label: base.artist || base.title || 'Mix', tracks });
+            if (!cancelled) setRelatedMixes([...mixes]);
+          }
+        } catch {}
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [res.songs]);
+
   return (
     <div className="fade-up" style={{ paddingBottom:8 }}>
       <div style={{ fontSize:24, fontWeight:900, color:'var(--txt-0)', letterSpacing:-.6, marginBottom:18, paddingTop:4 }}>Explorar</div>
@@ -367,6 +407,14 @@ function SearchTab({ ctx }) {
             <SectionHeader label="Canciones" accent={T.accent} action={!selecting && <button onClick={() => startSelection()} className="press" style={{ background:'none', border:'none', cursor:'pointer', color:T.accent, fontSize:11.5, fontWeight:800 }}>Seleccionar</button>} />
             <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
               {res.songs.map(t => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => { play(t, [t.id], { radio: true }); addSearch(q.trim()); }} onSwipeRemove={removeFromQueue} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
+            </div>
+          </>)}
+
+          {/* Mixes relacionados: radio de la canción top + artistas top del resultado */}
+          {relatedMixes.length > 0 && (<>
+            <SectionHeader label="Mixes relacionados" accent={T.accent} />
+            <div style={{ display:'flex', gap:15, overflowX:'auto', paddingBottom:6, paddingTop:2, marginBottom:18 }}>
+              {relatedMixes.map(m => <MixCard key={m.label} mix={m} T={T} onPlay={() => { play(m.tracks[0], m.tracks.map(t=>t.id)); addSearch(q.trim()); }} onOpen={() => { goMix(m); addSearch(q.trim()); }} />)}
             </div>
           </>)}
         </>
@@ -1989,7 +2037,30 @@ export default function App() {
       // EXPLORACIÓN (géneros/ánimos/tendencias): búsqueda directa barata y coherente.
       if (hasHistory) {
         if (seeds.length) pushSection('Hecho para ti', clean(await Promise.all(seeds.slice(0, 6).map(s => mixFromSeed(s, 50)))));
-        if (topSearches.length) pushSection('Inspirado en tus búsquedas', clean(await Promise.all(topSearches.map(term => mixFromQuery(cap1(term), term)))));
+        // "Inspirado en tus búsquedas": deduplicar búsquedas que apuntan al mismo
+        // artista (ej. "Porter Robinson" y "The Trill Porter" → mismo artista).
+        // Para cada búsqueda, resolver la pista top → obtener su artista → si ya
+        // tenemos un mix de ese artista, descartar; si no, usar radio real.
+        if (topSearches.length) {
+          const searchMixes = [];
+          const usedArtists = new Set(seeds.map(s => (s.artist || '').toLowerCase().replace(/\s+/g, '')));
+          await Promise.all(topSearches.map(async (term) => {
+            try {
+              const raw = await api.search(term);
+              const base = raw.map(normalizeTrack).find(t => t.id);
+              if (!base) return;
+              const artistKey = (base.artist || '').toLowerCase().replace(/\s+/g, '');
+              // Si ya tenemos un carrusel de este artista (en seeds o en búsquedas
+              // anteriores), no generamos uno duplicado.
+              if (usedArtists.has(artistKey)) return;
+              usedArtists.add(artistKey);
+              const rel = await api.radio(base.id, 50);
+              const tracks = capPerArtist(dedupeByTitle([base, ...rel.map(normalizeTrack)]), 6).filter(t => t.id).slice(0, 50);
+              if (tracks.length >= 6) searchMixes.push({ label: cap1(base.artist || term), tracks });
+            } catch {}
+          }));
+          if (searchMixes.length) pushSection('Inspirado en tus búsquedas', searchMixes);
+        }
         if (freshSeeds.length) pushSection('Tu momento actual', clean(await Promise.all(freshSeeds.slice(0, 5).map(s => mixFromSeed(s, 50)))));
         if (seeds.length) { const bs = pick(seeds, 4); pushSection('Porque te gusta ' + (bs[0]?.artist || 'tu música'), clean(await Promise.all(bs.map(s => mixFromSeed(s, 50))))); }
         if (favs.length) {
@@ -2072,6 +2143,9 @@ export default function App() {
   useEffect(() => { playingRef.current = playing; }, [playing]);
 
   // Reanudación al volver a la app (si la intención era reproducir y otra app la pausó).
+  // También cubre el caso Chrome en Android/iOS: cuando la app va al background, el
+  // AudioContext se suspende y Chrome puede pausar el elemento audio. Al volver a
+  // primer plano, retomamos tanto el AudioContext como el play().
   useEffect(() => {
     const onVis = () => {
       if (document.visibilityState !== 'visible') return;
@@ -2082,6 +2156,35 @@ export default function App() {
     document.addEventListener('visibilitychange', onVis);
     return () => document.removeEventListener('visibilitychange', onVis);
   }, []);
+
+  // Fix para Chrome en Android/iOS: el navegador puede disparar `pause` mientras
+  // la página está en background (AudioContext suspendido, interrupción del sistema).
+  // En esos casos, el elemento audio queda en paused pero la intención del usuario
+  // sigue siendo reproducir. Cuando la página vuelve al frente, reiniciamos el play.
+  // Esto complementa el visibilitychange: cubre el gap entre el evento pause y el
+  // momento en que la página vuelve a ser visible.
+  useEffect(() => {
+    const a = audioRef.current;
+    if (!a) return;
+    let resumeTimer = null;
+    const onNativePause = () => {
+      // Si la pausa la iniciamos nosotros o no hay intención de reproducir, ignorar.
+      if (selfPauseRef.current || !playingRef.current) return;
+      // Si la página no está visible, programar un intento de reanudar al volver.
+      if (document.visibilityState !== 'visible') {
+        clearTimeout(resumeTimer);
+        resumeTimer = setTimeout(() => {
+          // Si al disparar el timer la página sigue invisible, nada que hacer —
+          // el visibilitychange se encargará.
+          if (!playingRef.current || !audioRef.current || !audioRef.current.paused) return;
+          if (audioCtxRef.current) audioCtxRef.current.resume?.().catch(() => {});
+          audioRef.current.play().catch(() => {});
+        }, 300);
+      }
+    };
+    a.addEventListener('pause', onNativePause);
+    return () => { a.removeEventListener('pause', onNativePause); clearTimeout(resumeTimer); };
+  }, [track?.id]);
 
   // ── Precargar la(s) siguiente(s) pista(s) al cambiar la actual o la cola ──
   // Cubre el modo radio (la cola se llena después de play()) y garantiza que
