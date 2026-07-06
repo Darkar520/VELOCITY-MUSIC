@@ -1193,7 +1193,6 @@ function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next, prev,
             <div style={{ fontSize:9, fontWeight:900, letterSpacing:3, color:'var(--txt-2)', textTransform:'uppercase' }}>Reproduciendo desde</div>
             <div style={{ fontSize:12, fontWeight:700, color:'var(--txt-0)', marginTop:3 }}>{track.album}</div>
           </div>
-          <button aria-label="Me gusta" onClick={() => toggleFav(track.id)} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer', padding:4 }}><Icon.Heart c={T.accent} filled={faved} sz={22} /></button>
         </div>
 
         <div style={{ display:'flex', gap:6, background:'var(--surf-1)', borderRadius:12, padding:4, marginBottom:16, flexShrink:0, alignSelf:'center' }}>
@@ -1235,6 +1234,7 @@ function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next, prev,
             <div style={{ fontSize:21, fontWeight:900, color:'var(--txt-0)', letterSpacing:-.5, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title}</div>
             <div style={{ fontSize:13, color:T.accent, marginTop:5, fontWeight:700 }}>{track.artist}</div>
           </div>
+          <button aria-label={faved?'Quitar de Me gusta':'Añadir a Me gusta'} onClick={() => toggleFav(track.id)} className="btn-tap" style={{ background: faved ? hex2rgba(T.accent,.14) : 'var(--surf-1)', border:`1px solid ${faved ? hex2rgba(T.accent,.4) : 'var(--line)'}`, borderRadius:'50%', width:38, height:38, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', marginRight:10, flexShrink:0 }}><Icon.Heart c={faved ? T.accent : 'var(--txt-1)'} filled={faved} sz={18} /></button>
           {onAdd && <button aria-label="Añadir" onClick={() => onAdd(track.id)} className="btn-tap" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:38, height:38, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', marginRight:10, flexShrink:0 }}><Icon.Plus c="var(--txt-1)" sz={18} /></button>}
           {onMenu && <button aria-label="Más" onClick={() => onMenu(track.id)} className="btn-tap" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:38, height:38, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}><Icon.Dots c="var(--txt-1)" sz={18} /></button>}
         </div>
