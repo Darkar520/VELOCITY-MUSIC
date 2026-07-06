@@ -112,7 +112,13 @@ test('Property 19: validación de entrada del proxy', async () => {
   // validateProxyParams puro
   fc.assert(
     fc.property(
-      fc.oneof(fc.constant(''), fc.constant('   '), fc.string({ minLength: 257, maxLength: 300 })),
+      fc.oneof(
+        fc.constant(''),
+        fc.constant('   '),
+        // String de 257+ chars que sigue siendo inválido DESPUÉS de trim:
+        // garantizamos que no sean solo espacios añadiendo caracteres no-espacio.
+        fc.string({ minLength: 1, maxLength: 44 }).map(s => s.replace(/\s/g, 'x') + 'x'.repeat(256)),
+      ),
       fc.string({ minLength: 1, maxLength: 50 }).filter((s) => s.trim().length >= 1),
       (badArtist, okTitle) => {
         const v = validateProxyParams(badArtist, okTitle);

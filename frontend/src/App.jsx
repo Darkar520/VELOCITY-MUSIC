@@ -1319,7 +1319,10 @@ function DetailView({ view, ctx }) {
       <div style={{ display:'flex', alignItems:'flex-end', gap:18, marginBottom:24 }}>
         <CoverImg src={cover} alt={name} radius={18} style={{ width:128, height:128, flexShrink:0, boxShadow:`0 16px 40px ${hex2rgba(T.accent,.3)}` }} />
         <div style={{ minWidth:0 }}>
-          <div style={{ fontSize:9, fontWeight:900, letterSpacing:2.5, color:T.accent, textTransform:'uppercase' }}>Álbum{d?.year ? ` · ${d.year}` : ''}</div>
+          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <div style={{ fontSize:9, fontWeight:900, letterSpacing:2.5, color:T.accent, textTransform:'uppercase' }}>Álbum{d?.year ? ` · ${d.year}` : ''}</div>
+            {d?.offline && <span style={{ fontSize:8, fontWeight:900, letterSpacing:1.5, color:'var(--txt-2)', textTransform:'uppercase', background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:99, padding:'2px 8px' }}>Offline</span>}
+          </div>
           <div style={{ fontSize:24, fontWeight:900, color:'var(--txt-0)', letterSpacing:-.6, marginTop:3 }}>{name}</div>
           <button onClick={() => goArtist(d?.artistId, artist)} className="press" style={{ background:'none', border:'none', cursor:'pointer', padding:0, fontSize:12.5, color:'var(--txt-1)', fontWeight:700, marginTop:5 }}>{artist}</button>
           <div style={{ fontSize:11, color:'var(--txt-2)', marginTop:3 }}>{songs.length} canciones</div>
@@ -1728,7 +1731,19 @@ export default function App() {
       try {
         await offline.pruneInvalid();            // limpiar descargas corruptas/vacías
         const metas = await offline.listMetas();
+        // Primero cachear todas las metas. Luego, para las que tienen data: URL
+        // como carátula, forzar una actualización del catálogo: la pista puede
+        // estar ya cacheada con una URL HTTPS que no carga sin internet.
         metas.forEach(cacheTrack);
+        metas.forEach(m => {
+          if (m && m.id && typeof m.cover === 'string' && m.cover.startsWith('data:')) {
+            const inCat = trackById(m.id);
+            if (inCat && (!inCat.cover || !inCat.cover.startsWith('data:'))) {
+              // Promover el data: URL al catálogo en memoria para uso offline.
+              cacheTrack({ ...inCat, cover: m.cover });
+            }
+          }
+        });
         const ids = await offline.listIds();
         setDownloaded(new Set(ids));
         // Refrescar el cover del track actual si el catálogo ahora tiene uno mejor.
@@ -2534,6 +2549,25 @@ export default function App() {
       const tracks = (d.tracks || []).map(t => normalizeTrack({ ...t, artworkUrl: t.artworkUrl || t.cover || albumCover }));
       setDetailData({ type:'album', name: d.name || name, artist: d.artist || artist, artistId: d.artistId, cover: d.cover || cover, year: d.year, tracks });
     });
+    // Fallback offline: buscar en IndexedDB las pistas de este álbum cuando la
+    // red no responde. Usa albumId exacto o nombre de álbum como criterio.
+    const offlineFallback = async (aid, aName, aArtist, aCover) => {
+      try {
+        const metas = await offline.listMetas();
+        const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const tracks = metas
+          .filter(m => m && (
+            (aid && m.albumId === aid) ||
+            (aName && norm(m.album) === norm(aName))
+          ))
+          .map(normalizeTrack);
+        if (!tracks.length) return false;
+        const albumCover = aCover || tracks.find(t => t.cover)?.cover || '';
+        const withCover = tracks.map(t => t.cover ? t : { ...t, cover: albumCover });
+        setDetailData({ type:'album', name: aName, artist: aArtist, cover: albumCover, tracks: withCover, offline: true });
+        return true;
+      } catch { return false; }
+    };
     (async () => {
       try {
         let aid = albumId;
@@ -2549,8 +2583,16 @@ export default function App() {
           }
         }
         if (aid) await loadAlbum(aid);
-        else setDetailData({ type:'album', name, artist, cover, tracks: [], none: true });
-      } catch { setDetailData({ type:'album', name, artist, cover, tracks: [], none: true }); }
+        else {
+          // Sin aid: intentar fallback offline antes de declarar vacío.
+          if (!(await offlineFallback(albumId, name, artist, cover)))
+            setDetailData({ type:'album', name, artist, cover, tracks: [], none: true });
+        }
+      } catch {
+        // Red caída: intentar contenido offline antes de mostrar error.
+        if (!(await offlineFallback(albumId, name, artist, cover)))
+          setDetailData({ type:'album', name, artist, cover, tracks: [], none: true });
+      }
       finally { setDetailLoading(false); }
     })();
   };

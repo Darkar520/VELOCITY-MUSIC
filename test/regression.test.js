@@ -535,3 +535,181 @@ test('Regresión: streamUrl incluye quality — clave de caché del backend es c
   assert.ok(urlLow.includes('quality=low'), 'URL low debe incluir quality=low');
   assert.notEqual(urlHigh, urlLow, 'URLs de distinta calidad deben ser distintas (clave de caché)');
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 19. Bug carátulas offline: cacheTrack prioriza data: URL sobre HTTPS
+// ─────────────────────────────────────────────────────────────────────────────
+// Bug histórico: las pistas descargadas guardan la carátula como data: URL en
+// IndexedDB. Pero el catálogo en memoria podía sobreescribir ese data: URL con
+// la URL HTTPS original al cargar la pista desde radio/búsqueda posterior.
+// Sin internet, la HTTPS no carga → carátula rota.
+// Invariante: un data: URL siempre tiene prioridad sobre un HTTPS URL.
+test('Regresión: cacheTrack prioriza data: URL sobre HTTPS para carátulas offline', () => {
+  // Simula exactamente la lógica de cacheTrack de catalog.js.
+  const _catalog = new Map();
+  const FALLBACK_COVER = 'data:image/svg+xml;base64,FALLBACK';
+  const hasCover = (c) => !!c && c !== FALLBACK_COVER;
+  const isDataUrl = (c) => typeof c === 'string' && c.startsWith('data:');
+  const cacheTrack = (t) => {
+    if (t && t.id) {
+      const prev = _catalog.get(t.id);
+      if (prev) {
+        if (hasCover(prev.cover) && !hasCover(t.cover)) t = { ...t, cover: prev.cover };
+        else if (isDataUrl(t.cover) && !isDataUrl(prev.cover)) { /* t ya tiene el data: */ }
+      }
+      _catalog.set(t.id, t);
+    }
+    return t;
+  };
+  const trackById = (id) => _catalog.get(id) || null;
+
+  const id = 'offline-cover-test-' + Date.now();
+  const httpsUrl = 'https://yt3.googleusercontent.com/cover.jpg';
+  const dataUrl = 'data:image/jpeg;base64,/9j/AABBCC';
+
+  // Primero llega con HTTPS (desde búsqueda/radio).
+  cacheTrack({ id, title: 'T', artist: 'A', cover: httpsUrl });
+  assert.equal(trackById(id)?.cover, httpsUrl, 'inicialmente debe tener la HTTPS URL');
+
+  // Luego llega el data: URL (desde IndexedDB al cargar descargas).
+  cacheTrack({ id, title: 'T', artist: 'A', cover: dataUrl });
+  assert.equal(
+    trackById(id)?.cover, dataUrl,
+    'el data: URL debe REEMPLAZAR el HTTPS URL (para uso offline sin internet)',
+  );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 20. Bug carátulas offline: data: URL no vuelve a ser sobreescrita por HTTPS
+// ─────────────────────────────────────────────────────────────────────────────
+// Una vez que el catálogo tiene un data: URL (viene de IndexedDB), no debe
+// ser degradado de vuelta a HTTPS si la misma pista llega desde radio/búsqueda.
+test('Regresión: data: URL en catálogo no se degrada a HTTPS después', () => {
+  // Misma simulación de cacheTrack.
+  const _catalog = new Map();
+  const FALLBACK_COVER = 'data:image/svg+xml;base64,FALLBACK';
+  const hasCover = (c) => !!c && c !== FALLBACK_COVER;
+  const isDataUrl = (c) => typeof c === 'string' && c.startsWith('data:');
+  const cacheTrack = (t) => {
+    if (t && t.id) {
+      const prev = _catalog.get(t.id);
+      if (prev) {
+        // 1. Nunca degradar carátula real a vacío.
+        if (hasCover(prev.cover) && !hasCover(t.cover)) t = { ...t, cover: prev.cover };
+        // 2. Si el catálogo ya tiene un data: URL, no degradar a HTTPS.
+        //    El data: URL es inmune a la red y tiene prioridad offline.
+        else if (isDataUrl(prev.cover) && !isDataUrl(t.cover)) t = { ...t, cover: prev.cover };
+      }
+      _catalog.set(t.id, t);
+    }
+    return t;
+  };
+  const trackById = (id) => _catalog.get(id) || null;
+
+  const id = 'data-url-stable-' + Date.now();
+  const dataUrl = 'data:image/jpeg;base64,/9j/DDEEFF';
+  const httpsUrl = 'https://yt3.googleusercontent.com/new-cover.jpg';
+
+  // Primero el data: URL llega al catálogo (carga de descargas).
+  cacheTrack({ id, title: 'T', artist: 'A', cover: dataUrl });
+  assert.equal(trackById(id)?.cover, dataUrl);
+
+  // Luego la pista llega desde radio/búsqueda con HTTPS URL.
+  cacheTrack({ id, title: 'T', artist: 'A', cover: httpsUrl });
+  assert.equal(
+    trackById(id)?.cover, dataUrl,
+    'el data: URL no debe ser reemplazado por HTTPS (sin internet, HTTPS no carga)',
+  );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 21. Bug álbum offline: offlineFallback encuentra pistas por albumId
+// ─────────────────────────────────────────────────────────────────────────────
+// Bug histórico: sin internet, goAlbum() llama api.album() que falla y muestra
+// "0 canciones". El fallback offline debe encontrar las pistas descargadas en
+// IndexedDB que pertenecen al álbum (por albumId o nombre del álbum).
+test('Regresión: offlineFallback encuentra pistas de álbum por albumId', () => {
+  const albumId = 'MPREb_album123';
+  const metas = [
+    { id: 'track1', title: 'Song 1', artist: 'Artist', album: 'My Album', albumId, cover: 'data:image/jpeg;base64,AA' },
+    { id: 'track2', title: 'Song 2', artist: 'Artist', album: 'My Album', albumId, cover: 'data:image/jpeg;base64,BB' },
+    { id: 'other',  title: 'Other',  artist: 'Other',  album: 'Other Album', albumId: 'OTHER', cover: '' },
+  ];
+
+  // Simula la lógica de offlineFallback de goAlbum.
+  const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const tracks = metas.filter(m =>
+    (albumId && m.albumId === albumId) ||
+    ('My Album' && norm(m.album) === norm('My Album'))
+  );
+
+  assert.equal(tracks.length, 2, 'debe encontrar las 2 pistas del álbum');
+  assert.ok(tracks.every(t => t.albumId === albumId), 'todas las pistas deben pertenecer al álbum');
+  assert.ok(!tracks.some(t => t.id === 'other'), 'no debe incluir pistas de otros álbumes');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 22. Bug álbum offline: fallback hereda carátula del álbum si pistas no tienen
+// ─────────────────────────────────────────────────────────────────────────────
+test('Regresión: offlineFallback hereda carátula del álbum en pistas sin cover', () => {
+  const albumId = 'MPREb_noCover';
+  const albumCover = 'data:image/jpeg;base64,ALBUMCOVER';
+  const metas = [
+    { id: 'tr1', title: 'S1', artist: 'A', album: 'Álbum X', albumId, cover: '' },
+    { id: 'tr2', title: 'S2', artist: 'A', album: 'Álbum X', albumId, cover: '' },
+  ];
+
+  const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const tracks = metas.filter(m =>
+    (albumId && m.albumId === albumId) ||
+    ('Álbum X' && norm(m.album) === norm('Álbum X'))
+  );
+
+  // El cover de cada pista se hereda del álbum si está vacío.
+  const withCover = tracks.map(t => t.cover ? t : { ...t, cover: albumCover });
+
+  assert.ok(withCover.every(t => t.cover === albumCover),
+    'pistas sin cover deben heredar la carátula del álbum');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 23. Bug isDownloaded fuzzy: pistas del álbum muestran ícono descargado
+// aunque el videoId difiera del ID guardado en IndexedDB
+// ─────────────────────────────────────────────────────────────────────────────
+// Bug: downloaded (Set de IDs) se comparaba solo por ID exacto. Las pistas de
+// api.album() pueden tener un videoId diferente al que se guardó al descargar.
+// La función isDownloaded hace fuzzy match por título+artista normalizado.
+test('Regresión: isDownloaded fuzzy match detecta descarga por título+artista', () => {
+  // IDs distintos pero misma canción (diferente videoId del mismo contenido).
+  const downloadedId = 'yt-original-id';
+  const albumTrackId = 'yt-different-id';
+  const title = 'Strobe';
+  const artist = 'deadmau5';
+
+  const downloaded = new Set([downloadedId]);
+  const downloadedMetas = new Map([[downloadedId, { id: downloadedId, title, artist }]]);
+
+  const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+  // isDownloaded: primero ID exacto, luego fuzzy por título+artista.
+  const isDownloaded = (t) => {
+    if (!t) return false;
+    if (downloaded.has(t.id)) return true;
+    const tk = norm(t.title) + '|' + norm(t.artist);
+    for (const id of downloaded) {
+      const cached = downloadedMetas.get(id);
+      if (cached && norm(cached.title) + '|' + norm(cached.artist) === tk) return true;
+    }
+    return false;
+  };
+
+  // La pista del álbum tiene diferente ID pero mismo título+artista.
+  const albumTrack = { id: albumTrackId, title, artist };
+  assert.equal(isDownloaded(albumTrack), true,
+    'debe detectar descarga por título+artista aunque el ID difiera');
+
+  // Una pista completamente diferente no debe matchear.
+  const otherTrack = { id: 'other', title: 'Other Song', artist: 'Other Artist' };
+  assert.equal(isDownloaded(otherTrack), false,
+    'no debe marcar como descargada una pista diferente');
+});

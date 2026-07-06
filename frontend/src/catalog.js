@@ -8,12 +8,18 @@ import { FALLBACK_COVER } from './constants.js';
 const _catalog = new Map();
 
 const hasCover = (c) => !!c && c !== FALLBACK_COVER;
+const isDataUrl = (c) => typeof c === 'string' && c.startsWith('data:');
 export function cacheTrack(t) {
   if (t && t.id) {
     const prev = _catalog.get(t.id);
-    // Nunca degradar una carátula real ya conocida a vacío: la misma pista puede
-    // llegar con artwork desde búsqueda y sin él desde radio; conservamos la buena.
-    if (prev && hasCover(prev.cover) && !hasCover(t.cover)) t = { ...t, cover: prev.cover };
+    if (prev) {
+      // Prioridad de carátula (mayor → menor): data: URL > HTTPS > vacío.
+      // 1. Nunca degradar una carátula real ya conocida a vacío.
+      if (hasCover(prev.cover) && !hasCover(t.cover)) t = { ...t, cover: prev.cover };
+      // 2. Si el catálogo ya tiene un data: URL (descargado offline), no lo
+      //    degradar a HTTPS: sin internet la HTTPS no carga → carátula rota.
+      else if (isDataUrl(prev.cover) && !isDataUrl(t.cover)) t = { ...t, cover: prev.cover };
+    }
     _catalog.set(t.id, t);
   }
   return t;
