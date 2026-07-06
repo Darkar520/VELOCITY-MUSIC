@@ -2218,10 +2218,7 @@ export default function App() {
 
   // ── Enumerar dispositivos de salida de audio ──
   // Sin permiso de micrófono, enumerateDevices() devuelve deviceIds pero labels
-  // vacíos. Intentamos obtener permiso una vez con getUserMedia({audio:true})
-  // para poder mostrar los nombres reales (ej: "AirPods", "Altavoz Bluetooth").
-  // Si el usuario rechaza, seguimos funcionando con deviceIds.
-  const outputsPermRef = useRef(false);
+  // vacíos. El DeviceChip solicita permiso on-click cuando el usuario lo pulsa.
   useEffect(() => {
     if (!navigator.mediaDevices?.enumerateDevices) return;
     const update = () => navigator.mediaDevices.enumerateDevices().then(devs => {
@@ -2240,27 +2237,6 @@ export default function App() {
     navigator.mediaDevices.addEventListener?.('devicechange', update);
     return () => navigator.mediaDevices.removeEventListener?.('devicechange', update);
   }, []);
-  // Solicitar permiso de audio una vez al primer play para obtener labels reales.
-  useEffect(() => {
-    if (outputsPermRef.current || !playing) return;
-    outputsPermRef.current = true;
-    if (navigator.mediaDevices?.getUserMedia) {
-      navigator.mediaDevices.getUserMedia({ audio: true })
-        .then(stream => { stream.getTracks().forEach(t => t.stop()); })
-        .then(() => {
-          // Re-enumerar ahora que tenemos permiso y los labels estarán disponibles.
-          if (navigator.mediaDevices?.enumerateDevices) {
-            navigator.mediaDevices.enumerateDevices().then(devs => {
-              setOutputs(devs.filter(d => d.kind === 'audiooutput').map(d => ({
-                deviceId: d.deviceId,
-                label: d.label || 'Dispositivo de audio',
-              })));
-            }).catch(() => {});
-          }
-        })
-        .catch(() => {});
-    }
-  }, [playing]);
 
   // ── Aplicar sinkId al elemento audio ──
   useEffect(() => {
@@ -3288,21 +3264,56 @@ export default function App() {
 // ═══════════════════════════════════════════════════════════════
 function DeviceChip({ outputs, sinkId, setOutput, T }) {
   const [open, setOpen] = useState(false);
+  const [requesting, setRequesting] = useState(false);
   const list = (outputs || []).filter(o => o.deviceId);
   const current = list.find(o => o.deviceId === sinkId);
   const defaultDev = list.find(o => o.deviceId === 'default');
   const label = current?.label || defaultDev?.label || (list.length === 1 ? list[0]?.label : '') || 'Este dispositivo';
   const isBT = /blue|airpod|buds|head|auric|airpod|pods|earbuds|wireless|bt-/i.test(label);
   const Ico = isBT ? Icon.Headph : Icon.Speaker;
+  const hasRealLabels = list.some(o => o.label && !o.label.startsWith('Altavoz del dispositivo') && !o.label.startsWith('Salida de audio'));
   const canPick = list.length > 1;
+
+  const handleClick = async () => {
+    // Si no tenemos labels reales, solicitar permiso de audio primero.
+    if (!hasRealLabels && navigator.mediaDevices?.getUserMedia && !requesting) {
+      setRequesting(true);
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach(t => t.stop());
+        // Re-enumerar con permiso concedido — los labels ahora estarán disponibles.
+        // El devicechange event o el useEffect se encargará de actualizar outputs.
+        if (navigator.mediaDevices?.enumerateDevices) {
+          const devs = await navigator.mediaDevices.enumerateDevices();
+          const outs = devs.filter(d => d.kind === 'audiooutput').map(d => ({
+            deviceId: d.deviceId,
+            label: d.label || 'Dispositivo de audio',
+          }));
+          // Actualizar outputs directamente via callback si está disponible.
+          if (outs.length) {
+            // Disparar evento para que el useEffect re-enumerate.
+            navigator.mediaDevices.dispatchEvent?.(new Event('devicechange'));
+          }
+        }
+      } catch { /* usuario rechazó — seguir con labels genéricos */ }
+      setRequesting(false);
+    }
+    if (canPick || !hasRealLabels) setOpen(o => !o);
+  };
+
   return (
     <div style={{ position:'relative' }}>
-      <button onClick={() => canPick && setOpen(o => !o)} className="press" style={{ display:'flex', alignItems:'center', gap:8, background:'var(--surf-1)', border:'1px solid var(--line-soft)', borderRadius:99, padding:'8px 14px', cursor: canPick ? 'pointer' : 'default', color:'var(--txt-1)', fontSize:11.5, fontWeight:700, maxWidth:200 }}>
-        <Ico c={T.accent} sz={15} />
+      <button onClick={handleClick} className="press" style={{ display:'flex', alignItems:'center', gap:8, background:'var(--surf-1)', border:'1px solid var(--line-soft)', borderRadius:99, padding:'8px 14px', cursor:'pointer', color:'var(--txt-1)', fontSize:11.5, fontWeight:700, maxWidth:200 }} disabled={requesting}>
+        {requesting ? <Spinner c={T.accent} sz={14} /> : <Ico c={T.accent} sz={15} />}
         <span style={{ whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{label.replace(/\s*\(.*?\)$/g,'').replace(/-.*$/,'') || 'Salida de audio'}</span>
       </button>
-      {open && canPick && (
+      {open && (
         <div className="glass fade-up" style={{ position:'absolute', bottom:'calc(100% + 8px)', left:0, minWidth:220, background:'var(--surf-0)', border:'1px solid var(--line)', borderRadius:14, padding:6, zIndex:95, boxShadow:'0 20px 50px #000c' }}>
+          {list.length <= 1 && !hasRealLabels && (
+            <div style={{ padding:'10px 12px', fontSize:11, color:'var(--txt-2)', lineHeight:1.4 }}>
+              Conecta audífonos o altavoces Bluetooth para ver más opciones.
+            </div>
+          )}
           {list.map(o => {
             const oBT = /blue|airpod|buds|head|auric|airpod|pods|earbuds|wireless|bt-/i.test(o.label);
             return (

@@ -311,7 +311,10 @@ export const api = {
     } catch { return { nowPlaying: null }; }
   },
   // SSE: stream de actualizaciones en tiempo real. Retorna el EventSource.
+  // EventSource no soporta headers custom, así que pasamos el token por query param.
   subscribeNowPlaying() {
-    return new EventSource('/api/now-playing/events', { withCredentials: false });
+    const t = getToken();
+    const url = t ? `/api/now-playing/events?token=${encodeURIComponent(t)}` : '/api/now-playing/events';
+    return new EventSource(url, { withCredentials: false });
   },
 };

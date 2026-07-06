@@ -813,7 +813,24 @@ export function createApp(deps = {}) {
     app.get('/api/now-playing', requireAuth, (req, res) => {
       res.json({ nowPlaying: nowPlayingSvc.get(req.userId) });
     });
-    app.get('/api/now-playing/events', requireAuth, (req, res) => {
+    // SSE: EventSource no puede enviar Authorization header, aceptar token por query param.
+    app.get('/api/now-playing/events', async (req, res, next) => {
+      const queryToken = req.query.token;
+      if (queryToken) {
+        const result = authService.verifyToken(queryToken);
+        if (result) {
+          if (userRepo) {
+            try {
+              const user = await userRepo.findById(result.userId);
+              if (!user) return res.status(401).json({ error: 'Sesión expirada.' });
+            } catch { return res.status(401).json({ error: 'No se pudo verificar la sesión.' }); }
+          }
+          req.userId = result.userId;
+          return next();
+        }
+      }
+      return requireAuth(req, res, next);
+    }, (req, res) => {
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache, no-store, must-revalidate',
