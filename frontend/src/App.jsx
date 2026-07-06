@@ -480,20 +480,20 @@ function LibraryTab({ ctx }) {
         <button onClick={() => setOpenPlaylist(null)} className="press" style={{ display:'flex', alignItems:'center', gap:6, background:'none', border:'none', cursor:'pointer', color:'var(--txt-1)', marginBottom:16, paddingTop:4, fontSize:13, fontWeight:700 }}>
           <Icon.ChevL c="var(--txt-1)" sz={18} /> Biblioteca
         </button>
-        <div style={{ display:'flex', alignItems:'center', gap:16, marginBottom:20 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:16, marginBottom:16 }}>
           <div style={{ width:96, height:96, borderRadius:18, background: isLiked ? grad(T) : 'var(--surf-1)', display:'flex', alignItems:'center', justifyContent:'center', boxShadow:`0 12px 30px ${hex2rgba(T.accent,.3)}`, overflow:'hidden', flexShrink:0 }}>
             {isLiked ? <Icon.Heart c="#04060a" filled sz={40} /> : <Icon.List c={T.accent} sz={38} />}
           </div>
-          <div style={{ minWidth:0 }}>
-            <div style={{ fontSize:22, fontWeight:900, color:'var(--txt-0)', letterSpacing:-.5 }}>{pl.name}</div>
+          <div style={{ minWidth:0, flex:1 }}>
+            <div style={{ fontSize:22, fontWeight:900, color:'var(--txt-0)', letterSpacing:-.5, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{pl.name}</div>
             <div style={{ fontSize:11.5, color:'var(--txt-2)', marginTop:4 }}>{list.length} {list.length===1?'canción':'canciones'}</div>
-            <div style={{ display:'flex', gap:8, marginTop:12 }}>
-              {list.length > 0 && <button onClick={() => play(list[0], pl.trackIds)} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:8, background:grad(T), border:'none', borderRadius:99, padding:'9px 20px', cursor:'pointer', color:'#04060a', fontSize:12.5, fontWeight:800, boxShadow:`0 6px 18px ${hex2rgba(T.accent,.45)}` }}><Icon.Play c="#04060a" sz={16} /> Reproducir</button>}
-              {pl.trackIds.length > 0 && <DownloadAllButton ids={pl.trackIds} downloaded={downloaded} downloading={downloading} onClick={() => downloadMany(pl.trackIds)} T={T} />}
-              {!isLiked && !isSaved && <button onClick={() => { deletePlaylist(pl.id); setOpenPlaylist(null); }} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:7, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:99, padding:'9px 16px', cursor:'pointer', color:'var(--txt-1)', fontSize:12, fontWeight:700 }}><Icon.Trash c="var(--txt-1)" sz={15} /> Eliminar</button>}
-            {isSaved && <button onClick={() => { unsavePlaylist(savedPl.playlistId); setOpenPlaylist(null); }} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:7, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:99, padding:'9px 16px', cursor:'pointer', color:'var(--txt-1)', fontSize:12, fontWeight:700 }}><Icon.Trash c="var(--txt-1)" sz={15} /> Eliminar</button>}
-            </div>
           </div>
+        </div>
+        <div style={{ display:'flex', gap:8, marginBottom:20, flexWrap:'wrap' }}>
+          {list.length > 0 && <button onClick={() => play(list[0], pl.trackIds)} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:8, background:grad(T), border:'none', borderRadius:99, padding:'9px 20px', cursor:'pointer', color:'#04060a', fontSize:12.5, fontWeight:800, boxShadow:`0 6px 18px ${hex2rgba(T.accent,.45)}` }}><Icon.Play c="#04060a" sz={16} /> Reproducir</button>}
+          {pl.trackIds.length > 0 && <DownloadAllButton ids={pl.trackIds} downloaded={downloaded} downloading={downloading} onClick={() => downloadMany(pl.trackIds)} T={T} />}
+          {!isLiked && !isSaved && <button onClick={() => { deletePlaylist(pl.id); setOpenPlaylist(null); }} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:7, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:99, padding:'9px 16px', cursor:'pointer', color:'var(--txt-1)', fontSize:12, fontWeight:700 }}><Icon.Trash c="var(--txt-1)" sz={15} /> Eliminar</button>}
+          {isSaved && <button onClick={() => { unsavePlaylist(savedPl.playlistId); setOpenPlaylist(null); }} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:7, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:99, padding:'9px 16px', cursor:'pointer', color:'var(--txt-1)', fontSize:12, fontWeight:700 }}><Icon.Trash c="var(--txt-1)" sz={15} /> Eliminar</button>}
         </div>
         {pl.trackIds.length === 0 ? (
           <div style={{ textAlign:'center', color:'var(--txt-2)', fontSize:13, paddingTop:30 }}>Esta playlist está vacía. Añade canciones con el botón +.</div>
@@ -1074,10 +1074,11 @@ function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next, prev,
     transition:'transform .42s cubic-bezier(.22,1,.36,1), opacity .3s ease, background 1.4s ease',
     zIndex:90, display:'flex', flexDirection:'column', padding:'22px 26px 26px', overflow:'hidden',
   } : {
-    position:'absolute', inset:0, background: panelBg,
+    position:'absolute', inset:0, width:'100%', background: panelBg,
     transform: open ? 'translateY(0)' : 'translateY(100%)', opacity: open ? 1 : 0,
     transition:'transform .46s cubic-bezier(.22,1,.36,1), opacity .3s ease, background 1.4s ease',
     zIndex:90, display:'flex', flexDirection:'column', padding:pad, overflowY:'auto',
+    boxSizing:'border-box', touchAction:'pan-y',
   };
 
   // ─────────── LAYOUT DESKTOP (estilo Spotify, pantalla completa) ───────────
@@ -3134,11 +3135,11 @@ export default function App() {
 
   // ───────────── MÓVIL ─────────────
   return (
-    <div style={{ position:'relative', height:'100dvh', overflow:'hidden', background:'radial-gradient(circle at 30% 0%, #0d1320, #04060a 60%)', display:'flex', flexDirection:'column', fontFamily:'Inter,-apple-system,sans-serif' }}>
+    <div style={{ position:'relative', height:'100dvh', width:'100%', overflow:'hidden', overflowX:'hidden', background:'radial-gradient(circle at 30% 0%, #0d1320, #04060a 60%)', display:'flex', flexDirection:'column', fontFamily:'Inter,-apple-system,sans-serif' }}>
       {audioEl}
       <div style={{ position:'absolute', top:-60, left:'50%', transform:'translateX(-50%)', width:300, height:200, background:grad(T), filter:'blur(70px)', opacity:.16, pointerEvents:'none', zIndex:0 }} />
       <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', paddingTop:'calc(env(safe-area-inset-top, 12px) + 8px)', position:'relative', zIndex:1 }}>
-        <div style={{ flex:1, overflowY:'auto', padding:'4px 18px 0' }}>{Content}</div>
+        <div style={{ flex:1, overflowY:'auto', overflowX:'hidden', padding:'4px 18px 0', width:'100%', boxSizing:'border-box' }}>{Content}</div>
 
         {track && (
           <div style={{ padding:'8px 14px 6px' }}>
