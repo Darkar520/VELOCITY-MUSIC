@@ -2819,12 +2819,23 @@ export default function App() {
     // ID estable: basado en el label del mix (normalizado).
     const pid = 'mix:' + (mix.label || '').toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').slice(0, 60);
     if (isPlaylistSaved(pid)) { showToast('Ya está guardado'); return; }
-    const entry = { playlistId: pid, name: mix.label || 'Mix', cover: mix.tracks?.[0]?.cover || '', trackIds: (mix.tracks || []).map(t => t.id).filter(Boolean) };
+    // Strip data:/blob: URLs del cover: pueden pesar decenas de KB y causar
+    // errores 413 (body too large) o timeouts en el POST al backend.
+    const rawCover = mix.tracks?.[0]?.cover || '';
+    const cover = (typeof rawCover === 'string' && (rawCover.startsWith('data:') || rawCover.startsWith('blob:'))) ? '' : rawCover;
+    const entry = { playlistId: pid, name: mix.label || 'Mix', cover, trackIds: (mix.tracks || []).map(t => t.id).filter(Boolean) };
+    // Actualización optimista: añadir a estado local inmediatamente.
     setSavedPlaylists(s => [entry, ...s]);
     // Subir los metadatos de las pistas del mix para hidratación entre dispositivos.
     if (mix.tracks?.length) api.saveTracks(mix.tracks.map(slimTrack).filter(Boolean));
+    // Sincronizar con el backend. Si falla, NO revertir: la playlist queda
+    // guardada localmente (localStorage) y se sincronizará en el próximo login.
     try { await api.savePlaylist(entry); showToast('Mix guardado en tu biblioteca'); }
-    catch { setSavedPlaylists(s => s.filter(p => p.playlistId !== pid)); showToast('No se pudo guardar el mix'); }
+    catch {
+      // Reintento único tras 2s (puede ser un timeout transitorio del túnel).
+      setTimeout(() => api.savePlaylist(entry).catch(() => {}), 2000);
+      showToast('Guardado localmente · se sincronizará después');
+    }
   };
   const unsavePlaylist = async (playlistId) => {
     setSavedPlaylists(s => s.filter(p => p.playlistId !== playlistId));
