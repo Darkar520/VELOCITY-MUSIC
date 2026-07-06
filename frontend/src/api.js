@@ -89,8 +89,10 @@ export const api = {
     return jsonOrThrow(await fetch(`/api/album?id=${encodeURIComponent(id)}`, { signal }));
   },
   // Radio / relacionadas a una canción (reproducción tipo Spotify).
-  async radio(id, signal) {
-    const d = await jsonOrThrow(await fetch(`/api/radio?id=${encodeURIComponent(id)}`, { signal }));
+  async radio(id, limit, signal) {
+    const params = new URLSearchParams({ id: String(id) });
+    if (limit && typeof limit === 'number') params.set('limit', String(Math.min(50, limit)));
+    const d = await jsonOrThrow(await fetch(`/api/radio?${params.toString()}`, { signal }));
     return d.tracks || [];
   },
 

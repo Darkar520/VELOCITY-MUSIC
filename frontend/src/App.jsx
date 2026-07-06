@@ -1860,6 +1860,13 @@ export default function App() {
   // ── Feed personalizado (mixes según lo que escuchas, guardas y descargas) ──
   const feedSigRef = useRef('');
   const feedTokenRef = useRef(0);
+  // Ref para que el feed lea downloaded sin que su cambio lo interrumpa.
+  // downloaded (Set) se actualiza en cada descarga individual; incluirlo en las
+  // dependencias del efecto hacía que el feed se cancelara y regenerara con cada
+  // notificación de "canción descargada". Con la ref, el efecto solo se dispara
+  // por cambios reales de historial/favs/prefs/nonce, no por cada descarga.
+  const downloadedRef = useRef(downloaded);
+  downloadedRef.current = downloaded;
   // Limpiar la firma guardada cada vez que feedNonce cambia (nuevo login u otro trigger)
   // para garantizar que el efecto siempre regenere el feed, ignorando homeRows cacheado.
   const prevFeedNonceRef = useRef(feedNonce);
@@ -1878,7 +1885,9 @@ export default function App() {
     const score = {};
     recent.forEach((id, i) => { score[id] = (score[id] || 0) + Math.max(1, 12 - i * 0.4); });
     favs.forEach(id => { score[id] = (score[id] || 0) + 6; });
-    [...downloaded].forEach(id => { score[id] = (score[id] || 0) + 4; });
+    // Usar la ref para el score de descargas: leemos el valor actual sin
+    // hacer que el efecto dependa de downloaded directamente.
+    [...downloadedRef.current].forEach(id => { score[id] = (score[id] || 0) + 4; });
     const ranked = Object.keys(score).map(trackById).filter(Boolean).sort((a, b) => score[b.id] - score[a.id]);
     // Tomar hasta 8 seeds con shuffle: artistas distintos, sin repetición,
     // orden aleatorio para que el feed cambie entre sesiones.
@@ -1952,7 +1961,7 @@ export default function App() {
       const buildDiscovery = async (baseTracks, label = 'Nuevos hallazgos') => {
         const bases = (baseTracks || []).filter(Boolean);
         if (!bases.length) return null;
-        const known = new Set([...recent, ...favs, ...[...downloaded], ...bases.map(s => s.id)]);
+        const known = new Set([...recent, ...favs, ...[...downloadedRef.current], ...bases.map(s => s.id)]);
         try {
           const rels = await Promise.all(bases.slice(0, 5).map(s => api.radio(s.id, 50).catch(() => [])));
           let tracks = capPerArtist(dedupeByTitle(rels.flat().map(normalizeTrack)), 3).filter(t => t.id && !known.has(t.id));
@@ -2014,7 +2023,7 @@ export default function App() {
       }
       if (alive()) setHomeLoading(false);
     })();
-  }, [authed, recent, favs, downloaded, recentSearches, onboardPrefs, feedNonce]);
+  }, [authed, recent, favs, recentSearches, onboardPrefs, feedNonce]);
 
   // Refresco dinámico del feed al volver tras un rato.
   useEffect(() => { let h = 0; const v = () => { if (document.visibilityState === 'hidden') h = Date.now(); else if (h && Date.now() - h > 720000) { h = 0; setFeedNonce(n => n + 1); } }; document.addEventListener('visibilitychange', v); return () => document.removeEventListener('visibilitychange', v); }, []);
@@ -2457,13 +2466,62 @@ export default function App() {
     setPlaying(false);
   };
 
-  // ── Favoritos (backend) ──
+  // ── Favoritos (backend + cola offline) ──
+  // Cola de favoritos pendientes: si el backend no está disponible, guardamos
+  // los cambios en localStorage y los sincronizamos al volver la conexión.
+  const pendingFavsRef = useRef(null);
+  if (!pendingFavsRef.current) {
+    pendingFavsRef.current = new Map(); // id → 'add' | 'remove'
+    try {
+      const saved = JSON.parse(localStorage.getItem('velocity.pendingFavs') || '[]');
+      saved.forEach(([id, op]) => pendingFavsRef.current.set(id, op));
+    } catch {}
+  }
+  const savePendingFavs = () => {
+    try { localStorage.setItem('velocity.pendingFavs', JSON.stringify([...pendingFavsRef.current.entries()])); } catch {}
+  };
+  // Sincronizar la cola de favoritos pendientes con el backend.
+  const flushPendingFavs = React.useCallback(async () => {
+    if (!pendingFavsRef.current.size) return;
+    const entries = [...pendingFavsRef.current.entries()];
+    for (const [id, op] of entries) {
+      try {
+        if (op === 'add') await api.addFavorite(id);
+        else await api.removeFavorite(id);
+        pendingFavsRef.current.delete(id);
+      } catch { break; } // si falla, dejar el resto para el siguiente intento
+    }
+    savePendingFavs();
+  }, []);
+  // Sincronizar al recuperar conexión.
+  useEffect(() => {
+    const onOnline = () => { if (authed) flushPendingFavs(); };
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  }, [authed, flushPendingFavs]);
+  // Sincronizar al iniciar sesión (por si había pendientes de una sesión anterior).
+  useEffect(() => { if (authed) flushPendingFavs(); }, [authed]);
   const toggleFav = async (id) => {
     const has = favs.includes(id);
+    // Actualización optimista: el UI responde inmediatamente.
     setFavs(f => has ? f.filter(x => x !== id) : [id, ...f]);
     if (!has) { const tk = trackById(id); if (tk) api.saveTracks([slimTrack(tk)]); }
-    try { has ? await api.removeFavorite(id) : await api.addFavorite(id); }
-    catch { setFavs(f => has ? [id, ...f] : f.filter(x => x !== id)); showToast('No se pudo actualizar Me gusta'); }
+    try {
+      has ? await api.removeFavorite(id) : await api.addFavorite(id);
+      // Éxito: asegurar que no quede en la cola pendiente.
+      pendingFavsRef.current.delete(id);
+      savePendingFavs();
+    } catch {
+      // Sin internet u otro error: guardar en la cola pendiente en vez de revertir.
+      // El UI ya muestra el estado correcto; se sincronizará al volver la conexión.
+      pendingFavsRef.current.set(id, has ? 'remove' : 'add');
+      savePendingFavs();
+      // Solo mostrar aviso si hay conexión (si no hay, el usuario ya sabe).
+      if (navigator.onLine) {
+        setFavs(f => has ? [id, ...f] : f.filter(x => x !== id)); // revertir solo con red
+        showToast('No se pudo actualizar Me gusta');
+      }
+    }
   };
 
   // ── Playlists (backend) ──
