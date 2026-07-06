@@ -2843,6 +2843,7 @@ export default function App() {
   };
 
   const onLogout = () => {
+    api.sessionEnd(); // fire-and-forget: cerrar sesión en PG antes de limpiar token
     api.logout();
     localStorage.removeItem('velocity.email');
     localStorage.removeItem('velocity.name');
@@ -2854,6 +2855,8 @@ export default function App() {
   const handleAuthed = (em, name) => {
     if (em) { setEmail(em); localStorage.setItem('velocity.email', em); }
     if (name != null) { setDisplayName(name); localStorage.setItem('velocity.name', name); }
+    // Registrar inicio de sesión en PG para trazabilidad de tiempo de sesión activa.
+    api.sessionStart();
     // Forzar regeneración del feed al hacer login (borra el feed del usuario anterior).
     setHomeRows([]);
     setFeedNonce(n => n + 1);
@@ -3046,7 +3049,7 @@ export default function App() {
     if (ids.length > 1 && i !== -1) {
       showToast('Pista no disponible · siguiente…');
       setTimeout(() => next(), 1000);
-    } else { setPlaying(false); showToast('No se pudo reproducir esta pista'); }
+    } else { setPlaying(false); showToast('No se pudo reproducir esta pista'); api.reportPlaybackError({ trackId: cur, errorCode: 'max_retries', errorMessage: 'Agotados 4 reintentos de reproducción' }); }
   };
 
   const audioEl = (

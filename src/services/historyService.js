@@ -14,14 +14,14 @@ export class HistoryError extends Error {
 
 export function createHistoryService({ historyRepo, trackRepo }) {
   return {
-    async record(userId, trackId, at = Date.now()) {
+    async record(userId, trackId, at = Date.now(), userAgent = '') {
       if (trackId === undefined || trackId === null || trackId === '') {
         throw new HistoryError(400, 'Identidad de pista inválida.');
       }
       if (trackRepo && !(await trackRepo.exists(trackId))) {
         throw new HistoryError(400, 'Identidad de pista inválida.');
       }
-      await historyRepo.record(userId, trackId, at);
+      await historyRepo.record(userId, trackId, at, userAgent);
       return { trackId, userId, playedAt: at };
     },
 

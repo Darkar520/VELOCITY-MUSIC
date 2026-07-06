@@ -56,6 +56,11 @@ export function createApp(deps = {}) {
     statsRepo,
     trackRepo,
     jwtSecret,
+    // ── Nuevos repos y servicios de trazabilidad ──
+    errorRepo   = null,
+    sessionRepo = null,
+    syncSvc     = null,
+    healthSvc   = null,
     staticDir = path.join(__dirname, '..', 'public'),
   } = deps;
 
@@ -613,7 +618,8 @@ export function createApp(deps = {}) {
     app.post('/api/history', requireAuth, wrap(async (req, res) => {
       if (statsRepo) statsRepo.incr('plays').catch(() => {});
       if (userRepo && typeof userRepo.recordPlay === 'function') userRepo.recordPlay(req.userId).catch(() => {});
-      res.status(201).json(await historyService.record(req.userId, (req.body || {}).trackId));
+      const userAgent = String(req.headers['user-agent'] || '').slice(0, 300);
+      res.status(201).json(await historyService.record(req.userId, (req.body || {}).trackId, undefined, userAgent));
     }, HistoryError));
   }
 
@@ -632,12 +638,61 @@ export function createApp(deps = {}) {
     }));
   }
 
+  // ---- Salud de la base de datos (público) ----
+  app.get('/api/health', async (req, res) => {
+    const result = healthSvc
+      ? await healthSvc(startTime)
+      : { status: 'ok', db: 'n/a', latencyMs: null, uptime: Math.floor((Date.now() - startTime) / 1000) };
+    return res.status(result.db === 'red' ? 503 : 200).json(result);
+  });
+
+  // ---- Eventos de trazabilidad ----
+  const eventLimiter20 = createRateLimiter({ windowMs: 60_000, max: 20 });
+  const eventLimiter10 = createRateLimiter({ windowMs: 60_000, max: 10 });
+
+  app.post('/api/events/playback-error', eventLimiter20, async (req, res) => {
+    const body = req.body || {};
+    if (!body.trackId)   return res.status(400).json({ error: 'Falta el campo "trackId".' });
+    if (!body.errorCode) return res.status(400).json({ error: 'Falta el campo "errorCode".' });
+    const userId = optionalUserId(req);
+    const userAgent = String(req.headers['user-agent'] || '').slice(0, 300);
+    if (errorRepo) {
+      await errorRepo.recordError({ userId, trackId: body.trackId, errorCode: body.errorCode, errorMessage: body.errorMessage || '', userAgent }).catch(() => {});
+      if (userId) errorRepo.checkAndFlagUser(userId).catch(() => {});
+    }
+    return res.status(201).json({ ok: true });
+  });
+
+  if (requireAuth && sessionRepo) {
+    app.post('/api/events/session-start', requireAuth, eventLimiter10, wrap(async (req, res) => {
+      const userAgent = String(req.headers['user-agent'] || '').slice(0, 300);
+      const id = await sessionRepo.startSession({ userId: req.userId, userAgent });
+      res.status(201).json({ ok: true, sessionId: id });
+    }));
+    app.post('/api/events/session-end', requireAuth, eventLimiter10, wrap(async (req, res) => {
+      const result = await sessionRepo.endSession(req.userId);
+      if (!result) return res.status(409).json({ error: 'No hay sesión activa que cerrar.' });
+      res.json({ ok: true, durationSeconds: result.duration_seconds });
+    }));
+  }
+
+  // ---- Sincronización completa de biblioteca ----
+  if (requireAuth && syncSvc) {
+    app.get('/api/sync/library', requireAuth, wrap(async (req, res) => {
+      const library = await withTimeout(syncSvc.getLibrary(req.userId), 10_000);
+      res.json(library);
+    }));
+    app.post('/api/sync/library', requireAuth, wrap(async (req, res) => {
+      const result = await withTimeout(syncSvc.pushLibrary(req.userId, req.body || {}), 10_000);
+      res.json(result);
+    }));
+  }
+
   // ---- Metadatos de pistas (sincronización entre dispositivos) ----
   // El frontend sube los metadatos de las pistas que el usuario reproduce,
   // guarda o añade a playlists, y los descarga (hidrata) en cualquier otro
   // dispositivo para renderizar su biblioteca sin depender de la caché local.
-  if (requireAuth && trackMetaRepo) {
-    app.post('/api/tracks', requireAuth, wrap(async (req, res) => {
+  if (requireAuth && trackMetaRepo) {    app.post('/api/tracks', requireAuth, wrap(async (req, res) => {
       await trackMetaRepo.upsertMany((req.body || {}).tracks || []);
       res.status(201).json({ ok: true });
     }));
@@ -734,6 +789,35 @@ export function createApp(deps = {}) {
         <input id="f" placeholder="Filtrar por correo…" oninput="for(const r of document.querySelectorAll('tbody tr')){r.style.display=r.innerText.toLowerCase().includes(this.value.toLowerCase())?'':'none'}" />
         <table><thead><tr><th>Email</th><th>Nombre</th><th>Logins</th><th>Reprod.</th><th>Última actividad</th><th>Registrado</th></tr></thead><tbody>${rows || '<tr><td colspan="6">Sin usuarios aún.</td></tr>'}</tbody></table>`));
     }));
+  }
+
+  // ---- Presencia en tiempo real (Admin_Key) ----
+  if (ADMIN_ENABLED && sessionRepo) {
+    app.get('/api/admin/presence', async (req, res) => {
+      if (req.query.key !== ADMIN_KEY) return res.status(403).json({ error: 'Clave de administrador inválida.' });
+      try {
+        const users = await sessionRepo.listActive(500);
+        return res.json({ users });
+      } catch { return res.status(502).json({ error: 'No se pudo obtener la presencia.' }); }
+    });
+  }
+
+  // ---- Alertas de errores de reproducción (Admin_Key) ----
+  if (ADMIN_ENABLED && errorRepo) {
+    app.get('/api/admin/alerts', async (req, res) => {
+      if (req.query.key !== ADMIN_KEY) return res.status(403).json({ error: 'Clave de administrador inválida.' });
+      try {
+        const alerts = await errorRepo.listActiveAlerts();
+        return res.json({ alerts });
+      } catch { return res.status(502).json({ error: 'No se pudo obtener las alertas.' }); }
+    });
+    app.post('/api/admin/alerts/:alertId/resolve', async (req, res) => {
+      if (req.query.key !== ADMIN_KEY) return res.status(403).json({ error: 'Clave de administrador inválida.' });
+      try {
+        const ok = await errorRepo.resolveAlert(req.params.alertId);
+        return ok ? res.json({ ok: true }) : res.status(404).json({ error: 'Alerta no encontrada o ya resuelta.' });
+      } catch { return res.status(502).json({ error: 'No se pudo resolver la alerta.' }); }
+    });
   }
 
   return app;

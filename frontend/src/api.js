@@ -242,6 +242,38 @@ export const api = {
     }));
   },
 
+  // ── Trazabilidad — eventos de sesión y errores de reproducción ──
+  async sessionStart() {
+    try { await fetch('/api/events/session-start', { method: 'POST', headers: authHeaders() }); } catch {}
+  },
+  async sessionEnd() {
+    try { await fetch('/api/events/session-end', { method: 'POST', headers: authHeaders() }); } catch {}
+  },
+  async reportPlaybackError({ trackId, errorCode, errorMessage }) {
+    try {
+      await fetch('/api/events/playback-error', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ trackId, errorCode, errorMessage: errorMessage || '' }),
+      });
+    } catch {}
+  },
+
+  // ── Sincronización completa de biblioteca entre dispositivos ──
+  async getLibrary() {
+    try {
+      return await jsonOrThrow(await fetch('/api/sync/library', { headers: authHeaders() }));
+    } catch { return null; }
+  },
+  async pushLibrary(state) {
+    if (!state) return;
+    try {
+      await fetch('/api/sync/library', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(state),
+      });
+    } catch {}
+  },
+
   // ── Metadatos de pistas (sincronización entre dispositivos) ──
   // Sube los metadatos de un lote de pistas para que otros dispositivos puedan
   // renderizar la biblioteca del usuario. Silencioso ante errores.

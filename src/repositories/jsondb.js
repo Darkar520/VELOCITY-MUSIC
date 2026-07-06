@@ -281,8 +281,8 @@ export function createJsonFavoritesRepo() {
 
 export function createJsonHistoryRepo() {
   return {
-    async record(userId, trackId, playedAt = Date.now()) {
-      store.history.push({ userId, trackId, playedAt });
+    async record(userId, trackId, playedAt = Date.now(), userAgent = '') {
+      store.history.push({ userId, trackId, playedAt, userAgent: String(userAgent || '').slice(0, 300) });
       // Acotar historial por usuario para que el archivo no crezca sin límite.
       const mine = store.history.filter((e) => e.userId === userId);
       if (mine.length > 200) {

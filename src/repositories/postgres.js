@@ -249,10 +249,11 @@ export function createPgFavoritesRepo(query) {
 
 export function createPgHistoryRepo(query) {
   return {
-    async record(userId, trackId, playedAt = Date.now()) {
+    async record(userId, trackId, playedAt = Date.now(), userAgent = '') {
       await query(
-        'INSERT INTO listening_history (user_id, track_id, played_at) VALUES ($1, $2, to_timestamp($3 / 1000.0))',
-        [userId, trackId, playedAt],
+        `INSERT INTO listening_history (user_id, track_id, played_at, user_agent)
+         VALUES ($1, $2, to_timestamp($3 / 1000.0), $4)`,
+        [userId, trackId, playedAt, String(userAgent || '').slice(0, 300)],
       );
     },
     async list(userId, limit = 100) {

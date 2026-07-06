@@ -39,7 +39,7 @@ if (!wantCluster) {
   console.log('=======================================================');
 
   for (let i = 0; i < workers; i++) {
-    cluster.fork({ WORKER_RESOLVE_CONCURRENCY: String(perWorker) });
+    cluster.fork({ WORKER_RESOLVE_CONCURRENCY: String(perWorker), WORKER_ID: String(i) });
   }
   // Reponer workers caídos para mantener el servicio siempre arriba.
   cluster.on('exit', (worker, code, signal) => {

@@ -37,7 +37,13 @@ import {
   createPgTrackMetaRepo,
   createPgStatsRepo,
 } from './src/repositories/postgres.js';
+import * as errorRepoModule   from './src/repositories/errorRepo.js';
+import * as sessionRepoModule from './src/repositories/sessionRepo.js';
+import * as syncServiceModule from './src/services/syncService.js';
+import * as healthServiceModule from './src/services/healthService.js';
+import * as retentionServiceModule from './src/services/retentionService.js';
 import { initSchema } from './src/db/init.js';
+import { getPool } from './src/db/pool.js';
 
 const PORT = process.env.PORT || 3000;
 const USE_POSTGRES = process.env.USE_POSTGRES === '1';
@@ -90,6 +96,11 @@ export async function bootstrap() {
         trackMetaRepo: createPgTrackMetaRepo(query),
         statsRepo: createPgStatsRepo(query),
         trackRepo: null,
+        // ── Trazabilidad extendida ──
+        errorRepo:   { recordError: (p) => errorRepoModule.recordError(query, p),   checkAndFlagUser: (uid) => errorRepoModule.checkAndFlagUser(query, uid),   listActiveAlerts: () => errorRepoModule.listActiveAlerts(query), resolveAlert: (id) => errorRepoModule.resolveAlert(query, id) },
+        sessionRepo: { startSession: (p) => sessionRepoModule.startSession(query, p), endSession: (uid) => sessionRepoModule.endSession(query, uid), listActive: (lim) => sessionRepoModule.listActive(query, lim) },
+        syncSvc:     { getLibrary: (uid) => syncServiceModule.getLibrary(query, uid),  pushLibrary: (uid, p) => syncServiceModule.pushLibrary(query, uid, p) },
+        healthSvc:   (startTime) => healthServiceModule.check(getPool(), startTime),
       }
     : {
         // Persistencia en archivo JSON (sobrevive reinicios; no se borra con el tiempo).
@@ -102,6 +113,8 @@ export async function bootstrap() {
         trackMetaRepo: createJsonTrackMetaRepo(),
         statsRepo: createJsonStatsRepo(),
         trackRepo: null,
+        errorRepo: null, sessionRepo: null, syncSvc: null,
+        healthSvc:   (startTime) => healthServiceModule.check(null, startTime),
       };
 
   // Detección de yt-dlp y modo activo (14.1–14.3).
@@ -140,6 +153,12 @@ export async function bootstrap() {
     try { const r = await ytmCatalog(q, limit); if (Array.isArray(r) && r.length) return r; } catch {}
     try { return await ytdlpCatalog(q, limit); } catch { return []; }
   };
+
+  // Iniciar el job de retención de datos solo en el worker 0 (o en proceso único).
+  // Evita ejecuciones duplicadas en modo cluster.
+  if (USE_POSTGRES && (process.env.WORKER_ID === '0' || !process.env.WORKER_ID)) {
+    retentionServiceModule.start(query);
+  }
 
   const app = createApp({
     cache,
