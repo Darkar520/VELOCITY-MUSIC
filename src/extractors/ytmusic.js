@@ -48,6 +48,19 @@ async function getClientSafe() {
   }
 }
 
+/** Elimina sufijos promocionales del título (Official Audio/Video, etc.) */
+function cleanTitle(raw) {
+  if (!raw) return raw;
+  return raw
+    // Quita bloques entre paréntesis/corchetes con palabras clave promocionales
+    .replace(/\s*[\(\[]\s*(?:official\s*)?(?:music\s*)?(?:video|audio|lyric[s]?|visualizer|hd|4k|mv|clip)\s*[\)\]]/gi, '')
+    .replace(/\s*[\(\[]\s*official\s*[\)\]]/gi, '')
+    // Quita sufijos sueltos al final (sin paréntesis): " - Official Video", etc.
+    .replace(/\s*[-–|]\s*official\s+(?:video|audio|music\s+video|lyric[s]?|visualizer|hd|4k|mv|clip)\s*$/gi, '')
+    .replace(/\s*[-–|]\s*(?:official\s+)?(?:music\s+)?(?:video|audio|lyric[s]?|visualizer|hd|4k|mv)\s*$/gi, '')
+    .trim();
+}
+
 /**
  * Mapea un resultado de ytmusic-api a nuestro formato TrackMetadata.
  * Prioriza portadas de álbum en alta resolución.
@@ -56,7 +69,7 @@ function mapYTMusicSong(song) {
   const thumb = pickBestThumb(song.thumbnails) || pickBestThumb(song.album?.thumbnails) || null;
   return {
     id: song.videoId ?? null,
-    title: song.name ?? song.title ?? null,
+    title: cleanTitle(song.name ?? song.title ?? null),
     artist: extractArtist(song),
     artistId: extractArtistId(song),
     album: song.album?.name ?? null,
@@ -246,16 +259,21 @@ function mapUpNext(s) {
   } else if (typeof s.artist === 'string') {
     artist = s.artist;
   }
-  const thumb = s.thumbnail ? hiRes(s.thumbnail) : pickBestThumb(s.thumbnails);
+  // Preferir portada de álbum (si existe) sobre miniatura de video de YouTube.
+  // Las miniaturas de i.ytimg.com son capturas del video, no artwork oficial.
+  const albumThumb = pickBestThumb(s.album?.thumbnails);
+  const rawThumb = s.thumbnail ? hiRes(s.thumbnail) : pickBestThumb(s.thumbnails);
+  const isVideoThumb = (url) => url && typeof url === 'string' && url.includes('i.ytimg.com');
+  const artworkUrl = albumThumb || (isVideoThumb(rawThumb) ? null : rawThumb) || rawThumb;
   return {
     id: s.videoId ?? null,
-    title: s.title ?? s.name ?? null,
+    title: cleanTitle(s.title ?? s.name ?? null),
     artist,
     artistId,
     album: s.album?.name ?? null,
     albumId: s.album?.albumId ?? null,
     durationSeconds: parseDuration(s.duration),
-    artworkUrl: thumb,
+    artworkUrl,
     releaseDate: null,
     genre: null,
   };
@@ -309,7 +327,7 @@ export async function getSongById(videoId) {
   if (!s) return null;
   return {
     id: s.videoId ?? videoId,
-    title: s.name ?? null,
+    title: cleanTitle(s.name ?? null),
     artist: s.artist?.name ?? null,
     artistId: s.artist?.artistId ?? null,
     album: null,

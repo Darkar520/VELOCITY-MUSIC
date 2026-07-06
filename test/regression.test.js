@@ -713,3 +713,40 @@ test('Regresión: isDownloaded fuzzy match detecta descarga por título+artista'
   assert.equal(isDownloaded(otherTrack), false,
     'no debe marcar como descargada una pista diferente');
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 24. cleanTitle — elimina sufijos promocionales de YouTube de los títulos
+// ─────────────────────────────────────────────────────────────────────────────
+// Bug histórico: títulos como "Aerials (Official Audio)" o "Song - Official Video"
+// aparecían en la UI. La función cleanTitle debe eliminarlos.
+test('Regresión: cleanTitle elimina sufijos promocionales de YouTube', () => {
+  // Simula exactamente la lógica de cleanTitle de ytmusic.js.
+  const cleanTitle = (raw) => {
+    if (!raw) return raw;
+    return raw
+      .replace(/\s*[\(\[]\s*(?:official\s*)?(?:music\s*)?(?:video|audio|lyric[s]?|visualizer|hd|4k|mv|clip)\s*[\)\]]/gi, '')
+      .replace(/\s*[\(\[]\s*official\s*[\)\]]/gi, '')
+      .replace(/\s*[-–|]\s*official\s+(?:video|audio|music\s+video|lyric[s]?|visualizer|hd|4k|mv|clip)\s*$/gi, '')
+      .replace(/\s*[-–|]\s*(?:official\s+)?(?:music\s+)?(?:video|audio|lyric[s]?|visualizer|hd|4k|mv)\s*$/gi, '')
+      .trim();
+  };
+
+  const cases = [
+    ['Aerials (Official Audio)',         'Aerials'],
+    ['Numb (Official Music Video)',      'Numb'],
+    ['Stairway to Heaven [Official]',   'Stairway to Heaven'],
+    ['Bohemian Rhapsody - Official Video','Bohemian Rhapsody'],
+    ['Song - Official Music Video',      'Song'],
+    ['Track | Official Audio',           'Track'],
+    ['My Song [4K]',                     'My Song'],
+    ['Tune (HD)',                        'Tune'],
+    ['Artist - Song (Lyrics)',           'Artist - Song'],  // letras: no tocar el título
+    ['Normal Title',                     'Normal Title'],   // sin sufijo: no cambiar
+    [null,                               null],             // null: devolver null
+  ];
+
+  for (const [input, expected] of cases) {
+    assert.equal(cleanTitle(input), expected,
+      `cleanTitle("${input}") debería ser "${expected}"`);
+  }
+});
