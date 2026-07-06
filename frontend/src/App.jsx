@@ -517,7 +517,10 @@ function LibraryTab({ ctx }) {
     <div className="fade-up" style={{ paddingBottom:8 }}>
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', paddingTop:4 }}>
         <div style={{ fontSize:24, fontWeight:900, color:'var(--txt-0)', letterSpacing:-.6 }}>Tu Biblioteca</div>
-        <button aria-label="Crear playlist" onClick={() => setCreating(c=>!c)} className="press" style={{ width:36, height:36, borderRadius:'50%', background:'var(--surf-1)', border:'1px solid var(--line)', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}><Icon.Plus c={T.accent} sz={20} /></button>
+        <div style={{ display:'flex', gap:10 }}>
+          <button aria-label="Me gusta" onClick={() => setOpenPlaylist('liked')} className="press" style={{ width:36, height:36, borderRadius:'50%', background:`linear-gradient(135deg, ${hex2rgba(T.accent,.18)}, ${hex2rgba(T.accent2,.06)})`, border:`1px solid ${hex2rgba(T.accent,.3)}`, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}><Icon.Heart c={T.accent} filled sz={18} /></button>
+          <button aria-label="Crear playlist" onClick={() => setCreating(c=>!c)} className="press" style={{ width:36, height:36, borderRadius:'50%', background:'var(--surf-1)', border:'1px solid var(--line)', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}><Icon.Plus c={T.accent} sz={20} /></button>
+        </div>
       </div>
       <div style={{ fontSize:12.5, color:'var(--txt-2)', marginBottom:18, marginTop:4 }}>{playlists.length + 1 + (savedPlaylists?.length || 0)} playlists</div>
 
@@ -2252,7 +2255,11 @@ export default function App() {
     };
     preload(preloadAudioRef.current, 1);
     preload(preloadAudio2Ref.current, 2);
-  }, [track?.id, queue, quality, downloaded]);
+    // volume=0 en los pre-buffer (no muted: muted causa throttle en mobile).
+    if (preloadAudioRef.current) preloadAudioRef.current.volume = 0;
+    if (preloadAudio2Ref.current) preloadAudio2Ref.current.volume = 0;
+    // NO depender de downloaded: causa re-renders que limpian el buffer.
+  }, [track?.id, queue, quality]);
 
   // ── Continuidad en segundo plano: extender la cola ANTES de que acabe ──
   // Si la pista actual es la última de la cola, se anexan relacionadas AHORA
@@ -3002,8 +3009,9 @@ export default function App() {
   // Manejo resiliente de errores de reproducción: reintenta una vez con URL
   // fresca (evade caché de borde) y, si vuelve a fallar, salta a la siguiente
   // pista de la cola en lugar de detener todo. Reduce al máximo los cortes.
-  const MAX_PLAY_RETRIES = 4;
+  const MAX_PLAY_RETRIES = 6;
   const consecutiveFailsRef = useRef(0);
+  const sustainedPlayRef = useRef(false);
   const handleAudioError = () => {
     selfPauseRef.current = false;
     const a = audioRef.current;
@@ -3013,13 +3021,13 @@ export default function App() {
     const n = (st.id === cur) ? st.n : 0;
     const isBlob = typeof a.currentSrc === 'string' && a.currentSrc.startsWith('blob:');
     // Reintentos agresivos: la prioridad es reproducir LA canción seleccionada.
-    // 4 intentos con espera creciente (1.2s, 2.5s, 4s, 6s). Cubre: resolución
-    // en frío, URL expirada, backend saturado transitoriamente, rate-limit.
+    // 6 intentos con espera creciente (1.5s, 3s, 5s, 8s, 12s, 16s). Cubre: resolución
+    // en frío con 5 clientes YT, URL expirada, backend saturado, rate-limit.
     if (n < MAX_PLAY_RETRIES && !isBlob) {
       const attempt = n + 1;
       playErrorRef.current = { id: cur, n: attempt };
       setLoadingAudio(true);
-      const delays = [1200, 2500, 4000, 6000];
+      const delays = [1500, 3000, 5000, 8000, 12000, 16000];
       const delay = delays[Math.min(attempt - 1, delays.length - 1)];
       setTimeout(() => {
         if (!audioRef.current || trackRef.current?.id !== cur) return;
@@ -3035,10 +3043,10 @@ export default function App() {
       }, delay);
       return;
     }
-    // Agotados 4 reintentos (~14s de intentos): saltar con protección anti-cascada.
+    // Agotados 6 reintentos (~45s de intentos): saltar con protección anti-cascada.
     playErrorRef.current = { id: cur, n: 0 };
     consecutiveFailsRef.current += 1;
-    if (consecutiveFailsRef.current > 3) {
+    if (consecutiveFailsRef.current > 2) {
       consecutiveFailsRef.current = 0;
       setLoadingAudio(false); setPlaying(false);
       showToast('Varias pistas no disponibles. Verifica tu conexión.');
@@ -3050,7 +3058,7 @@ export default function App() {
     if (ids.length > 1 && i !== -1) {
       showToast('Pista no disponible · siguiente…');
       setTimeout(() => next(), 1000);
-    } else { setPlaying(false); showToast('No se pudo reproducir esta pista'); api.reportPlaybackError({ trackId: cur, errorCode: 'max_retries', errorMessage: 'Agotados 4 reintentos de reproducción' }); }
+    } else { setPlaying(false); showToast('No se pudo reproducir esta pista'); api.reportPlaybackError({ trackId: cur, errorCode: 'max_retries', errorMessage: 'Agotados 6 reintentos de reproducción' }); }
   };
 
   const audioEl = (
@@ -3064,7 +3072,7 @@ export default function App() {
       onLoadedMetadata={() => { setDur(audioRef.current?.duration||0); if (resumeRef.current != null && audioRef.current) { try { audioRef.current.currentTime = resumeRef.current; } catch {} setTime(resumeRef.current); resumeRef.current = null; } }}
       onCanPlay={() => setLoadingAudio(false)}
       onPlay={() => { selfPauseRef.current = false; setLoadingAudio(false); }}
-      onPlaying={() => { selfPauseRef.current = false; setLoadingAudio(false); playErrorRef.current = { id: null, n: 0 }; consecutiveFailsRef.current = 0; if (pendingFadeRef.current) { pendingFadeRef.current = false; fadeInAudio(); } }}
+      onPlaying={() => { selfPauseRef.current = false; setLoadingAudio(false); playErrorRef.current = { id: null, n: 0 }; sustainedPlayRef.current = false; setTimeout(() => { if (audioRef.current && !audioRef.current.paused && audioRef.current.currentTime > 3) { consecutiveFailsRef.current = 0; sustainedPlayRef.current = true; } }, 5000); if (pendingFadeRef.current) { pendingFadeRef.current = false; fadeInAudio(); } }}
       onStalled={() => setLoadingAudio(true)}
       onWaiting={() => setLoadingAudio(true)}
       onPause={() => {
@@ -3079,9 +3087,10 @@ export default function App() {
       onError={handleAudioError}
       onEnded={onEnded}
     />
-      {/* Pre-buffer oculto de las siguientes 2 pistas (muteados, nunca reproducen). */}
-      <audio ref={preloadAudioRef} preload="auto" muted style={{ display: 'none' }} aria-hidden="true" tabIndex={-1} />
-      <audio ref={preloadAudio2Ref} preload="auto" muted style={{ display: 'none' }} aria-hidden="true" tabIndex={-1} />
+      {/* Pre-buffer oculto de las siguientes 2 pistas (volume=0, nunca reproducen). */}
+      {/* muted=true causa throttle agresivo en mobile; volume=0 es respetado sin throttling. */}
+      <audio ref={preloadAudioRef} preload="auto" style={{ position:'absolute', width:1, height:1, opacity:0, pointerEvents:'none' }} aria-hidden="true" tabIndex={-1} />
+      <audio ref={preloadAudio2Ref} preload="auto" style={{ position:'absolute', width:1, height:1, opacity:0, pointerEvents:'none' }} aria-hidden="true" tabIndex={-1} />
     </>
   );
 
