@@ -461,13 +461,18 @@ function LibraryTab({ ctx }) {
   // Al abrir una playlist / Me gusta, recuperar metadatos faltantes del backend.
   useEffect(() => {
     if (!openPlaylist || !hydrateTracks) return;
-    const ids = openPlaylist === 'liked' ? favs : (playlists.find(p => p.id === openPlaylist)?.trackIds || []);
+    const ids = openPlaylist === 'liked' ? favs
+      : openPlaylist.startsWith('saved:') ? (savedPlaylists.find(p => p.playlistId === openPlaylist.slice(6))?.trackIds || [])
+      : (playlists.find(p => p.id === openPlaylist)?.trackIds || []);
     hydrateTracks(ids);
   }, [openPlaylist]);
 
   if (openPlaylist) {
     const isLiked = openPlaylist === 'liked';
-    const pl = isLiked ? { name:'Me gusta', trackIds:favs } : playlists.find(p => p.id === openPlaylist);
+    const isSaved = openPlaylist.startsWith('saved:');
+    const savedPl = isSaved ? savedPlaylists.find(p => p.playlistId === openPlaylist.slice(6)) : null;
+    if (isSaved && !savedPl) { setOpenPlaylist(null); return null; }
+    const pl = isLiked ? { name:'Me gusta', trackIds:favs } : isSaved ? { name: savedPl.name, trackIds: savedPl.trackIds || [] } : playlists.find(p => p.id === openPlaylist);
     if (!pl) { setOpenPlaylist(null); return null; }
     const list = pl.trackIds.map(trackById).filter(Boolean);
     return (
@@ -485,7 +490,8 @@ function LibraryTab({ ctx }) {
             <div style={{ display:'flex', gap:8, marginTop:12 }}>
               {list.length > 0 && <button onClick={() => play(list[0], pl.trackIds)} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:8, background:grad(T), border:'none', borderRadius:99, padding:'9px 20px', cursor:'pointer', color:'#04060a', fontSize:12.5, fontWeight:800, boxShadow:`0 6px 18px ${hex2rgba(T.accent,.45)}` }}><Icon.Play c="#04060a" sz={16} /> Reproducir</button>}
               {pl.trackIds.length > 0 && <DownloadAllButton ids={pl.trackIds} downloaded={downloaded} downloading={downloading} onClick={() => downloadMany(pl.trackIds)} T={T} />}
-              {!isLiked && <button onClick={() => { deletePlaylist(pl.id); setOpenPlaylist(null); }} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:7, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:99, padding:'9px 16px', cursor:'pointer', color:'var(--txt-1)', fontSize:12, fontWeight:700 }}><Icon.Trash c="var(--txt-1)" sz={15} /> Eliminar</button>}
+              {!isLiked && !isSaved && <button onClick={() => { deletePlaylist(pl.id); setOpenPlaylist(null); }} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:7, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:99, padding:'9px 16px', cursor:'pointer', color:'var(--txt-1)', fontSize:12, fontWeight:700 }}><Icon.Trash c="var(--txt-1)" sz={15} /> Eliminar</button>}
+            {isSaved && <button onClick={() => { unsavePlaylist(savedPl.playlistId); setOpenPlaylist(null); }} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:7, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:99, padding:'9px 16px', cursor:'pointer', color:'var(--txt-1)', fontSize:12, fontWeight:700 }}><Icon.Trash c="var(--txt-1)" sz={15} /> Eliminar</button>}
             </div>
           </div>
         </div>
@@ -499,7 +505,7 @@ function LibraryTab({ ctx }) {
                 onFav={toggleFav} faved={favs.includes(t.id)} onMenu={onMenu}
                 downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)}
                 selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect}
-                onRemove={isLiked ? undefined : (id => removeFromPlaylist(pl.id, id))} onSwipeQueue={addToQueue} onSwipeRemove={removeFromQueue} />
+                onRemove={isLiked || isSaved ? undefined : (id => removeFromPlaylist(pl.id, id))} onSwipeQueue={addToQueue} onSwipeRemove={removeFromQueue} />
             ))}
           </div>
         )}
@@ -513,7 +519,7 @@ function LibraryTab({ ctx }) {
         <div style={{ fontSize:24, fontWeight:900, color:'var(--txt-0)', letterSpacing:-.6 }}>Tu Biblioteca</div>
         <button aria-label="Crear playlist" onClick={() => setCreating(c=>!c)} className="press" style={{ width:36, height:36, borderRadius:'50%', background:'var(--surf-1)', border:'1px solid var(--line)', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}><Icon.Plus c={T.accent} sz={20} /></button>
       </div>
-      <div style={{ fontSize:12.5, color:'var(--txt-2)', marginBottom:18, marginTop:4 }}>{playlists.length + 1} playlists</div>
+      <div style={{ fontSize:12.5, color:'var(--txt-2)', marginBottom:18, marginTop:4 }}>{playlists.length + 1 + (savedPlaylists?.length || 0)} playlists</div>
 
       {creating && (
         <form onSubmit={e => { e.preventDefault(); if (name.trim()) { createPlaylist(name.trim()); setName(''); setCreating(false); } }} style={{ display:'flex', gap:8, marginBottom:16 }}>
@@ -553,19 +559,17 @@ function LibraryTab({ ctx }) {
 
       {savedPlaylists && savedPlaylists.length > 0 && (
         <>
-          <SectionHeader label="Mixes Guardados" accent={T.accent} />
-          <div style={{ display:'flex', gap:15, overflowX:'auto', paddingBottom:6 }}>
-            {savedPlaylists.map(p => {
-              const tracks = p.trackIds.map(trackById).filter(Boolean);
-              const mix = { label: p.name, tracks };
-              let covers = [...new Set(tracks.map(t => t.cover).filter(c => c && !c.startsWith('data:')))].slice(0, 4);
-              if (!covers.length) covers = [FALLBACK_COVER];
-              while (covers.length < 4) covers.push(covers[covers.length - 1]);
-              return <MixCard key={p.playlistId} mix={mix} T={T}
-                onPlay={() => tracks.length && play(tracks[0], p.trackIds)}
-                onOpen={() => goMix(mix)} />;
-            })}
-          </div>
+          <SectionHeader label="Playlists Guardadas" accent={T.accent} />
+          {savedPlaylists.map(p => (
+            <div key={p.playlistId} onClick={() => setOpenPlaylist('saved:' + p.playlistId)} className="card-hover" style={{ display:'flex', alignItems:'center', gap:13, padding:'10px 12px', borderRadius:16, cursor:'pointer', border:'1px solid transparent', marginBottom:2 }}>
+              <div style={{ width:46, height:46, borderRadius:12, background:hex2rgba(T.accent,.12), border:`1px solid ${hex2rgba(T.accent,.3)}`, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}><Icon.Heart c={T.accent} filled sz={20} /></div>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:13.5, fontWeight:700, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{p.name}</div>
+                <div style={{ fontSize:10.5, color:'var(--txt-2)', marginTop:3 }}>Playlist guardada · {p.trackIds?.length || 0} canciones</div>
+              </div>
+              <Icon.ChevL c="var(--txt-3)" sz={18} />
+            </div>
+          ))}
         </>
       )}
     </div>
