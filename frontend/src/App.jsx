@@ -1691,8 +1691,6 @@ export default function App() {
   const [showQueue, setShowQueue] = useState(false);
   const [selecting, setSelecting] = useState(false);
   const [selection, setSelection] = useState(() => new Set());
-  const [outputs, setOutputs] = useState([]);
-  const [sinkId, setSinkId] = useState('default');
   const [catVer, setCatVer] = useState(0);
   const toastTimer = useRef(null);
   const showToast = (m) => { setToast(m); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 2400); };
@@ -2337,19 +2335,6 @@ export default function App() {
   }, [time, dur]);
   // Salir del modo selección al navegar.
   useEffect(() => { if (selecting) { setSelecting(false); setSelection(new Set()); } /* eslint-disable-next-line */ }, [tab, view]);
-
-  // ── Dispositivos de salida de audio ──
-  useEffect(() => {
-    if (!navigator.mediaDevices?.enumerateDevices) return;
-    const refresh = async () => { try { const list = await navigator.mediaDevices.enumerateDevices(); setOutputs(list.filter(d => d.kind === 'audiooutput')); } catch {} };
-    refresh();
-    navigator.mediaDevices.addEventListener?.('devicechange', refresh);
-    return () => navigator.mediaDevices.removeEventListener?.('devicechange', refresh);
-  }, []);
-  const setOutput = async (id) => {
-    try { if (audioRef.current?.setSinkId) { await audioRef.current.setSinkId(id); setSinkId(id); showToast('Salida de audio cambiada'); } else showToast('Tu navegador no permite cambiar la salida'); }
-    catch { showToast('No se pudo cambiar la salida'); }
-  };
 
   // ── Acciones de reproducción ──
   // Fundido de entrada corto para evitar el "clic"/pop al empezar una pista.
@@ -3146,7 +3131,7 @@ export default function App() {
   const expandedPlayer = (
     <ExpandedPlayer open={expanded} onClose={() => setExpanded(false)} {...playerProps} audioRef={audioRef}
       glow={glow} quality={quality} compact={!wide} desktop={wide} onAdd={setAddTarget} onMenu={setMenuTarget}
-      onQueue={() => setShowQueue(true)} outputs={outputs} sinkId={sinkId} setOutput={setOutput}
+      onQueue={() => setShowQueue(true)} outputs={outputs} sinkId={sinkId} setOutput={setSinkId}
       lyricOffset={lyricOffset} setLyricOffset={setLyricOffset} />
   );
   const addModal = <AddToPlaylistModal trackId={addTarget} onClose={() => { setAddTarget(null); if (selecting) clearSelection(); }} playlists={playlists} createPlaylist={createPlaylist} addToPlaylist={addToPlaylist} removeFromPlaylist={removeFromPlaylist} T={T} />;
