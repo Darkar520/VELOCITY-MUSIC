@@ -26,7 +26,7 @@ import {
   createJsonTrackMetaRepo,
   createJsonStatsRepo,
 } from './src/repositories/jsondb.js';
-import { query } from './src/db/pool.js';
+import { query, checkConnection } from './src/db/pool.js';
 import {
   createPgUserRepo,
   createPgPlaylistRepo,
@@ -68,9 +68,17 @@ export async function bootstrap() {
     try { process.on(sig, () => { cache.flush(); if (sig !== 'exit') process.exit(0); }); } catch {}
   }
 
-  // Repositorios: PostgreSQL si USE_POSTGRES=1; si no, en memoria (uso personal).
-  // Con Postgres: aplicar el esquema (idempotente) antes de crear los repos.
-  if (USE_POSTGRES) { await initSchema(); }
+  // Repositorios: PostgreSQL si USE_POSTGRES=1; si no, JSON persistente.
+  // Con Postgres: verificar conexión + aplicar esquema antes de crear repos.
+  if (USE_POSTGRES) {
+    const ok = await checkConnection();
+    if (!ok) {
+      console.error('❌ No se pudo conectar a PostgreSQL. Verifica DATABASE_URL / credenciales.');
+      process.exitCode = 1;
+      process.exit(1);
+    }
+    await initSchema();
+  }
   const repos = USE_POSTGRES
     ? {
         userRepo: createPgUserRepo(query),
