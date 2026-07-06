@@ -37,6 +37,16 @@ export const api = {
   async status() {
     return jsonOrThrow(await fetch('/api/status'));
   },
+  // Ping ligero para detectar si el backend está caído (timeout 5s).
+  async pingBackend() {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 5000);
+      const res = await fetch('/api/status', { signal: ctrl.signal });
+      clearTimeout(t);
+      return res.ok;
+    } catch { return false; }
+  },
   async search(q, signal) {
     const data = await jsonOrThrow(await fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal, headers: authHeaders() }));
     return data.results || [];

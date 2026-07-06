@@ -45,7 +45,12 @@ function AuthScreen({ onAuthed, T }) {
   const [err, setErr] = useState('');
   const [okMsg, setOkMsg] = useState('');
   const [googleClientId, setGoogleClientId] = useState('');
-  useEffect(() => { api.authConfig().then(cfg => setGoogleClientId((cfg && cfg.googleClientId) || '')).catch(() => {}); }, []);
+  const [backendDown, setBackendDown] = useState(false);
+  useEffect(() => {
+    api.authConfig().then(cfg => setGoogleClientId((cfg && cfg.googleClientId) || '')).catch(() => {});
+    // Detectar si el backend está caído.
+    api.pingBackend().then(ok => setBackendDown(!ok));
+  }, []);
   const googleLogin = () => {
     if (!googleClientId) return;
     setBusy(true); setErr('');
@@ -141,6 +146,18 @@ function AuthScreen({ onAuthed, T }) {
         </button>
         <div style={{ fontSize:10, color:'var(--txt-3)', textAlign:'center', marginTop:8, lineHeight:1.5 }}>Modo invitado: explora sin compartir tus datos. Tu biblioteca se guarda solo en esta sesión.</div>
 
+        {backendDown && (
+          <div style={{ marginTop:16, padding:'14px 16px', background:'var(--surf-1)', border:`1px solid ${hex2rgba(T.accent,.3)}`, borderRadius:14, textAlign:'center' }}>
+            <div style={{ fontSize:12, fontWeight:700, color:T.accent, marginBottom:6 }}>Servidor sin conexión</div>
+            <div style={{ fontSize:11, color:'var(--txt-2)', marginBottom:12, lineHeight:1.5 }}>El backend no está respondiendo. Si ya tienes una sesión previa, puedes entrar a tu biblioteca offline.</div>
+            {isAuthed() ? (
+              <button onClick={() => onAuthed(localStorage.getItem('velocity.email') || '', localStorage.getItem('velocity.name') || 'Usuario')} className="btn-tap" style={{ width:'100%', background:grad(T), border:'none', borderRadius:12, padding:'12px 0', cursor:'pointer', color:'#04060a', fontSize:13, fontWeight:800 }}>Entrar a mi biblioteca</button>
+            ) : (
+              <div style={{ fontSize:11, color:'var(--txt-3)' }}>Inicia sesión cuando el servidor vuelva para acceder a tu biblioteca.</div>
+            )}
+          </div>
+        )}
+
         <div style={{ textAlign:'center', marginTop:20, fontSize:12.5, color:'var(--txt-2)' }}>
           {mode==='login' ? '¿No tienes cuenta?' : '¿Ya tienes cuenta?'}{' '}
           <button onClick={() => { setMode(mode==='login'?'register':'login'); setErr(''); }} style={{ background:'none', border:'none', cursor:'pointer', color:T.accent, fontWeight:800, fontSize:12.5 }}>
@@ -186,7 +203,7 @@ function WrappedView({ ctx }) {
 // HOME TAB
 // ═══════════════════════════════════════════════════════════════
 function HomeTab({ ctx }) {
-  const { track, playing, play, T, recent, homeRows, homeLoading, favs, toggleFav, onMenu, goMix, startAiDj, onboardPrefs, setOnboardPrefs, GENRES: GENRES_LIST } = ctx;
+  const { track, playing, play, T, favs, toggleFav, recent, playlists, downloaded, onMenu, goMix, homeRows, homeLoading, displayName, avatar, email, setTab, startAiDj, onboardPrefs, setOnboardPrefs, backendDown, GENRES: GENRES_LIST } = ctx;
   const [djBusy, setDjBusy] = useState(false);
   const [onboardSel, setOnboardSel] = useState([]);
   const recentTracks = dedupeByTitle(recent.map(trackById).filter(Boolean));
@@ -249,10 +266,46 @@ function HomeTab({ ctx }) {
         </>
       )}
 
-      {homeLoading && homeRows.length === 0 && (
+      {homeLoading && homeRows.length === 0 && !backendDown && (
         <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:12, padding:'40px 0', color:'var(--txt-2)' }}>
           <Spinner c={T.accent} sz={26} /><span style={{ fontSize:12.5 }}>Cargando música…</span>
         </div>
+      )}
+
+      {/* Modo sin conexión: mostrar biblioteca cacheada en vez del feed */}
+      {backendDown && homeRows.length === 0 && (
+        <>
+          {recentTracks.length > 0 && (
+            <>
+              <SectionHeader label="Escuchado Recientemente" accent={T.accent} />
+              <div style={{ display:'flex', gap:15, overflowX:'auto', paddingBottom:6, paddingTop:2, marginBottom:18 }}>
+                {recentTracks.map((t,i) => <MediaCard key={t.id+'_'+i} cover={t.cover} title={t.title} subtitle={t.artist} T={T} onClick={() => play(t, recentIds)} onPlay={() => play(t, recentIds)} onFav={() => toggleFav(t.id)} faved={favs.includes(t.id)} onMenu={() => onMenu(t.id)} />)}
+              </div>
+            </>
+          )}
+          {favs.length > 0 && (
+            <>
+              <SectionHeader label="Me Gusta" accent={T.accent} />
+              <div style={{ display:'flex', gap:15, overflowX:'auto', paddingBottom:6, paddingTop:2, marginBottom:18 }}>
+                {favs.slice(0, 20).map(id => trackById(id)).filter(Boolean).map((t,i) => <MediaCard key={t.id+'_'+i} cover={t.cover} title={t.title} subtitle={t.artist} T={T} onClick={() => play(t, favs)} onPlay={() => play(t, favs)} onFav={() => toggleFav(t.id)} faved={true} onMenu={() => onMenu(t.id)} />)}
+              </div>
+            </>
+          )}
+          {downloaded.size > 0 && (
+            <>
+              <SectionHeader label="Descargadas" accent={T.accent} />
+              <div style={{ display:'flex', gap:15, overflowX:'auto', paddingBottom:6, paddingTop:2, marginBottom:18 }}>
+                {[...downloaded].slice(0, 20).map(id => trackById(id)).filter(Boolean).map((t,i) => <MediaCard key={t.id+'_'+i} cover={t.cover} title={t.title} subtitle={t.artist} T={T} onClick={() => play(t, [...downloaded])} onPlay={() => play(t, [...downloaded])} onFav={() => toggleFav(t.id)} faved={favs.includes(t.id)} onMenu={() => onMenu(t.id)} />)}
+              </div>
+            </>
+          )}
+          {recentTracks.length === 0 && favs.length === 0 && downloaded.size === 0 && (
+            <div style={{ textAlign:'center', padding:'40px 0', color:'var(--txt-2)' }}>
+              <div style={{ fontSize:14, fontWeight:700, color:'var(--txt-1)', marginBottom:6 }}>Sin conexión al servidor</div>
+              <div style={{ fontSize:12, lineHeight:1.5 }}>Tu biblioteca aparecerá aquí cuando vuelva la conexión. Las canciones descargadas siguen disponibles.</div>
+            </div>
+          )}
+        </>
       )}
 
       {homeRows.map(sec => (
@@ -275,7 +328,7 @@ function HomeTab({ ctx }) {
 // SEARCH TAB
 // ═══════════════════════════════════════════════════════════════
 function SearchTab({ ctx }) {
-  const { track, playing, play, T, favs, toggleFav, addToTarget, onMenu, recentSearches, addSearch, removeSearch, downloaded, downloading, goArtist, goAlbum, goMix, selecting, selection, toggleSelect, startSelection, addToQueue, removeFromQueue } = ctx;
+  const { track, playing, play, T, favs, toggleFav, addToTarget, onMenu, recentSearches, addSearch, removeSearch, downloaded, downloading, goArtist, goAlbum, goMix, selecting, selection, toggleSelect, startSelection, addToQueue, removeFromQueue, backendDown } = ctx;
   const [q, setQ] = useState('');
   const [res, setRes] = useState({ songs: [], albums: [], artists: [] });
   const [relatedMixes, setRelatedMixes] = useState([]);
@@ -367,6 +420,15 @@ function SearchTab({ ctx }) {
   return (
     <div className="fade-up" style={{ paddingBottom:8 }}>
       <div style={{ fontSize:24, fontWeight:900, color:'var(--txt-0)', letterSpacing:-.6, marginBottom:18, paddingTop:4 }}>Explorar</div>
+
+      {backendDown && (
+        <div style={{ textAlign:'center', padding:'24px 20px', background:'var(--surf-0)', border:'1px solid var(--line)', borderRadius:18, marginBottom:22 }}>
+          <Icon.WifiOff c={T.accent} sz={28} />
+          <div style={{ fontSize:15, fontWeight:800, color:'var(--txt-0)', marginTop:10, marginBottom:4 }}>Búsqueda no disponible</div>
+          <div style={{ fontSize:12, color:'var(--txt-2)', lineHeight:1.5 }}>El servidor está sin conexión. Explora tu biblioteca y reproduce canciones descargadas mientras tanto.</div>
+          <button onClick={() => ctx.setTab('library')} className="btn-tap" style={{ marginTop:14, background:grad(T), border:'none', borderRadius:99, padding:'9px 22px', cursor:'pointer', color:'#04060a', fontSize:12.5, fontWeight:800 }}>Ir a mi biblioteca</button>
+        </div>
+      )}
 
       <div style={{ position:'relative', marginBottom:22 }}>
         <div style={{ position:'absolute', left:15, top:'50%', transform:'translateY(-50%)', pointerEvents:'none' }}>
@@ -1595,6 +1657,22 @@ export default function App() {
   const [email, setEmail] = useState(() => localStorage.getItem('velocity.email') || '');
   const [displayName, setDisplayName] = useState(() => localStorage.getItem('velocity.name') || '');
   const [avatar, setAvatar] = useState(() => localStorage.getItem('velocity.avatar') || '');
+  const [backendDown, setBackendDown] = useState(false);
+  // ── Detectar si el backend está caído (ping al montar + cuando vuelve online) ──
+  useEffect(() => {
+    if (!authed) return;
+    let cancel = false;
+    const check = async () => {
+      const ok = await api.pingBackend();
+      if (!cancel) setBackendDown(!ok);
+    };
+    check();
+    // Re-checkear cuando vuelve la conexión.
+    const onOnline = () => check();
+    window.addEventListener('online', onOnline);
+    return () => { cancel = true; window.removeEventListener('online', onOnline); };
+  }, [authed]);
+
   // Sincronizar el perfil (nombre + avatar) desde el backend al abrir sesión.
   useEffect(() => { if (!authed) return; api.me().then(p => { if (p) { setDisplayName(p.displayName || ''); localStorage.setItem('velocity.name', p.displayName || ''); setAvatar(p.avatar || ''); localStorage.setItem('velocity.avatar', p.avatar || ''); if (p.email) { setEmail(p.email); localStorage.setItem('velocity.email', p.email); } } }).catch(() => {}); }, [authed]);
   const saveProfileName = async (newName) => {
@@ -2464,6 +2542,11 @@ export default function App() {
     if (objUrlRef.current) { URL.revokeObjectURL(objUrlRef.current); objUrlRef.current = null; }
     if (downloaded.has(t.id)) {
       offline.getBlob(t.id).then(b => { if (b) { const u = URL.createObjectURL(b); objUrlRef.current = u; setPlaySrc(u); } else setPlaySrc(trackWithQuality.url); }).catch(() => setPlaySrc(trackWithQuality.url));
+    } else if (backendDown) {
+      // Backend caído y pista no descargada → no intentar streaming.
+      setPlaySrc(''); setLoadingAudio(false); setPlaying(false);
+      showToast('Sin conexión: esta canción no está descargada');
+      return;
     } else { setPlaySrc(trackWithQuality.url); }
     setRecent(r => [t.id, ...r.filter(x => x !== t.id)].slice(0, 30));
     recordPlayStat(t);
@@ -3065,6 +3148,7 @@ export default function App() {
     customPalettes, activeCustomId, setActiveCustomId, activePalette, addPalette, updatePalette, deletePalette,
     displayName, saveProfileName, deleteAccount, avatar, saveAvatar,
     onboardPrefs, setOnboardPrefs, GENRES: ONBOARDING_GENRES,
+    backendDown,
   };
 
   const playerProps = { track, playing, togglePlay, next, prev, time, dur, seek, vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved: track ? favs.includes(track.id) : false, toggleFav, T, loadingAudio, nextCover, prevCover };
@@ -3184,6 +3268,18 @@ export default function App() {
     </div>
   ) : null;
 
+  // Banner "Modo sin conexión": visible cuando el backend está caído.
+  const offlineBanner = backendDown ? (
+    <div className="fade-up" style={{ position:'fixed', top:'env(safe-area-inset-top, 0px)', left:0, right:0, zIndex:125, display:'flex', alignItems:'center', gap:10, background:'var(--surf-0)', border:'1px solid var(--line)', borderBottom:`1px solid ${hex2rgba(T.accent,.3)}`, padding:'10px 16px', boxShadow:'0 4px 16px #0006' }}>
+      <Icon.WifiOff c={T.accent} sz={18} />
+      <div style={{ flex:1, minWidth:0 }}>
+        <div style={{ fontSize:12, fontWeight:800, color:'var(--txt-0)' }}>Modo sin conexión</div>
+        <div style={{ fontSize:10, color:'var(--txt-2)', marginTop:1 }}>Tu biblioteca y descargas están disponibles. Búsqueda y streaming requieren conexión.</div>
+      </div>
+      <button onClick={() => { api.pingBackend().then(ok => { if (ok) { setBackendDown(false); showToast('Conexión restablecida'); } else showToast('El servidor sigue sin responder'); }); }} className="press" style={{ flexShrink:0, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:99, padding:'6px 14px', cursor:'pointer', color:'var(--txt-1)', fontSize:11, fontWeight:700 }}>Reintentar</button>
+    </div>
+  ) : null;
+
   // Aviso visible de nueva versión: aparece en la parte superior con mayor visibilidad.
   const updateBanner = updateReady ? (
     <div className="fade-up" style={{ position:'fixed', top:'env(safe-area-inset-top, 0px)', left:0, right:0, zIndex:130, display:'flex', alignItems:'center', gap:10, background:`linear-gradient(135deg, ${hex2rgba(T.accent,.97)}, ${hex2rgba(T.accent2,.97)})`, padding:'11px 16px', boxShadow:'0 6px 24px #000a', backdropFilter:'blur(12px)', WebkitBackdropFilter:'blur(12px)' }}>
@@ -3209,7 +3305,7 @@ export default function App() {
           </main>
         </div>
         <PlayerBar {...playerProps} onExpand={() => setExpanded(true)} onMenu={setMenuTarget} onQueue={() => setShowQueue(true)} />
-        {expandedPlayer}{addModal}{trackMenu}{queuePanel}{selectionBar}{updateBanner}
+        {expandedPlayer}{addModal}{trackMenu}{queuePanel}{selectionBar}{updateBanner}{offlineBanner}
         <Toast msg={toast} T={T} />
       </div>
     );
@@ -3242,7 +3338,7 @@ export default function App() {
           })}
         </div>
       </div>
-      {expandedPlayer}{addModal}{trackMenu}{queuePanel}{selectionBar}{updateBanner}
+      {expandedPlayer}{addModal}{trackMenu}{queuePanel}{selectionBar}{updateBanner}{offlineBanner}
       {remotePlaying && remotePlaying.trackId && remotePlaying.trackId !== track?.id && (
         <div className="fade-up" style={{ position:'fixed', bottom:80, left:12, right:12, zIndex:80, background:'var(--surf-0)', border:`1px solid ${hex2rgba(T.accent,.3)}`, borderRadius:16, padding:'12px 14px', display:'flex', alignItems:'center', gap:12, boxShadow:'0 8px 24px #000a' }}>
           <img src={remotePlaying.cover ? hiResCover(remotePlaying.cover, 64) : FALLBACK_COVER} alt="" referrerPolicy="no-referrer" style={{ width:44, height:44, borderRadius:10, objectFit:'cover', flexShrink:0 }} />
