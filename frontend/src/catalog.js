@@ -56,7 +56,7 @@ export function saveMeta() {
 
 // Invalidación de caché: si subimos la versión, descartamos metadata/feed viejos
 // (p.ej. pistas de radio cacheadas sin carátula por un bug previo) una sola vez.
-const CACHE_VERSION = '7';
+const CACHE_VERSION = '8';
 try {
   if (localStorage.getItem('velocity.cacheVer') !== CACHE_VERSION) {
     localStorage.removeItem('velocity.meta');
