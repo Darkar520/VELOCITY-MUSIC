@@ -18,6 +18,7 @@ import { createPlaylistService, PlaylistError } from './services/playlistService
 import { createFavoritesService, FavoritesError } from './services/favoritesService.js';
 import { createHistoryService, HistoryError } from './services/historyService.js';
 import { extractorStatus } from './services/extractorSetup.js';
+import { updateNowPlaying, getNowPlaying, subscribeNowPlaying } from './services/nowPlayingService.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -61,6 +62,7 @@ export function createApp(deps = {}) {
     sessionRepo = null,
     syncSvc     = null,
     healthSvc   = null,
+    nowPlayingSvc = null,
     staticDir = path.join(__dirname, '..', 'public'),
   } = deps;
 
@@ -789,6 +791,40 @@ export function createApp(deps = {}) {
         <input id="f" placeholder="Filtrar por correo…" oninput="for(const r of document.querySelectorAll('tbody tr')){r.style.display=r.innerText.toLowerCase().includes(this.value.toLowerCase())?'':'none'}" />
         <table><thead><tr><th>Email</th><th>Nombre</th><th>Logins</th><th>Reprod.</th><th>Última actividad</th><th>Registrado</th></tr></thead><tbody>${rows || '<tr><td colspan="6">Sin usuarios aún.</td></tr>'}</tbody></table>`));
     }));
+  }
+
+  // ---- Now Playing: sincronizacion en tiempo real entre dispositivos ----
+  if (requireAuth && nowPlayingSvc) {
+    app.post('/api/now-playing', requireAuth, (req, res) => {
+      const body = req.body || {};
+      nowPlayingSvc.update(req.userId, {
+        trackId: String(body.trackId || '').slice(0, 200),
+        title: String(body.title || '').slice(0, 300),
+        artist: String(body.artist || '').slice(0, 300),
+        cover: (typeof body.cover === 'string' && (body.cover.startsWith('data:') || body.cover.startsWith('blob:'))) ? '' : (body.cover || ''),
+        position: Number(body.position) || 0,
+        duration: Number(body.duration) || 0,
+        playing: !!body.playing,
+        deviceName: String(body.deviceName || '').slice(0, 100),
+        quality: String(body.quality || '').slice(0, 20),
+      });
+      res.json({ ok: true });
+    });
+    app.get('/api/now-playing', requireAuth, (req, res) => {
+      res.json({ nowPlaying: nowPlayingSvc.get(req.userId) });
+    });
+    app.get('/api/now-playing/events', requireAuth, (req, res) => {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+      res.write(': connected\n\n');
+      const cleanup = nowPlayingSvc.subscribe(req.userId, res);
+      const hb = setInterval(() => { try { res.write(': hb\n\n'); } catch {} }, 30000);
+      req.on('close', () => { cleanup(); clearInterval(hb); });
+    });
   }
 
   // ---- Presencia en tiempo real (Admin_Key) ----

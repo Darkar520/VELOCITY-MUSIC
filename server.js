@@ -42,6 +42,7 @@ import * as sessionRepoModule from './src/repositories/sessionRepo.js';
 import * as syncServiceModule from './src/services/syncService.js';
 import * as healthServiceModule from './src/services/healthService.js';
 import * as retentionServiceModule from './src/services/retentionService.js';
+import * as nowPlayingModule from './src/services/nowPlayingService.js';
 import { initSchema } from './src/db/init.js';
 import { getPool } from './src/db/pool.js';
 
@@ -101,6 +102,11 @@ export async function bootstrap() {
         sessionRepo: { startSession: (p) => sessionRepoModule.startSession(query, p), endSession: (uid) => sessionRepoModule.endSession(query, uid), listActive: (lim) => sessionRepoModule.listActive(query, lim) },
         syncSvc:     { getLibrary: (uid) => syncServiceModule.getLibrary(query, uid),  pushLibrary: (uid, p) => syncServiceModule.pushLibrary(query, uid, p) },
         healthSvc:   (startTime) => healthServiceModule.check(getPool(), startTime),
+    nowPlayingSvc: {
+      update: (uid, p) => nowPlayingModule.updateNowPlaying(uid, p),
+      get: (uid) => nowPlayingModule.getNowPlaying(uid),
+      subscribe: (uid, res) => nowPlayingModule.subscribeNowPlaying(uid, res),
+    },
       }
     : {
         // Persistencia en archivo JSON (sobrevive reinicios; no se borra con el tiempo).
@@ -115,6 +121,11 @@ export async function bootstrap() {
         trackRepo: null,
         errorRepo: null, sessionRepo: null, syncSvc: null,
         healthSvc:   (startTime) => healthServiceModule.check(null, startTime),
+    nowPlayingSvc: {
+      update: (uid, p) => nowPlayingModule.updateNowPlaying(uid, p),
+      get: (uid) => nowPlayingModule.getNowPlaying(uid),
+      subscribe: (uid, res) => nowPlayingModule.subscribeNowPlaying(uid, res),
+    },
       };
 
   // Detección de yt-dlp y modo activo (14.1–14.3).

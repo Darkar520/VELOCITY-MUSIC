@@ -1630,6 +1630,12 @@ export default function App() {
   const [downloaded, setDownloaded] = useState(() => new Set());
   const [downloading, setDownloading] = useState(() => new Set());
   const [playSrc, setPlaySrc] = useState(() => { const s = loadPlayerState(); return s && s.track.url ? s.track.url : null; });
+  // ── Dispositivos de salida (altavoz, audífonos, Bluetooth) ──
+  const [outputs, setOutputs] = useState([]);
+  const [sinkId, setSinkId] = useState('');
+  // ── Now Playing: estado de otro dispositivo ──
+  const [remotePlaying, setRemotePlaying] = useState(null);
+  const sseRef = useRef(null);
   const objUrlRef = useRef(null);
   const resumeRef = useRef((() => { const s = loadPlayerState(); return s ? (s.t || 0) : null; })());
   const radioRef = useRef(false);        // ¿sesión de radio (autollenado de relacionadas)?
@@ -1938,6 +1944,27 @@ export default function App() {
     return () => { cancel = true; };
   }, [authed]);
 
+  // ── SSE: escuchar "now playing" de otros dispositivos en tiempo real ──
+  useEffect(() => {
+    if (!authed) return;
+    let es = null;
+    try {
+      es = api.subscribeNowPlaying();
+      es.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (data.stopped) { setRemotePlaying(null); return; }
+          // No mostrar si es mi propio dispositivo (evitar eco).
+          if (data.trackId === trackRef.current?.id && data.playing) return;
+          setRemotePlaying(data);
+        } catch {}
+      };
+      es.onerror = () => { try { es.close(); } catch {} };
+      sseRef.current = es;
+    } catch {}
+    return () => { try { es?.close(); } catch {} };
+  }, [authed]);
+
   // ── Re-persistir la caché al modificar biblioteca (fav/playlist/álbum/recientes) ──
   useEffect(() => {
     if (!authed) return;
@@ -2178,6 +2205,25 @@ export default function App() {
   }, [settings.normalize]);
   useEffect(() => { if (audioRef.current) audioRef.current.volume = vol; }, [vol]);
 
+  // ── Enumerar dispositivos de salida de audio ──
+  useEffect(() => {
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+    const update = () => navigator.mediaDevices.enumerateDevices().then(devs => {
+      setOutputs(devs.filter(d => d.kind === 'audiooutput').map(d => ({ deviceId: d.deviceId, label: d.label || 'Dispositivo de audio' })));
+    }).catch(() => {});
+    update();
+    // Re-enumerar cuando cambian los permisos (ej: conectar Bluetooth).
+    navigator.mediaDevices.addEventListener?.('devicechange', update);
+    return () => navigator.mediaDevices.removeEventListener?.('devicechange', update);
+  }, []);
+
+  // ── Aplicar sinkId al elemento audio ──
+  useEffect(() => {
+    if (audioRef.current && audioRef.current.setSinkId && sinkId) {
+      audioRef.current.setSinkId(sinkId).catch(() => {});
+    }
+  }, [sinkId, track?.id]);
+
   // Sincronizar playingRef con la intención.
   useEffect(() => { playingRef.current = playing; }, [playing]);
 
@@ -2414,6 +2460,8 @@ export default function App() {
     setRecent(r => [t.id, ...r.filter(x => x !== t.id)].slice(0, 30));
     recordPlayStat(t);
     api.recordHistory(t.id).catch(() => {});
+    // Notificar a otros dispositivos en tiempo real.
+    api.updateNowPlaying({ trackId: t.id, title: t.title, artist: t.artist, cover: t.cover, position: 0, duration: t.durationSeconds || 0, playing: true, deviceName: navigator.userAgent.includes('Mobile') ? 'Móvil' : 'Web', quality: qParam });
     api.saveTracks([slimTrack(t)]); // sincronizar metadatos entre dispositivos
     try { localStorage.setItem('velocity.player', JSON.stringify({ track: trackWithQuality, queue: initialQueue, t: 0 })); } catch {}
     // Precargar la(s) siguiente(s) pista(s) de la cola para que el cambio sea instantáneo.
@@ -2989,6 +3037,7 @@ export default function App() {
     savedPlaylists, savePlaylist, unsavePlaylist, isPlaylistSaved,
     selecting, selection, toggleSelect, startSelection, clearSelection,
     hydrateTracks, playStats: playStatsRef.current,
+    outputs, sinkId, setOutput: setSinkId,
     customPalettes, activeCustomId, setActiveCustomId, activePalette, addPalette, updatePalette, deletePalette,
     displayName, saveProfileName, deleteAccount, avatar, saveAvatar,
     onboardPrefs, setOnboardPrefs, GENRES: ONBOARDING_GENRES,
@@ -3170,6 +3219,17 @@ export default function App() {
         </div>
       </div>
       {expandedPlayer}{addModal}{trackMenu}{queuePanel}{selectionBar}{updateBanner}
+      {remotePlaying && !track && (
+        <div className="fade-up" style={{ position:'fixed', bottom:80, left:12, right:12, zIndex:80, background:'var(--surf-0)', border:`1px solid ${hex2rgba(T.accent,.3)}`, borderRadius:16, padding:'12px 14px', display:'flex', alignItems:'center', gap:12, boxShadow:'0 8px 24px #000a' }}>
+          <img src={remotePlaying.cover ? hiResCover(remotePlaying.cover, 64) : FALLBACK_COVER} alt="" referrerPolicy="no-referrer" style={{ width:44, height:44, borderRadius:10, objectFit:'cover', flexShrink:0 }} />
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ fontSize:11, fontWeight:800, color:T.accent }}>Reproduciendo en {remotePlaying.deviceName || 'otro dispositivo'}</div>
+            <div style={{ fontSize:13, fontWeight:700, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{remotePlaying.title}</div>
+            <div style={{ fontSize:10.5, color:'var(--txt-2)' }}>{remotePlaying.artist}</div>
+          </div>
+          {remotePlaying.trackId && <button onClick={() => { const t = trackById(remotePlaying.trackId); if (t) play(t); setRemotePlaying(null); }} className="btn-tap" style={{ background:grad(T), border:'none', borderRadius:99, padding:'8px 16px', cursor:'pointer', color:'#04060a', fontSize:11, fontWeight:800, flexShrink:0 }}>Reproducir aquí</button>}
+        </div>
+      )}
       <Toast msg={toast} T={T} />
     </div>
   );

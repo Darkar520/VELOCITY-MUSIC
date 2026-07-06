@@ -294,4 +294,24 @@ export const api = {
       return d.tracks || [];
     } catch { return []; }
   },
+
+  // ── Now Playing: sincronización en tiempo real entre dispositivos ──
+  async updateNowPlaying(state) {
+    try {
+      await fetch('/api/now-playing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(state),
+      });
+    } catch {}
+  },
+  async getNowPlaying() {
+    try {
+      return await jsonOrThrow(await fetch('/api/now-playing', { headers: authHeaders() }));
+    } catch { return { nowPlaying: null }; }
+  },
+  // SSE: stream de actualizaciones en tiempo real. Retorna el EventSource.
+  subscribeNowPlaying() {
+    return new EventSource('/api/now-playing/events', { withCredentials: false });
+  },
 };
