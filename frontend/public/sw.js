@@ -9,23 +9,27 @@
 //  - El audio descargado NO lo maneja el SW: vive en IndexedDB (offline.js).
 // ═══════════════════════════════════════════════════════════════
 
-const CACHE = 'velocity-v6';
+const CACHE = 'velocity-v7';
 const APP_SHELL = ['/', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE).then((c) => c.addAll(APP_SHELL)).catch(() => {})
   );
+  // Activar inmediatamente sin esperar que los tabs viejos se cierren.
   self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
-    ).then(() => self.clients.claim())
-     .then(() => self.clients.matchAll({ type: 'window' }))
-     .then((clients) => clients.forEach((c) => c.postMessage({ type: 'vm-updated' })))
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim())
+      .then(() => self.clients.matchAll({ type: 'window' }))
+      .then((clients) => {
+        // Notificar a todos los tabs que hay versión nueva.
+        clients.forEach((c) => c.postMessage({ type: 'vm-updated' }));
+      })
   );
 });
 
