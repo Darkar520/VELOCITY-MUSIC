@@ -3276,7 +3276,7 @@ export default function App() {
       }}
       onLoadedMetadata={() => { setDur(audioRef.current?.duration||0); if (resumeRef.current != null && audioRef.current) { try { audioRef.current.currentTime = resumeRef.current; } catch {} setTime(resumeRef.current); resumeRef.current = null; } }}
       onCanPlay={() => setLoadingAudio(false)}
-      onPlay={() => { selfPauseRef.current = false; setLoadingAudio(false); }}
+      onPlay={() => { selfPauseRef.current = false; setLoadingAudio(false); playingRef.current = true; if (!playing) setPlaying(true); }}
       onPlaying={() => { selfPauseRef.current = false; setLoadingAudio(false); playErrorRef.current = { id: null, n: 0 }; sustainedPlayRef.current = false; setTimeout(() => { if (audioRef.current && !audioRef.current.paused && audioRef.current.currentTime > 3) { consecutiveFailsRef.current = 0; sustainedPlayRef.current = true; } }, 5000); if (pendingFadeRef.current) { pendingFadeRef.current = false; fadeInAudio(); } }}
       onStalled={() => setLoadingAudio(true)}
       onWaiting={() => setLoadingAudio(true)}
@@ -3295,6 +3295,17 @@ export default function App() {
               forceReacquire();
             }
           }, 200);
+          return;
+        }
+        // Si la página ES visible y playingRef es true, el OS pausó el audio
+        // (ej: al abrir la app, otra app interrumpió, etc). No pausar el estado
+        // de la app — intentar reanudar automáticamente.
+        if (playingRef.current) {
+          setTimeout(() => {
+            if (playingRef.current && audioRef.current && !audioRef.current.ended && audioRef.current.paused) {
+              forceReacquire();
+            }
+          }, 150);
           return;
         }
         setPlaying(false);
