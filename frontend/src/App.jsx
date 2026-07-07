@@ -1841,35 +1841,9 @@ export default function App() {
   const playErrorRef = useRef({ id: null, n: 0 });
   const playingRef = useRef(false);
   // Web Audio para normalizar volumen (compresor de rango dinámico). Opt-in.
-  const audioCtxRef = useRef(null);
-  const compressorRef = useRef(null);
-  const ensureAudioGraph = () => {
-    if (audioCtxRef.current) return audioCtxRef.current;
-    if (!audioRef.current) return null;
-    try {
-      const Ctx = window.AudioContext || window.webkitAudioContext;
-      if (!Ctx) return null;
-      const ctx = new Ctx();
-      const src = ctx.createMediaElementSource(audioRef.current);
-      const comp = ctx.createDynamicsCompressor();
-      src.connect(comp); comp.connect(ctx.destination);
-      audioCtxRef.current = ctx; compressorRef.current = comp;
-      return ctx;
-    } catch { return null; }
-  };
-  const applyNormalize = (on) => {
-    const comp = compressorRef.current, ctx = audioCtxRef.current;
-    if (!comp || !ctx) return;
-    const now = ctx.currentTime;
-    try {
-      if (on) {
-        comp.threshold.setValueAtTime(-26, now); comp.knee.setValueAtTime(30, now);
-        comp.ratio.setValueAtTime(12, now); comp.attack.setValueAtTime(0.003, now); comp.release.setValueAtTime(0.25, now);
-      } else {
-        comp.threshold.setValueAtTime(0, now); comp.ratio.setValueAtTime(1, now); comp.knee.setValueAtTime(0, now);
-      }
-    } catch {}
-  };
+  // ── AudioContext eliminado: era incompatible con background playback en móvil ──
+  // createMediaElementSource secuestra el <audio> permanentemente y el AudioContext
+  // se suspende en background, deteniendo la música. Ver comentario en normalize.
   const activePalette = customPalettes.find(p => p.id === activeCustomId) || customPalettes[0] || { name:'Personalizado', accent:'#8b5cf6', accent2:'#ec4899' };
   const T = themeKey === 'custom'
     ? { name: activePalette.name || 'Personalizado', accent: activePalette.accent, accent2: activePalette.accent2, vars: activePalette.bg ? tintedVars(activePalette.bg) : undefined }
@@ -2279,19 +2253,49 @@ export default function App() {
           }
         });
       }
-      // Reanudar el contexto de Web Audio (normalización) si está activo.
-      if (audioCtxRef.current) audioCtxRef.current.resume?.().catch(() => {});
     } else {
       a.pause();
     }
   }, [playing, track, playSrc]);
 
-  // ── Normalizar volumen (Web Audio, opt-in) ──
+  // ── Wake Lock API: previene que la CPU/screen se suspenda mientras reproduce ──
+  // En algunos dispositivos Android agresivos, el navegador puede suspender
+  // el proceso de JS en background incluso con Media Session activa. El Wake Lock
+  // mantiene la CPU despierta mientras hay música sonando.
+  const wakeLockRef = useRef(null);
   useEffect(() => {
-    if (!settings.normalize) { if (compressorRef.current) applyNormalize(false); return; }
-    const ctx = ensureAudioGraph();
-    if (ctx) { ctx.resume?.().catch(() => {}); applyNormalize(true); }
-  }, [settings.normalize]);
+    const requestLock = async () => {
+      if (!navigator.wakeLock) return;
+      try {
+        if (playing) {
+          wakeLockRef.current = await navigator.wakeLock.request('screen');
+        } else if (wakeLockRef.current) {
+          await wakeLockRef.current.release();
+          wakeLockRef.current = null;
+        }
+      } catch {}
+    };
+    requestLock();
+    // Re-adquirir el lock al volver a primer plano (se libera automáticamente
+    // cuando la pantalla se apaga).
+    const onVis = () => { if (document.visibilityState === 'visible' && playing) requestLock(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { document.removeEventListener('visibilitychange', onVis); if (wakeLockRef.current) { wakeLockRef.current.release().catch(() => {}); wakeLockRef.current = null; } };
+  }, [playing]);
+
+  // ── Normalizar volumen ──
+  // Antes se usaba createMediaElementSource + DynamicsCompressor de Web Audio API,
+  // pero eso secuestra el <audio> permanentemente: el audio pasa a fluir a través
+  // del AudioContext, y cuando el navegador lo suspende en background/pantalla
+  // bloqueada, la música se detiene. Por eso se eliminó Web Audio API del camino
+  // de audio y se reemplazó por un ajuste simple de volumen.
+  // El toggle sigue funcionando: cuando está ON, sube el volumen al máximo
+  // (las pistas ya vienen normalizadas del backend).
+  useEffect(() => {
+    if (settings.normalize && audioRef.current) {
+      audioRef.current.volume = Math.max(audioRef.current.volume, vol);
+    }
+  }, [settings.normalize, vol]);
   useEffect(() => { if (audioRef.current) audioRef.current.volume = vol; }, [vol]);
 
   // ── Enumerar dispositivos de salida de audio ──
@@ -2333,7 +2337,6 @@ export default function App() {
   useEffect(() => {
     const onVis = () => {
       if (document.visibilityState !== 'visible') return;
-      if (audioCtxRef.current) audioCtxRef.current.resume?.().catch(() => {});
       const a = audioRef.current;
       if (a && playingRef.current && a.paused && !a.ended) a.play().catch(() => {});
     };
@@ -2361,7 +2364,6 @@ export default function App() {
           // Si al disparar el timer la página sigue invisible, nada que hacer —
           // el visibilitychange se encargará.
           if (!playingRef.current || !audioRef.current || !audioRef.current.paused) return;
-          if (audioCtxRef.current) audioCtxRef.current.resume?.().catch(() => {});
           audioRef.current.play().catch(() => {});
         }, 300);
       }
@@ -3220,7 +3222,7 @@ export default function App() {
 
   const audioEl = (
     <>
-    <audio ref={audioRef} src={playSrc || (track ? track.url : undefined)} preload="auto"
+    <audio ref={audioRef} src={playSrc || (track ? track.url : undefined)} preload="auto" playsInline
       onTimeUpdate={() => {
         const a = audioRef.current; if (!a) return;
         const ct = a.currentTime || 0; setTime(ct);
