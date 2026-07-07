@@ -2242,16 +2242,19 @@ export default function App() {
     if (playing) {
       // Restaurar volumen si el fundido lo dejó en 0 (ej: pantalla bloqueada durante el fade)
       if (a.volume === 0) { cancelAnimationFrame(fadeRafRef.current); clearTimeout(fadeSafetyRef.current); a.volume = vol; }
-      const p = a.play();
-      if (p && p.catch) {
-        p.catch((err) => {
-          // AbortError es normal al cambiar src rápido — ignorar.
-          // NotAllowedError requiere interacción del usuario — dejar playing=true
-          // para que el siguiente tap lo reactive sin perder la canción.
-          if (err.name !== 'AbortError' && err.name !== 'NotAllowedError') {
-            console.warn('[Audio]', err.name, err.message);
-          }
-        });
+      // En background, el OS puede tener la sesión de audio suspendida.
+      // Usar forceReacquire (pause+load+play) para re-enganzchar.
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+        forceReacquire();
+      } else {
+        const p = a.play();
+        if (p && p.catch) {
+          p.catch((err) => {
+            if (err.name !== 'AbortError' && err.name !== 'NotAllowedError') {
+              console.warn('[Audio]', err.name, err.message);
+            }
+          });
+        }
       }
     } else {
       a.pause();
@@ -2340,31 +2343,34 @@ export default function App() {
   const lastTimeRef = useRef(0);
   const stuckCheckRef = useRef(null);
 
-  // pause+play: la única forma confiable de re-enganzchar la sesión de audio
-  // del OS cuando está suspendida (paused=false pero sin sonido).
+  // pause + src reset + load + play: la única forma confiable de re-enganzchar
+  // la sesión de audio del OS cuando está suspendida. Solo pause+play sin
+  // resetear src es un no-op en Chrome móvil. El load() fuerza al navegador
+  // a reconectar la sesión de audio del OS.
   const forceReacquire = () => {
     const a = audioRef.current;
     if (!a || !playingRef.current || a.ended) return;
-    // selfPauseRef previene que onPause dispare setPlaying(false).
+    const currentSrc = a.src;
     selfPauseRef.current = true;
     try { a.pause(); } catch {}
     selfPauseRef.current = false;
-    // Delay corto para que el OS libere la sesión antes de re-adquirir.
     setTimeout(() => {
-      if (!playingRef.current) return; // el usuario pausó durante el delay
+      if (!playingRef.current) return;
       const a2 = audioRef.current;
       if (!a2 || a2.ended) return;
+      // Resetear src + load() fuerza al navegador a re-adquirir la sesión.
+      try { a2.src = currentSrc; a2.load(); } catch {}
       if (a2.volume === 0) a2.volume = vol;
       const p = a2.play();
       if (p && p.catch) p.catch(() => {});
-    }, 80);
+    }, 150);
   };
 
   useEffect(() => {
     const onVis = () => {
       if (document.visibilityState !== 'visible') return;
       // Delay para que el OS termine de restaurar el contexto de audio.
-      setTimeout(forceReacquire, 120);
+      setTimeout(forceReacquire, 150);
     };
 
     document.addEventListener('visibilitychange', onVis);
@@ -2386,7 +2392,7 @@ export default function App() {
         forceReacquire();
       }
       lastTimeRef.current = ct;
-    }, 2000);
+    }, 1500);
 
     return () => {
       document.removeEventListener('visibilitychange', onVis);
