@@ -2330,47 +2330,60 @@ export default function App() {
   // Sincronizar playingRef con la intención.
   useEffect(() => { playingRef.current = playing; }, [playing]);
 
-  // Reanudación al volver a la app (si la intención era reproducir y otra app la pausó).
-  // También cubre el caso Chrome en Android/iOS: cuando la app va al background, el
-  // AudioContext se suspende y Chrome puede pausar el elemento audio. Al volver a
-  // primer plano, retomamos tanto el AudioContext como el play().
+  // ── Reanudación robusta de audio al volver a primer plano ──
+  // Problema: cuando el teléfono se bloquea o la app va a background, el OS
+  // suspende la sesión de audio. El <audio> sigue reportando paused=false pero
+  // no produce sonido. El navegador no dispara 'pause' hasta que el usuario vuelve.
+  // Solución: al volver a visible, forzar play() sin importar si a.paused es true
+  // o false. Además, un intervalo detecta audio "atascado" (paused=false pero
+  // currentTime no avanza) y fuerza play() para re-enganzchar la salida del OS.
+  const lastTimeRef = useRef(0);
+  const stuckCheckRef = useRef(null);
+
   useEffect(() => {
+    const forceResume = () => {
+      const a = audioRef.current;
+      if (!a || !playingRef.current || a.ended) return;
+      // Forzar play() sin importar si a.paused es true o false.
+      // Esto re-engancha la sesión de audio del OS cuando se suspendió.
+      const p = a.play();
+      if (p && p.catch) p.catch(() => {});
+      // Restaurar volumen si el fundido lo dejó en 0.
+      if (a.volume === 0) a.volume = vol;
+    };
+
     const onVis = () => {
       if (document.visibilityState !== 'visible') return;
-      const a = audioRef.current;
-      if (a && playingRef.current && a.paused && !a.ended) a.play().catch(() => {});
+      // Pequeño delay para que el OS termine de restaurar el contexto de audio.
+      setTimeout(forceResume, 100);
     };
-    document.addEventListener('visibilitychange', onVis);
-    return () => document.removeEventListener('visibilitychange', onVis);
-  }, []);
 
-  // Fix para Chrome en Android/iOS: el navegador puede disparar `pause` mientras
-  // la página está en background (AudioContext suspendido, interrupción del sistema).
-  // En esos casos, el elemento audio queda en paused pero la intención del usuario
-  // sigue siendo reproducir. Cuando la página vuelve al frente, reiniciamos el play.
-  // Esto complementa el visibilitychange: cubre el gap entre el evento pause y el
-  // momento en que la página vuelve a ser visible.
-  useEffect(() => {
-    const a = audioRef.current;
-    if (!a) return;
-    let resumeTimer = null;
-    const onNativePause = () => {
-      // Si la pausa la iniciamos nosotros o no hay intención de reproducir, ignorar.
-      if (selfPauseRef.current || !playingRef.current) return;
-      // Si la página no está visible, programar un intento de reanudar al volver.
-      if (document.visibilityState !== 'visible') {
-        clearTimeout(resumeTimer);
-        resumeTimer = setTimeout(() => {
-          // Si al disparar el timer la página sigue invisible, nada que hacer —
-          // el visibilitychange se encargará.
-          if (!playingRef.current || !audioRef.current || !audioRef.current.paused) return;
-          audioRef.current.play().catch(() => {});
-        }, 300);
+    document.addEventListener('visibilitychange', onVis);
+
+    // Detector de audio atascado: cada 3s, si playingRef es true pero
+    // currentTime no avanzó, el audio está suspendido por el OS. Forzar play().
+    stuckCheckRef.current = setInterval(() => {
+      const a = audioRef.current;
+      if (!a || !playingRef.current || a.ended) { lastTimeRef.current = 0; return; }
+      // Solo verificar cuando la página NO es visible (background/bloqueado).
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        lastTimeRef.current = a.currentTime;
+        return;
       }
+      const ct = a.currentTime || 0;
+      if (lastTimeRef.current > 0 && Math.abs(ct - lastTimeRef.current) < 0.1 && !a.paused) {
+        // Audio atascado: el tiempo no avanza pero paused=false. Forzar play().
+        const p = a.play();
+        if (p && p.catch) p.catch(() => {});
+      }
+      lastTimeRef.current = ct;
+    }, 3000);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+      if (stuckCheckRef.current) { clearInterval(stuckCheckRef.current); stuckCheckRef.current = null; }
     };
-    a.addEventListener('pause', onNativePause);
-    return () => { a.removeEventListener('pause', onNativePause); clearTimeout(resumeTimer); };
-  }, [track?.id]);
+  }, [vol]);
 
   // ── Precargar la(s) siguiente(s) pista(s) al cambiar la actual o la cola ──
   // Cubre el modo radio (la cola se llena después de play()) y garantiza que
