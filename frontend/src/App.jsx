@@ -2346,8 +2346,9 @@ export default function App() {
   const stuckCheckRef = useRef(null);
 
   // Re-enganzchar la sesión de audio del OS.
-  // CLAVE: en background NUNCA hacer pause() — Chrome bloquea play() después
-  // de pause() por autoplay policy. Solo play() o src reset + load() + play().
+  // SOLO llamar desde foreground (página visible). En background, NO intervenir
+  // — Chrome + Media Session API mantienen el audio solos si no los interrumpimos.
+  // load() en background mata la sesión permanentemente.
   const reacquireInFlight = useRef(false);
   const forceReacquire = () => {
     if (reacquireInFlight.current) return;
@@ -2355,92 +2356,56 @@ export default function App() {
     if (!a || !playingRef.current || a.ended) return;
     reacquireInFlight.current = true;
     const savedTime = a.currentTime;
-    const currentSrc = a.src;
     if (a.volume === 0) a.volume = vol;
-    const isBg = typeof document !== 'undefined' && document.visibilityState !== 'visible';
 
-    // nuclear: src reset + load() + restore currentTime + play()
-    const nuclear = () => {
-      const a2 = audioRef.current;
-      if (!a2 || a2.ended || !playingRef.current) { reacquireInFlight.current = false; return; }
-      try { a2.src = currentSrc; a2.load(); } catch {}
-      const restore = () => {
-        a2.removeEventListener('loadedmetadata', restore);
-        try { a2.currentTime = savedTime; } catch {}
-        if (a2.volume === 0) a2.volume = vol;
-        a2.play().catch(() => {});
-        reacquireInFlight.current = false;
-      };
-      a2.addEventListener('loadedmetadata', restore, { once: true });
-      setTimeout(() => {
-        a2.removeEventListener('loadedmetadata', restore);
-        if (playingRef.current && !a2.ended) {
-          try { a2.currentTime = savedTime; } catch {}
-          if (a2.volume === 0) a2.volume = vol;
-          a2.play().catch(() => {});
-        }
-        reacquireInFlight.current = false;
-      }, 500);
-    };
-
-    if (isBg) {
-      // Background: SOLO play() o nuclear. NUNCA pause().
-      const p = a.play();
-      if (p && p.then) {
-        p.then(() => { reacquireInFlight.current = false; })
-         .catch(() => { setTimeout(nuclear, 100); });
-      } else { reacquireInFlight.current = false; }
-    } else {
-      // Foreground: pause() + play() está permitido.
-      selfPauseRef.current = true;
-      try { a.pause(); } catch {}
-      selfPauseRef.current = false;
-      setTimeout(() => {
-        const a2 = audioRef.current;
-        if (!a2 || a2.ended || !playingRef.current) { reacquireInFlight.current = false; return; }
-        if (a2.volume === 0) a2.volume = vol;
-        const p = a2.play();
-        if (p && p.then) {
-          p.then(() => { reacquireInFlight.current = false; })
-           .catch(() => { setTimeout(nuclear, 100); });
-        } else { reacquireInFlight.current = false; }
-      }, 100);
-    }
+    // Paso 1: play() sin pause. Menos disruptivo.
+    const p1 = a.play();
+    if (p1 && p1.then) {
+      p1.then(() => { reacquireInFlight.current = false; })
+        .catch(() => {
+          // Paso 2: pause() + play().
+          selfPauseRef.current = true;
+          try { a.pause(); } catch {}
+          selfPauseRef.current = false;
+          setTimeout(() => {
+            if (!playingRef.current) { reacquireInFlight.current = false; return; }
+            const a2 = audioRef.current;
+            if (!a2 || a2.ended) { reacquireInFlight.current = false; return; }
+            if (a2.volume === 0) a2.volume = vol;
+            const p2 = a2.play();
+            if (p2 && p2.then) {
+              p2.then(() => { reacquireInFlight.current = false; })
+                .catch(() => { reacquireInFlight.current = false; });
+            } else { reacquireInFlight.current = false; }
+          }, 100);
+        });
+    } else { reacquireInFlight.current = false; }
   };
 
   useEffect(() => {
     const onVis = () => {
       if (document.visibilityState === 'visible') {
-        // Al volver a visible: re-enganzchar la sesión si estaba suspendida.
-        setTimeout(forceReacquire, 150);
-      } else {
-        // Al salir a background: reforzar la sesión INMEDIATAMENTE antes de
-        // que Chrome congele los timers. play() es un no-op si ya está
-        // sonando, pero refuerza la sesión del OS para que no la suspenda.
+        // Al volver a visible: si el OS pausó el audio, reanudar.
         const a = audioRef.current;
-        if (a && playingRef.current && !a.ended) {
-          if (a.volume === 0) a.volume = vol;
-          a.play().catch(() => {});
+        if (a && playingRef.current && !a.ended && a.paused) {
+          setTimeout(forceReacquire, 150);
         }
       }
+      // Al salir a background: NO intervenir. Chrome + Media Session API
+      // mantienen el audio solos. Cualquier intento de pause()/load()/play()
+      // desde JS en background mata la sesión por autoplay policy.
     };
 
     document.addEventListener('visibilitychange', onVis);
 
-    // Detector de audio atascado en background: cada 2s, si playingRef es true
-    // pero currentTime no avanzó, el audio está suspendido. Forzar pause+play.
-    // Nota: setInterval es throttleado en background, pero cuando el OS permite
-    // que el timer se ejecute (ej: notificación de media session), esto ayuda.
+    // Stuck detector: SOLO en foreground. En background los timers están
+    // congelados de todas formas y intervenir mata la sesión.
     stuckCheckRef.current = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
       const a = audioRef.current;
       if (!a || !playingRef.current || a.ended) { lastTimeRef.current = 0; return; }
-      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-        lastTimeRef.current = a.currentTime;
-        return;
-      }
       const ct = a.currentTime || 0;
-      if (lastTimeRef.current > 0 && Math.abs(ct - lastTimeRef.current) < 0.1) {
-        // Audio atascado: el tiempo no avanza. Forzar re-adquisición.
+      if (lastTimeRef.current > 0 && Math.abs(ct - lastTimeRef.current) < 0.1 && a.paused) {
         forceReacquire();
       }
       lastTimeRef.current = ct;
@@ -3320,8 +3285,12 @@ export default function App() {
         const a = audioRef.current;
         if (!a || a.ended) return;
         if (!playingRef.current) return;
-        // El OS pausó el audio. Programar UN solo forceReacquire.
-        // El guard anti-overlap previene ejecución múltiple.
+        // En background: NO intervenir. Chrome pausa el audio temporalmente
+        // y lo reanuda solo. Nuestro forceReacquire haría load() y mataría
+        // la sesión permanentemente. Solo guardar el estado.
+        if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+        // En foreground: el OS pausó el audio mientras la app está visible.
+        // Reanudar con forceReacquire.
         setTimeout(() => {
           if (playingRef.current && audioRef.current && !audioRef.current.ended && audioRef.current.paused) {
             forceReacquire();
