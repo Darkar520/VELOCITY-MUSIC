@@ -2345,35 +2345,70 @@ export default function App() {
   const lastTimeRef = useRef(0);
   const stuckCheckRef = useRef(null);
 
-  // pause + play: re-enganzchar la sesión de audio del OS cuando está suspendida.
-  // NO usar load() porque resetea currentTime a 0 y reinicia la canción.
-  // Solo pause()+play() preserva la posición actual.
-  // Si play() falla (sesión suspendida), reintentar hasta 3 veces.
+  // Re-enganzchar la sesión de audio del OS con approach graduado:
+  // 1. play() solo (menos disruptivo, preserva currentTime)
+  // 2. pause() + play() (preserva currentTime)
+  // 3. src reset + load() + restore currentTime (nuclear, siempre funciona)
+  // Guard anti-overlap: previene que múltiples timers ejecuten forceReacquire
+  // al mismo tiempo (ej: onPause + stuckDetector + visibilitychange).
+  const reacquireInFlight = useRef(false);
   const forceReacquire = () => {
+    if (reacquireInFlight.current) return;
     const a = audioRef.current;
     if (!a || !playingRef.current || a.ended) return;
-    selfPauseRef.current = true;
-    try { a.pause(); } catch {}
-    selfPauseRef.current = false;
-    // Restaurar volumen si el fundido lo dejó en 0.
+    reacquireInFlight.current = true;
+    const savedTime = a.currentTime;
+    const currentSrc = a.src;
     if (a.volume === 0) a.volume = vol;
-    // Intentar play() con reintentos. Sin load() para preservar currentTime.
-    let attempts = 0;
-    const tryPlay = () => {
-      if (!playingRef.current || !audioRef.current || audioRef.current.ended) return;
-      const a2 = audioRef.current;
-      if (a2.volume === 0) a2.volume = vol;
-      const p = a2.play();
-      if (p && p.then) {
-        p.then(() => { /* éxito */ }).catch(() => {
-          attempts++;
-          if (attempts < 3 && playingRef.current) {
-            setTimeout(tryPlay, 200 * attempts);
+
+    // Paso 1: play() sin pause. Menos disruptivo.
+    const p1 = a.play();
+    if (p1 && p1.then) {
+      p1.then(() => {
+        reacquireInFlight.current = false;
+      }).catch(() => {
+        // Paso 2: pause() + play(). Preserva currentTime.
+        selfPauseRef.current = true;
+        try { a.pause(); } catch {}
+        selfPauseRef.current = false;
+        setTimeout(() => {
+          if (!playingRef.current) { reacquireInFlight.current = false; return; }
+          const a2 = audioRef.current;
+          if (!a2 || a2.ended) { reacquireInFlight.current = false; return; }
+          if (a2.volume === 0) a2.volume = vol;
+          const p2 = a2.play();
+          if (p2 && p2.then) {
+            p2.then(() => {
+              reacquireInFlight.current = false;
+            }).catch(() => {
+              // Paso 3: load() con save/restore de currentTime. Nuclear.
+              try { a2.src = currentSrc; a2.load(); } catch {}
+              const restore = () => {
+                a2.removeEventListener('loadedmetadata', restore);
+                try { a2.currentTime = savedTime; } catch {}
+                if (a2.volume === 0) a2.volume = vol;
+                a2.play().catch(() => {});
+                reacquireInFlight.current = false;
+              };
+              a2.addEventListener('loadedmetadata', restore, { once: true });
+              setTimeout(() => {
+                a2.removeEventListener('loadedmetadata', restore);
+                if (playingRef.current && !a2.ended) {
+                  try { a2.currentTime = savedTime; } catch {}
+                  if (a2.volume === 0) a2.volume = vol;
+                  a2.play().catch(() => {});
+                }
+                reacquireInFlight.current = false;
+              }, 500);
+            });
+          } else {
+            reacquireInFlight.current = false;
           }
-        });
-      }
-    };
-    setTimeout(tryPlay, 100);
+        }, 100);
+      });
+    } else {
+      reacquireInFlight.current = false;
+    }
   };
 
   useEffect(() => {
@@ -3278,19 +3313,13 @@ export default function App() {
         const a = audioRef.current;
         if (!a || a.ended) return;
         if (!playingRef.current) return;
-        // El OS pausó el audio (background o Chrome autoplay policy).
-        // Programar reanudación con delays escalonados: 200ms, 600ms, 1500ms.
-        // Chrome necesita más tiempo para restaurar el contexto de audio.
-        const scheduleResume = (delay) => {
-          setTimeout(() => {
-            if (playingRef.current && audioRef.current && !audioRef.current.ended && audioRef.current.paused) {
-              forceReacquire();
-            }
-          }, delay);
-        };
-        scheduleResume(200);
-        scheduleResume(600);
-        scheduleResume(1500);
+        // El OS pausó el audio. Programar UN solo forceReacquire.
+        // El guard anti-overlap previene ejecución múltiple.
+        setTimeout(() => {
+          if (playingRef.current && audioRef.current && !audioRef.current.ended && audioRef.current.paused) {
+            forceReacquire();
+          }
+        }, 200);
       }}
       onError={handleAudioError}
       onEnded={onEnded}
