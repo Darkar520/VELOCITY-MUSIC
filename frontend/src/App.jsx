@@ -2347,9 +2347,12 @@ export default function App() {
   // la sesión de audio del OS cuando está suspendida. Solo pause+play sin
   // resetear src es un no-op en Chrome móvil. El load() fuerza al navegador
   // a reconectar la sesión de audio del OS.
+  // IMPORTANTE: load() resetea currentTime a 0. Guardamos la posición antes
+  // y la restauramos después de que los metadatos carguen, antes de play().
   const forceReacquire = () => {
     const a = audioRef.current;
     if (!a || !playingRef.current || a.ended) return;
+    const savedTime = a.currentTime;
     const currentSrc = a.src;
     selfPauseRef.current = true;
     try { a.pause(); } catch {}
@@ -2358,11 +2361,26 @@ export default function App() {
       if (!playingRef.current) return;
       const a2 = audioRef.current;
       if (!a2 || a2.ended) return;
-      // Resetear src + load() fuerza al navegador a re-adquirir la sesión.
       try { a2.src = currentSrc; a2.load(); } catch {}
-      if (a2.volume === 0) a2.volume = vol;
-      const p = a2.play();
-      if (p && p.catch) p.catch(() => {});
+      // Restaurar posición y reproducir después de que load() recargue metadatos.
+      const restoreAndPlay = () => {
+        a2.removeEventListener('loadedmetadata', restoreAndPlay);
+        try { a2.currentTime = savedTime; } catch {}
+        if (a2.volume === 0) a2.volume = vol;
+        const p = a2.play();
+        if (p && p.catch) p.catch(() => {});
+      };
+      a2.addEventListener('loadedmetadata', restoreAndPlay, { once: true });
+      // Fallback: si loadedmetadata no dispara en 800ms, restaurar y play.
+      setTimeout(() => {
+        a2.removeEventListener('loadedmetadata', restoreAndPlay);
+        if (playingRef.current && !a2.ended && a2.paused) {
+          try { a2.currentTime = savedTime; } catch {}
+          if (a2.volume === 0) a2.volume = vol;
+          const p = a2.play();
+          if (p && p.catch) p.catch(() => {});
+        }
+      }, 800);
     }, 150);
   };
 
