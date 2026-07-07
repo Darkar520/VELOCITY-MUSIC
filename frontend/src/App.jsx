@@ -1815,11 +1815,13 @@ export default function App() {
         if (m && m[0] !== runningBundleRef.current) setUpdateReady(true);
       } catch {}
     };
-    const iv = setInterval(checkVersion, 5 * 60 * 1000);
+    const iv = setInterval(checkVersion, 30000);
     const onVis = () => { if (document.visibilityState === 'visible') checkVersion(); };
+    const onFocus = () => checkVersion();
     document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('focus', onFocus);
     checkVersion();
-    return () => { stop = true; clearInterval(iv); document.removeEventListener('visibilitychange', onVis); if (typeof cleanupSW === 'function') cleanupSW(); };
+    return () => { stop = true; clearInterval(iv); document.removeEventListener('visibilitychange', onVis); window.removeEventListener('focus', onFocus); if (typeof cleanupSW === 'function') cleanupSW(); };
   }, []);
   // El aviso (UpdateBanner) SIEMPRE se muestra cuando hay versión nueva.
   // Auto-aplica SOLO si la música está pausada Y el usuario lleva > 30s en la app
