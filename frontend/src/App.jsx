@@ -2333,51 +2333,60 @@ export default function App() {
   // ── Reanudación robusta de audio al volver a primer plano ──
   // Problema: cuando el teléfono se bloquea o la app va a background, el OS
   // suspende la sesión de audio. El <audio> sigue reportando paused=false pero
-  // no produce sonido. El navegador no dispara 'pause' hasta que el usuario vuelve.
-  // Solución: al volver a visible, forzar play() sin importar si a.paused es true
-  // o false. Además, un intervalo detecta audio "atascado" (paused=false pero
-  // currentTime no avanza) y fuerza play() para re-enganzchar la salida del OS.
+  // no produce sonido. Llamar play() es un no-op porque el navegador cree que
+  // ya está reproduciendo.
+  // Solución: pause()+play() fuerza al navegador a liberar y re-adquirir la
+  // sesión de audio del OS. Es lo mismo que pasa al cambiar de canción.
   const lastTimeRef = useRef(0);
   const stuckCheckRef = useRef(null);
 
-  useEffect(() => {
-    const forceResume = () => {
-      const a = audioRef.current;
-      if (!a || !playingRef.current || a.ended) return;
-      // Forzar play() sin importar si a.paused es true o false.
-      // Esto re-engancha la sesión de audio del OS cuando se suspendió.
-      const p = a.play();
+  // pause+play: la única forma confiable de re-enganzchar la sesión de audio
+  // del OS cuando está suspendida (paused=false pero sin sonido).
+  const forceReacquire = () => {
+    const a = audioRef.current;
+    if (!a || !playingRef.current || a.ended) return;
+    // selfPauseRef previene que onPause dispare setPlaying(false).
+    selfPauseRef.current = true;
+    try { a.pause(); } catch {}
+    selfPauseRef.current = false;
+    // Delay corto para que el OS libere la sesión antes de re-adquirir.
+    setTimeout(() => {
+      if (!playingRef.current) return; // el usuario pausó durante el delay
+      const a2 = audioRef.current;
+      if (!a2 || a2.ended) return;
+      if (a2.volume === 0) a2.volume = vol;
+      const p = a2.play();
       if (p && p.catch) p.catch(() => {});
-      // Restaurar volumen si el fundido lo dejó en 0.
-      if (a.volume === 0) a.volume = vol;
-    };
+    }, 80);
+  };
 
+  useEffect(() => {
     const onVis = () => {
       if (document.visibilityState !== 'visible') return;
-      // Pequeño delay para que el OS termine de restaurar el contexto de audio.
-      setTimeout(forceResume, 100);
+      // Delay para que el OS termine de restaurar el contexto de audio.
+      setTimeout(forceReacquire, 120);
     };
 
     document.addEventListener('visibilitychange', onVis);
 
-    // Detector de audio atascado: cada 3s, si playingRef es true pero
-    // currentTime no avanzó, el audio está suspendido por el OS. Forzar play().
+    // Detector de audio atascado en background: cada 2s, si playingRef es true
+    // pero currentTime no avanzó, el audio está suspendido. Forzar pause+play.
+    // Nota: setInterval es throttleado en background, pero cuando el OS permite
+    // que el timer se ejecute (ej: notificación de media session), esto ayuda.
     stuckCheckRef.current = setInterval(() => {
       const a = audioRef.current;
       if (!a || !playingRef.current || a.ended) { lastTimeRef.current = 0; return; }
-      // Solo verificar cuando la página NO es visible (background/bloqueado).
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
         lastTimeRef.current = a.currentTime;
         return;
       }
       const ct = a.currentTime || 0;
-      if (lastTimeRef.current > 0 && Math.abs(ct - lastTimeRef.current) < 0.1 && !a.paused) {
-        // Audio atascado: el tiempo no avanza pero paused=false. Forzar play().
-        const p = a.play();
-        if (p && p.catch) p.catch(() => {});
+      if (lastTimeRef.current > 0 && Math.abs(ct - lastTimeRef.current) < 0.1) {
+        // Audio atascado: el tiempo no avanza. Forzar re-adquisición.
+        forceReacquire();
       }
       lastTimeRef.current = ct;
-    }, 3000);
+    }, 2000);
 
     return () => {
       document.removeEventListener('visibilitychange', onVis);
@@ -3253,7 +3262,17 @@ export default function App() {
         const a = audioRef.current;
         if (!a || a.ended) return;
         if (!playingRef.current) return;
-        if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+        // Si la página no es visible, el OS pausó el audio en background.
+        // Programar reanudación inmediata con pause+play para re-enganzchar.
+        if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+          clearTimeout(stuckCheckRef._resumeTimer);
+          stuckCheckRef._resumeTimer = setTimeout(() => {
+            if (playingRef.current && audioRef.current && !audioRef.current.ended) {
+              forceReacquire();
+            }
+          }, 200);
+          return;
+        }
         setPlaying(false);
       }}
       onError={handleAudioError}
