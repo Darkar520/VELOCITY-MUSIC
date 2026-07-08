@@ -13,7 +13,21 @@ const scrypt = promisify(scryptCb);
  * Requisitos: 6.1–6.8
  */
 
-export const TOKEN_TTL_SECONDS = 3650 * 24 * 3600; // ~10 años (sesión prácticamente indefinida)
+// ── TTL del JWT configurable vía env ──────────────────────────
+// Default 30 días. Antes era ~10 años (indefinido), lo cual impedía el logout
+// real y alargaba la ventana de exposición si un token se filtraba.
+// Override: JWT_TTL_DAYS=N (rango 1..3650 para evitar misconfigurations).
+export const DEFAULT_JWT_TTL_DAYS = 30;
+const MIN_TTL_DAYS = 1;
+const MAX_TTL_DAYS = 3650;
+function resolveTtlSeconds() {
+  const raw = Number(process.env.JWT_TTL_DAYS);
+  const days = Number.isFinite(raw) && raw >= MIN_TTL_DAYS && raw <= MAX_TTL_DAYS
+    ? Math.floor(raw)
+    : DEFAULT_JWT_TTL_DAYS;
+  return days * 24 * 3600;
+}
+export const TOKEN_TTL_SECONDS = resolveTtlSeconds();
 export const SALT_BYTES = 16;
 export const PASSWORD_MIN = 12;
 export const PASSWORD_MAX = 128;
@@ -100,7 +114,7 @@ export function createAuthService({ userRepo, jwtSecret = process.env.JWT_SECRET
       }
       // Trazabilidad: registrar el inicio de sesión (best-effort).
       try { if (typeof userRepo.recordLogin === 'function') await userRepo.recordLogin(user.id); } catch {}
-      const token = jwt.sign({ sub: user.id }, jwtSecret, { expiresIn: TOKEN_TTL_SECONDS });
+      const token = this._sign(user.id);
       return { token, email: user.email, displayName: user.displayName || '' };
     },
 
@@ -115,7 +129,7 @@ export function createAuthService({ userRepo, jwtSecret = process.env.JWT_SECRET
       const passwordHash = await hashPassword(randomBytes(24).toString('hex'));
       const user = await userRepo.insert({ email, passwordHash, displayName: 'Invitado', isGuest: true });
       try { if (typeof userRepo.recordLogin === 'function') await userRepo.recordLogin(user.id); } catch {}
-      const token = jwt.sign({ sub: user.id }, jwtSecret, { expiresIn: TOKEN_TTL_SECONDS });
+      const token = this._sign(user.id);
       return { token, email: user.email, displayName: 'Invitado', guest: true };
     },
 
@@ -142,14 +156,29 @@ export function createAuthService({ userRepo, jwtSecret = process.env.JWT_SECRET
       return { deleted: true };
     },
 
-    /** Verifica un JWT (6.6, 6.7). */
+    /** Verifica un JWT (6.6, 6.7). Devuelve { userId, jti, iat } o null. */
     verifyToken(token) {
       try {
         const payload = jwt.verify(token, jwtSecret);
-        return { userId: payload.sub };
+        return {
+          userId: payload.sub,
+          jti: payload.jti || null,
+          iat: payload.iat || null,
+          exp: payload.exp || null,
+        };
       } catch {
         return null;
       }
+    },
+
+    /**
+     * Firma un JWT con claim `jti` (JWT ID único) para permitir la revocación
+     * individual del token. Centraliza la firma para que todos los flujos
+     * (login, guest, googleAuth) generen tokens con la misma estructura.
+     */
+    _sign(userId) {
+      const jti = randomBytes(16).toString('hex');
+      return jwt.sign({ sub: userId, jti }, jwtSecret, { expiresIn: TOKEN_TTL_SECONDS });
     },
 
     /**
@@ -171,7 +200,7 @@ export function createAuthService({ userRepo, jwtSecret = process.env.JWT_SECRET
         created = true;
       }
       try { if (typeof userRepo.recordLogin === 'function') await userRepo.recordLogin(user.id); } catch {}
-      const token = jwt.sign({ sub: user.id }, jwtSecret, { expiresIn: TOKEN_TTL_SECONDS });
+      const token = this._sign(user.id);
       return { token, email: user.email, displayName: user.displayName || '', created };
     },
   };

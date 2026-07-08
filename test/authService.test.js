@@ -163,7 +163,9 @@ test('Property 28: autorización JWT acepta válidos y rechaza inválidos', asyn
     fc.asyncProperty(fc.string(), async (userId) => {
       // Token válido para un userId arbitrario.
       const valid = jwt.sign({ sub: userId }, SECRET, { expiresIn: TOKEN_TTL_SECONDS });
-      assert.deepEqual(auth.verifyToken(valid), { userId });
+      const verified = auth.verifyToken(valid);
+      assert.equal(verified.userId, userId);
+      assert.ok(typeof verified.exp === 'number');
 
       // Firma inválida (otro secreto).
       const badSig = jwt.sign({ sub: userId }, 'otro-secreto', { expiresIn: TOKEN_TTL_SECONDS });
@@ -179,4 +181,19 @@ test('Property 28: autorización JWT acepta válidos y rechaza inválidos', asyn
     }),
     { numRuns: 30 },
   );
+});
+
+// Property 28b: los tokens emitidos por el authService incluyen `jti` único,
+// para permitir la revocación individual.
+test('Property 28b: tokens emitidos incluyen jti único', async () => {
+  const userRepo = createMemoryUserRepo();
+  const auth = createAuthService({ userRepo, jwtSecret: SECRET });
+  await auth.register({ email: 'jti@example.com', password: 'ValidPass123!' });
+  const { token: t1 } = await auth.login({ email: 'jti@example.com', password: 'ValidPass123!' });
+  const { token: t2 } = await auth.login({ email: 'jti@example.com', password: 'ValidPass123!' });
+  const d1 = jwt.verify(t1, SECRET);
+  const d2 = jwt.verify(t2, SECRET);
+  assert.ok(d1.jti && d1.jti.length >= 32);
+  assert.ok(d2.jti && d2.jti.length >= 32);
+  assert.notEqual(d1.jti, d2.jti, 'Cada login debe producir un jti distinto');
 });
