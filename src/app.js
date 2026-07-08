@@ -128,14 +128,25 @@ export function createApp(deps = {}) {
   // En producción, si ALLOWED_ORIGIN no está configurado, se rechazan las
   // peticiones cross-origin (fail-closed). Antes el default era '*' lo cual
   // permitía que cualquier sitio web llamara a la API con credenciales.
-  // En desarrollo (NODE_ENV !== 'production') se mantiene '*' por comodidad.
+  // En desarrollo (NODE_ENV !== 'production') se usa un allowlist explícito
+  // de orígenes locales (Vite dev server + variantes) en vez de '*'.
+  const DEV_ORIGINS = [
+    'http://localhost:5173',     // Vite dev server (frontend)
+    'http://localhost:3000',     // Backend sirviendo el build
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:3000',
+  ];
   const corsOrigin = (() => {
-    if (process.env.ALLOWED_ORIGIN) return process.env.ALLOWED_ORIGIN;
+    if (process.env.ALLOWED_ORIGIN) {
+      // Soporta un solo origen o una lista separada por comas.
+      const list = process.env.ALLOWED_ORIGIN.split(',').map((s) => s.trim()).filter(Boolean);
+      return list.length === 1 ? list[0] : list;
+    }
     if (process.env.NODE_ENV === 'production') {
       console.warn('[security] ALLOWED_ORIGIN no configurado en producción. CORS rechazará peticiones cross-origin.');
       return false; // Rechazar todas las peticiones cross-origin en prod
     }
-    return '*'; // Dev: permitir todo
+    return DEV_ORIGINS; // Dev: allowlist explícito (no '*')
   })();
   app.use(
     cors({
@@ -600,7 +611,12 @@ export function createApp(deps = {}) {
     // `jti` y lo añade a la lista de revocados hasta su `exp`. A partir de
     // este momento, cualquier petición con ese token recibe 401.
     if (revocationService) {
-      app.post('/api/auth/logout', requireAuth, async (req, res) => {
+      // Rate limiter dedicado para logout: 10 req / 5 min por IP. Cota cómoda
+      // para uso legítimo (rara vez se hace logout más de 10 veces en 5 min)
+      // pero mitiga abuso si un token filtrado se usa para llenar la tabla
+      // revoked_tokens. Registrado inline para que CodeQL lo detecte.
+      const logoutLimiter = createRateLimiter({ windowMs: 5 * 60_000, max: 10, message: 'Demasiados logout. Espera unos minutos.' });
+      app.post('/api/auth/logout', logoutLimiter, requireAuth, async (req, res) => {
         try {
           await revocationService.revokeToken(req.jti, req.tokenExp);
           return res.json({ ok: true });
@@ -613,7 +629,10 @@ export function createApp(deps = {}) {
       // Establece `tokens_invalid_before = now()` en el user record. Cualquier
       // token (incluido el actual) con `iat < tokens_invalid_before` será
       // rechazado por requireAuth. El cliente debe re-loguearse.
-      app.post('/api/auth/logout-all', requireAuth, async (req, res) => {
+      // Límite estricto: 5 req / 5 min — operación sensible que invalida
+      // todas las sesiones del usuario, no debe poder spammearse.
+      const logoutAllLimiter = createRateLimiter({ windowMs: 5 * 60_000, max: 5, message: 'Demasiados logout-all. Espera unos minutos.' });
+      app.post('/api/auth/logout-all', logoutAllLimiter, requireAuth, async (req, res) => {
         try {
           await revocationService.revokeAllTokens(req.userId);
           // Revocar también el token actual para feedback inmediato.
@@ -903,8 +922,11 @@ export function createApp(deps = {}) {
     //   - EventSource polyfill que use fetch + ReadableStream
     // Por ahora: logueamos warning la primera vez por sesión para que el
     // operador tenga visibilidad de la exposición.
+    // Rate limit: 30 conexiones/min por IP — cota holgada para uso legítimo
+    // (típicamente 1-2 SSE por cliente) pero mitiga connection flooding.
     let sseQueryTokenWarned = false;
-    app.get('/api/now-playing/events', async (req, res, next) => {
+    const sseLimiter = createRateLimiter({ windowMs: 60_000, max: 30, message: 'Demasiadas conexiones SSE. Espera un minuto.' });
+    app.get('/api/now-playing/events', sseLimiter, async (req, res, next) => {
       // Preferir Authorization header si viene (algunos clientes custom lo envían).
       const authHeader = req.headers.authorization || '';
       if (authHeader.startsWith('Bearer ')) {

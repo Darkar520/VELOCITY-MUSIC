@@ -19,6 +19,21 @@
 import { timingSafeEqual } from 'node:crypto';
 
 /**
+ * Sanitiza un valor controlado por el cliente antes de loguearlo.
+ * Evita log injection (CRLF injection, secuencia ANSI, etc.) y acota la
+ * longitud para que un atacante no inunde los logs.
+ * @param {string} s
+ * @param {number} [maxLen=120]
+ */
+function sanitizeForLog(s, maxLen = 120) {
+  return String(s ?? '')
+    .slice(0, maxLen)
+    // Elimina caracteres de control, saltos de línea y tabs (previene
+    // inyección de líneas falsas en logs y escape ANSI).
+    .replace(/[\x00-\x1F\x7F]/g, '?');
+}
+
+/**
  * Comprueba la clave admin de la petición.
  * @param {import('express').Request} req
  * @param {string} adminKey La clave admin configurada (debe tener >=8 chars).
@@ -50,10 +65,15 @@ export function checkAdminKey(req, adminKey) {
   }
 
   if (source === 'query') {
+    // Sanitizamos req.method y req.path antes de loguear: son controlados
+    // por el cliente y podrían contener saltos de línea para inyectar
+    // entradas falsas en el log.
+    const method = sanitizeForLog(req.method, 8);
+    const path = sanitizeForLog(req.path, 200);
     console.warn(
-      `[security] ADMIN_KEY usada via query param (deprecado). ` +
-      `Migrar al header X-Admin-Key para evitar exposición en logs/Referer. ` +
-      `Ruta: ${req.method} ${req.path}`,
+      '[security] ADMIN_KEY usada via query param (deprecado). ' +
+      'Migrar al header X-Admin-Key para evitar exposición en logs/Referer. ' +
+      `Ruta: ${method} ${path}`,
     );
   }
 
