@@ -1,13 +1,23 @@
 // ═══════════════════════════════════════════════════════════════
-// Rate limiting por IP — ventana fija en memoria, sin dependencias.
+// Rate limiting por IP — wrapper sobre express-rate-limit.
 //
 // Diseñado para proteger endpoints costosos o sensibles (auth, búsqueda,
 // resolución) frente a abuso, SIN limitar el streaming de audio (que hace
 // muchísimas peticiones Range legítimas por canción).
 //
+// Usamos express-rate-limit (en vez de una implementación custom) porque:
+//   1. Es la librería estándar de facto (20M+ descargas/semana en npm).
+//   2. CodeQL la reconoce nativamente como rate limiter — una implementación
+//      custom no la detecta y marca los handlers como "missing rate limiting".
+//   3. Maneja correctamente req.ip con trust proxy, headers estándar
+//      (X-RateLimit-*), y tiene opciones de saltar IPs/whitelist.
+//
 // Nota: en modo cluster el conteo es por proceso; sirve igual como válvula
-// de seguridad. Para límites estrictos compartidos se usaría Redis.
+// de seguridad. Para límites estrictos compartidos se usaría Redis
+// (rate-limit-redis).
 // ═══════════════════════════════════════════════════════════════
+
+import rateLimit from 'express-rate-limit';
 
 /**
  * @param {object} opts
@@ -16,29 +26,16 @@
  * @param {string} [opts.message] Mensaje de error 429.
  */
 export function createRateLimiter({ windowMs = 60_000, max = 120, message = 'Demasiadas peticiones. Intenta de nuevo en un momento.' } = {}) {
-  /** @type {Map<string, { count: number, reset: number }>} */
-  const hits = new Map();
-
-  // Limpieza periódica de entradas vencidas (evita fuga de memoria).
-  const cleanup = setInterval(() => {
-    const now = Date.now();
-    for (const [k, v] of hits) if (v.reset <= now) hits.delete(k);
-  }, windowMs);
-  if (cleanup.unref) cleanup.unref();
-
-  return function rateLimit(req, res, next) {
-    const now = Date.now();
-    const ip = req.ip || req.socket?.remoteAddress || 'unknown';
-    let e = hits.get(ip);
-    if (!e || e.reset <= now) { e = { count: 0, reset: now + windowMs }; hits.set(ip, e); }
-    e.count++;
-    const remaining = Math.max(0, max - e.count);
-    res.setHeader('X-RateLimit-Limit', String(max));
-    res.setHeader('X-RateLimit-Remaining', String(remaining));
-    if (e.count > max) {
-      res.setHeader('Retry-After', String(Math.ceil((e.reset - now) / 1000)));
-      return res.status(429).json({ error: message });
-    }
-    next();
-  };
+  return rateLimit({
+    windowMs,
+    max,
+    message: { error: message },
+    // Headers estándar X-RateLimit-* (compatible con el comportamiento anterior).
+    standardHeaders: true,
+    legacyHeaders: true,
+    // No fallar si req.ip no se puede determinar (p.ej. sockets de test).
+    skip: (req) => !req.ip && !req.socket,
+    // En cluster, el conteo es por worker. No es perfecto pero sirve como
+    // válvula de seguridad. Para límites compartidos usar rate-limit-redis.
+  });
 }
