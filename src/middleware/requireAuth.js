@@ -2,13 +2,20 @@
  * Middleware de autorización JWT (6.6, 6.7).
  *
  * JWT ausente/inválido/caducado → 401 sin procesar la petición; válido →
- * adjunta `req.userId` y continúa.
+ * adjunta `req.userId`, `req.jti` y `req.tokenIat` y continúa.
  *
- * Además verifica que el userId del token corresponda a una cuenta existente.
- * Esto previene que tokens obsoletos (de cuentas eliminadas o re-registros)
- * escriban datos bajo userIds huérfanos que nunca aparecen en la cuenta real.
+ * Verifica tres cosas:
+ *   1. Firma y expiración del JWT (authService.verifyToken).
+ *   2. Que el userId del token siga existiendo en el repositorio (evita
+ *      que tokens de cuentas eliminadas operen bajo IDs huérfanos).
+ *   3. Que el token no haya sido revocado individualmente (por `jti`) ni
+ *      invalidado globalmente para el usuario (por `tokens_invalid_before`).
+ *
+ * El parámetro `revocationService` es opcional: si no se pasa, la
+ * verificación de revocación se omite (comportamiento anterior, para
+ * no romper tests que no lo configuran).
  */
-export function createRequireAuth(authService, userRepo) {
+export function createRequireAuth(authService, userRepo, revocationService = null) {
   return async function requireAuth(req, res, next) {
     const header = req.headers.authorization || '';
     const match = /^Bearer\s+(.+)$/i.exec(header);
@@ -36,7 +43,28 @@ export function createRequireAuth(authService, userRepo) {
       }
     }
 
+    // Verificar revocación (individual por jti o global por tokens_invalid_before).
+    if (revocationService) {
+      try {
+        const revoked = await revocationService.isRevoked({
+          jti: result.jti,
+          userId: result.userId,
+          iat: result.iat,
+        });
+        if (revoked) {
+          return res.status(401).json({ error: 'La sesión ha sido cerrada. Por favor inicia sesión de nuevo.' });
+        }
+      } catch {
+        // Fail-closed: si el servicio de revocación falla, no sabemos si el
+        // token está revocado. Rechazamos la petición por seguridad.
+        return res.status(401).json({ error: 'No se pudo verificar el estado de la sesión.' });
+      }
+    }
+
     req.userId = result.userId;
+    req.jti = result.jti;
+    req.tokenIat = result.iat;
+    req.tokenExp = result.exp;
     return next();
   };
 }

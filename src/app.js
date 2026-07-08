@@ -14,6 +14,7 @@ import { isFullResolutionAllowed } from './services/resolutionMode.js';
 import { createAuthService, AuthError } from './services/authService.js';
 import { sendWelcomeEmail } from './services/mailer.js';
 import { createRequireAuth } from './middleware/requireAuth.js';
+import { checkAdminKey } from './middleware/adminAuth.js';
 import { createPlaylistService, PlaylistError } from './services/playlistService.js';
 import { createFavoritesService, FavoritesError } from './services/favoritesService.js';
 import { createHistoryService, HistoryError } from './services/historyService.js';
@@ -63,20 +64,56 @@ export function createApp(deps = {}) {
     syncSvc     = null,
     healthSvc   = null,
     nowPlayingSvc = null,
+    // ── Servicio de revocación de tokens (logout real) ──
+    revocationService = null,
     staticDir = path.join(__dirname, '..', 'public'),
   } = deps;
 
   const app = express();
-  // Detrás de ngrok/proxy: usar X-Forwarded-For para obtener la IP real del cliente.
-  app.set('trust proxy', true);
+  // ── trust proxy ───────────────────────────────────────────────
+  // Detrás de Cloudflare/ngrok hay 1 hop de proxy. Limitar a 1 (en vez de
+  // `true`) evita que un cliente malicioso pueda inyectar varias IPs en
+  // X-Forwarded-For para falsear req.ip y evadir rate limits. Si en el futuro
+  // se añaden más capas (CDN extra, balanceador), subir este número.
+  app.set('trust proxy', 1);
   app.disable('x-powered-by');
-  // ── Cabeceras de seguridad (sin CSP para no romper fuentes/imágenes/OAuth) ──
-  // Se aplican a todas las respuestas; son inocuas para audio, Range y portadas.
+  // ── Cabeceras de seguridad ────────────────────────────────────
+  // Se aplican a todas las respuestas. La CSP es deliberadamente permisiva
+  // en img/media/font (la app carga portadas de YouTube Music y fuentes
+  // inline de Tailwind) pero estricta en script-src ('self' solo — sin
+  // 'unsafe-inline' ni 'unsafe-eval', ya que el build de Vite produce
+  // assets con hash y el SW está en el mismo origen).
+  // El HSTS solo se activa cuando la petición llega por HTTPS (en dev
+  // detrás de localhost no se envía para no romper el ciclo de dev).
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
     res.setHeader('Referrer-Policy', 'no-referrer');
-    res.setHeader('Permissions-Policy', 'browsing-topics=()');
+    res.setHeader('Permissions-Policy', 'browsing-topics=(), camera=(), microphone=(), geolocation=()');
+    // CSP — solo para respuestas HTML/JSON (no para audio, que no la necesita
+    // y cuyo añadirla añadiría overhead en cada Range).
+    const ct = String(req.headers.accept || '');
+    if (ct.includes('text/html') || ct.includes('application/json') || req.path.startsWith('/api/')) {
+      res.setHeader(
+        'Content-Security-Policy',
+        [
+          "default-src 'self'",
+          "script-src 'self'",
+          "style-src 'self' 'unsafe-inline'", // Tailwind/Vite inyectan estilos inline
+          "img-src 'self' data: blob: https:",
+          "media-src 'self' https: blob: data:",
+          "font-src 'self' data:",
+          "connect-src 'self' https://oauth2.googleapis.com https://lrclib.net https://api.lyrics.ovh",
+          "frame-ancestors 'self'",
+          "base-uri 'self'",
+          "form-action 'self' https://accounts.google.com",
+        ].join('; '),
+      );
+    }
+    // HSTS solo en HTTPS. En Cloudflare Tunnel llega como HTTPS al edge.
+    if (req.secure || req.headers['x-forwarded-proto'] === 'https') {
+      res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
+    }
     next();
   });
   // Compresión gzip para respuestas de texto (JSON/HTML/JS/CSS). NO comprime el
@@ -87,11 +124,35 @@ export function createApp(deps = {}) {
       return compression.filter(req, res);
     },
   }));
+  // ── CORS ──────────────────────────────────────────────────────
+  // En producción, si ALLOWED_ORIGIN no está configurado, se rechazan las
+  // peticiones cross-origin (fail-closed). Antes el default era '*' lo cual
+  // permitía que cualquier sitio web llamara a la API con credenciales.
+  // En desarrollo (NODE_ENV !== 'production') se usa un allowlist explícito
+  // de orígenes locales (Vite dev server + variantes) en vez de '*'.
+  const DEV_ORIGINS = [
+    'http://localhost:5173',     // Vite dev server (frontend)
+    'http://localhost:3000',     // Backend sirviendo el build
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:3000',
+  ];
+  const corsOrigin = (() => {
+    if (process.env.ALLOWED_ORIGIN) {
+      // Soporta un solo origen o una lista separada por comas.
+      const list = process.env.ALLOWED_ORIGIN.split(',').map((s) => s.trim()).filter(Boolean);
+      return list.length === 1 ? list[0] : list;
+    }
+    if (process.env.NODE_ENV === 'production') {
+      console.warn('[security] ALLOWED_ORIGIN no configurado en producción. CORS rechazará peticiones cross-origin.');
+      return false; // Rechazar todas las peticiones cross-origin en prod
+    }
+    return DEV_ORIGINS; // Dev: allowlist explícito (no '*')
+  })();
   app.use(
     cors({
-      origin: process.env.ALLOWED_ORIGIN || '*',
+      origin: corsOrigin,
       methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'Range'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'Range', 'X-Admin-Key'],
       exposedHeaders: ['Content-Length', 'Content-Range', 'Accept-Ranges'],
     }),
   );
@@ -101,10 +162,14 @@ export function createApp(deps = {}) {
   // No se aplica a /api/stream-proxy ni /img para no afectar la reproducción.
   const authLimiter = createRateLimiter({ windowMs: 5 * 60_000, max: 40, message: 'Demasiados intentos. Espera unos minutos.' });
   const apiLimiter = createRateLimiter({ windowMs: 60_000, max: 150 });
+  // Admin endpoints: límite más estricto (30 req/min) para mitigar brute-force
+  // de ADMIN_KEY aunque la comparación sea timing-safe.
+  const adminLimiter = createRateLimiter({ windowMs: 60_000, max: 30, message: 'Demasiadas peticiones admin. Espera un minuto.' });
   app.use('/api/auth', authLimiter);
   for (const p of ['/api/search', '/api/search/all', '/api/resolve', '/api/radio', '/api/artist', '/api/album', '/api/lyrics']) {
     app.use(p, apiLimiter);
   }
+  app.use('/api/admin', adminLimiter);
   if (staticDir) app.use(express.static(staticDir, {
     setHeaders: (res, filePath) => {
       const p = filePath.replace(/\\/g, '/');
@@ -141,7 +206,7 @@ export function createApp(deps = {}) {
   });
 
   const authService = userRepo ? createAuthService({ userRepo, jwtSecret }) : null;
-  const requireAuth = authService ? createRequireAuth(authService, userRepo) : null;
+  const requireAuth = authService ? createRequireAuth(authService, userRepo, revocationService) : null;
   // Auth opcional: devuelve el userId si hay un token válido, si no null (sin bloquear).
   const optionalUserId = (req) => {
     if (!authService) return null;
@@ -540,6 +605,44 @@ export function createApp(deps = {}) {
         return res.status(502).json({ error: 'No se pudo verificar con Google.' });
       }
     });
+
+    // ---- Logout: revocar el token actual ----
+    // El cliente pasa su JWT en Authorization header. El servidor extrae el
+    // `jti` y lo añade a la lista de revocados hasta su `exp`. A partir de
+    // este momento, cualquier petición con ese token recibe 401.
+    if (revocationService) {
+      // Rate limiter dedicado para logout: 10 req / 5 min por IP. Cota cómoda
+      // para uso legítimo (rara vez se hace logout más de 10 veces en 5 min)
+      // pero mitiga abuso si un token filtrado se usa para llenar la tabla
+      // revoked_tokens. Registrado inline para que CodeQL lo detecte.
+      const logoutLimiter = createRateLimiter({ windowMs: 5 * 60_000, max: 10, message: 'Demasiados logout. Espera unos minutos.' });
+      app.post('/api/auth/logout', logoutLimiter, requireAuth, async (req, res) => {
+        try {
+          await revocationService.revokeToken(req.jti, req.tokenExp);
+          return res.json({ ok: true });
+        } catch (err) {
+          return res.status(500).json({ error: 'No se pudo cerrar la sesión.' });
+        }
+      });
+
+      // ---- Logout all: invalidar TODOS los tokens del usuario ----
+      // Establece `tokens_invalid_before = now()` en el user record. Cualquier
+      // token (incluido el actual) con `iat < tokens_invalid_before` será
+      // rechazado por requireAuth. El cliente debe re-loguearse.
+      // Límite estricto: 5 req / 5 min — operación sensible que invalida
+      // todas las sesiones del usuario, no debe poder spammearse.
+      const logoutAllLimiter = createRateLimiter({ windowMs: 5 * 60_000, max: 5, message: 'Demasiados logout-all. Espera unos minutos.' });
+      app.post('/api/auth/logout-all', logoutAllLimiter, requireAuth, async (req, res) => {
+        try {
+          await revocationService.revokeAllTokens(req.userId);
+          // Revocar también el token actual para feedback inmediato.
+          await revocationService.revokeToken(req.jti, req.tokenExp);
+          return res.json({ ok: true });
+        } catch (err) {
+          return res.status(500).json({ error: 'No se pudieron cerrar todas las sesiones.' });
+        }
+      });
+    }
   }
 
   // ---- Perfil del usuario (protegido) ----
@@ -739,10 +842,8 @@ export function createApp(deps = {}) {
     const page = (title, body) => `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><style>${STYLE}</style></head><body>${body}</body></html>`;
 
     app.get('/api/admin/stats', wrap(async (req, res) => {
-      if (String(req.query.key || '') !== ADMIN_KEY) {
-        return res.status(401).json({ error: 'Clave de administrador inválida.' });
-      }
-      const key = encodeURIComponent(String(req.query.key));
+      const keyCheck = checkAdminKey(req, ADMIN_KEY);
+      if (!keyCheck.ok) return res.status(keyCheck.status).json({ error: keyCheck.error });
       const wantsHtml = String(req.query.html || '') === '1' || (req.headers.accept || '').includes('text/html');
       const userParam = String(req.query.user || '').trim();
 
@@ -756,7 +857,7 @@ export function createApp(deps = {}) {
         const plays = act.plays.map((p) => `<tr><td>${esc(p.title || p.trackId)}</td><td>${esc(p.artist)}</td><td>${fmtDate(p.at)}</td></tr>`).join('') || '<tr><td colspan="3">Sin reproducciones.</td></tr>';
         const searches = act.searches.map((s) => `<tr><td>${esc(s.q)}</td><td>${fmtDate(s.at)}</td></tr>`).join('') || '<tr><td colspan="2">Sin búsquedas.</td></tr>';
         return res.setHeader('Content-Type', 'text/html; charset=utf-8').send(page(`Usuario · ${u.email}`, `
-          <p class="sub"><a href="/api/admin/stats?key=${key}&html=1">← Volver</a></p>
+          <p class="sub"><a href="/api/admin/stats?html=1">← Volver</a></p>
           <h1>${esc(u.displayName || u.email)} ${u.isGuest ? '<span class="tag guest">invitado</span>' : ''}</h1>
           <p class="sub">${esc(u.email)} · registrado ${fmtDate(u.createdAt)}</p>
           <div class="cards">
@@ -778,10 +879,10 @@ export function createApp(deps = {}) {
       if (!wantsHtml) return res.json(data);
       const rows = data.users.map((u) => {
         const ident = encodeURIComponent(u.id || u.email);
-        return `<tr><td><a href="/api/admin/stats?key=${key}&html=1&user=${ident}">${esc(u.email)}</a> ${u.isGuest ? '<span class="tag guest">invitado</span>' : ''}</td><td>${esc(u.displayName || '')}</td><td>${u.loginCount}</td><td>${u.playCount}</td><td>${fmtDate(u.lastActive || u.lastLogin)}</td><td>${u.createdAt ? new Date(u.createdAt).toLocaleDateString('es') : '—'}</td></tr>`;
+        return `<tr><td><a href="/api/admin/stats?html=1&user=${ident}">${esc(u.email)}</a> ${u.isGuest ? '<span class="tag guest">invitado</span>' : ''}</td><td>${esc(u.displayName || '')}</td><td>${u.loginCount}</td><td>${u.playCount}</td><td>${fmtDate(u.lastActive || u.lastLogin)}</td><td>${u.createdAt ? new Date(u.createdAt).toLocaleDateString('es') : '—'}</td></tr>`;
       }).join('');
       return res.setHeader('Content-Type', 'text/html; charset=utf-8').send(page('Velocity · Trazabilidad', `
-        <h1>VELOCITY MUSIC · Trazabilidad</h1><p class="sub">Actualizado: ${new Date().toLocaleString('es')} · toca un correo para ver su detalle</p>
+        <h1>VELOCITY MUSIC · Trazabilidad</h1><p class="sub">Actualizado: ${new Date().toLocaleString('es')} · toca un correo para ver su detalle · <em>tip: usa el header <code>X-Admin-Key</code> en vez de <code>?key=</code></em></p>
         <div class="cards">
           <div class="card"><div class="n">${data.totals.registeredUsers}</div><div class="l">Usuarios</div></div>
           <div class="card"><div class="n">${data.totals.logins}</div><div class="l">Inicios de sesión</div></div>
@@ -814,9 +915,44 @@ export function createApp(deps = {}) {
       res.json({ nowPlaying: nowPlayingSvc.get(req.userId) });
     });
     // SSE: EventSource no puede enviar Authorization header, aceptar token por query param.
-    app.get('/api/now-playing/events', async (req, res, next) => {
+    // NOTA: pasar tokens por query param los expone en access logs y Referer.
+    // EventSource (nativo del navegador) no soporta headers personalizados, así
+    // que esta es la única opción para SSE estándar. Alternativas futuras:
+    //   - WebSocket con header Authorization
+    //   - EventSource polyfill que use fetch + ReadableStream
+    // Por ahora: logueamos warning la primera vez por sesión para que el
+    // operador tenga visibilidad de la exposición.
+    // Rate limit: 30 conexiones/min por IP — cota holgada para uso legítimo
+    // (típicamente 1-2 SSE por cliente) pero mitiga connection flooding.
+    let sseQueryTokenWarned = false;
+    const sseLimiter = createRateLimiter({ windowMs: 60_000, max: 30, message: 'Demasiadas conexiones SSE. Espera un minuto.' });
+    app.get('/api/now-playing/events', sseLimiter, async (req, res, next) => {
+      // Preferir Authorization header si viene (algunos clientes custom lo envían).
+      const authHeader = req.headers.authorization || '';
+      if (authHeader.startsWith('Bearer ')) {
+        const result = authService.verifyToken(authHeader.slice(7));
+        if (result) {
+          if (userRepo) {
+            try {
+              const user = await userRepo.findById(result.userId);
+              if (!user) return res.status(401).json({ error: 'Sesión expirada.' });
+            } catch { return res.status(401).json({ error: 'No se pudo verificar la sesión.' }); }
+          }
+          req.userId = result.userId;
+          return next();
+        }
+      }
+      // Fallback: token por query param (legacy EventSource).
       const queryToken = req.query.token;
       if (queryToken) {
+        if (!sseQueryTokenWarned) {
+          console.warn(
+            '[security] SSE /api/now-playing/events autenticado por query param. ' +
+            'El token queda expuesto en access logs y Referer. ' +
+            'Considerar migrar a WebSocket o polyfill EventSource con fetch.',
+          );
+          sseQueryTokenWarned = true;
+        }
         const result = authService.verifyToken(queryToken);
         if (result) {
           if (userRepo) {
@@ -847,7 +983,8 @@ export function createApp(deps = {}) {
   // ---- Presencia en tiempo real (Admin_Key) ----
   if (ADMIN_ENABLED && sessionRepo) {
     app.get('/api/admin/presence', async (req, res) => {
-      if (req.query.key !== ADMIN_KEY) return res.status(403).json({ error: 'Clave de administrador inválida.' });
+      const keyCheck = checkAdminKey(req, ADMIN_KEY);
+      if (!keyCheck.ok) return res.status(keyCheck.status).json({ error: keyCheck.error });
       try {
         const users = await sessionRepo.listActive(500);
         return res.json({ users });
@@ -858,14 +995,16 @@ export function createApp(deps = {}) {
   // ---- Alertas de errores de reproducción (Admin_Key) ----
   if (ADMIN_ENABLED && errorRepo) {
     app.get('/api/admin/alerts', async (req, res) => {
-      if (req.query.key !== ADMIN_KEY) return res.status(403).json({ error: 'Clave de administrador inválida.' });
+      const keyCheck = checkAdminKey(req, ADMIN_KEY);
+      if (!keyCheck.ok) return res.status(keyCheck.status).json({ error: keyCheck.error });
       try {
         const alerts = await errorRepo.listActiveAlerts();
         return res.json({ alerts });
       } catch { return res.status(502).json({ error: 'No se pudo obtener las alertas.' }); }
     });
     app.post('/api/admin/alerts/:alertId/resolve', async (req, res) => {
-      if (req.query.key !== ADMIN_KEY) return res.status(403).json({ error: 'Clave de administrador inválida.' });
+      const keyCheck = checkAdminKey(req, ADMIN_KEY);
+      if (!keyCheck.ok) return res.status(keyCheck.status).json({ error: keyCheck.error });
       try {
         const ok = await errorRepo.resolveAlert(req.params.alertId);
         return ok ? res.json({ ok: true }) : res.status(404).json({ error: 'Alerta no encontrada o ya resuelta.' });

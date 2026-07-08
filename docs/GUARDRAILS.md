@@ -78,6 +78,22 @@ La reproducción NUNCA debe cortarse. Invariantes:
 - Modo invitado: cuenta anónima efímera (`*@velocity.guest`), token JWT normal.
 - Redirect de Google OAuth registrado para `https://velocitymusic.uk`. Si
   cambia el dominio, hay que re-registrarlo en Google Cloud Console.
+- **JWT TTL configurable** vía `JWT_TTL_DAYS` (default 30, rango 1..3650).
+  Antes era ~10 años (indefinido). Si se cambia, los tokens existentes siguen
+  válidos hasta su `exp`.
+- **Cada JWT incluye `jti`** (JWT ID único de 32 hex chars). Esto permite
+  revocación individual sin enumerar tokens emitidos.
+- **Logout real**: `POST /api/auth/logout` revoca el `jti` actual; `POST
+  /api/auth/logout-all` invalida todos los tokens del usuario vía
+  `tokens_invalid_before` (columna BIGINT en `users`). El middleware
+  `requireAuth` verifica ambos en cada petición protegida (fail-closed).
+- **CORS fail-closed en producción**: si `NODE_ENV=production` y
+  `ALLOWED_ORIGIN` no está seteado, se rechazan peticiones cross-origin.
+  En dev se mantiene `'*'` por comodidad.
+- **trust proxy = 1** (no `true`): solo se confía en el último hop
+  (Cloudflare). Evita spoofing de IP para evadir rate limits.
+- **Cabeceras de seguridad**: CSP estricta (script-src 'self'), HSTS en HTTPS,
+  Permissions-Policy restrictivo. Aplicadas a todas las respuestas HTML/JSON.
 
 ## 6. Rendimiento y escalabilidad
 
@@ -122,12 +138,19 @@ La reproducción NUNCA debe cortarse. Invariantes:
 
 ## 10. Admin / trazabilidad
 
-- Panel: `GET /api/admin/stats?key=<ADMIN_KEY>&html=1` (usuarios, drill-down
-  por usuario: reproducciones con título, búsquedas, top canciones).
+- Panel: `GET /api/admin/stats?html=1` con header `X-Admin-Key: <ADMIN_KEY>`
+  (preferido) o `?key=<ADMIN_KEY>` (deprecado, emite warning). Vista general
+  (usuarios, totales) y drill-down por usuario (reproducciones con título,
+  búsquedas, top canciones).
 - Protegido por `ADMIN_KEY` (variable de entorno, ≥8 caracteres). **SIN default**:
   si no está configurada, el panel queda **deshabilitado** (503). Nunca se
   expone con una clave débil.
+- Comparación con `timingSafeEqual` (anti-timing attack).
+- Rate-limit estricto en `/api/admin/*` (30 req/min por IP) para mitigar
+  brute-force de `ADMIN_KEY`.
 - Todo el HTML del panel escapa entrada de usuario (anti-XSS).
+- SSE `/api/now-playing/events`: prefiere header `Authorization`, fallback a
+  `?token=` con warning en stderr (EventSource nativo no soporta headers).
 
 ## 11. Proceso de release (staging → producción)
 
@@ -139,7 +162,8 @@ Ver **docs/RELEASE.md**. Reglas duras:
   aislado) y/o en el **preview de Cloudflare Pages** antes de promocionar.
 - Puertas: pre-push hook (`npm run setup:hooks`), `npm run preflight`, y CI
   (GitHub Actions). Merge a `main` bloqueado si el CI está rojo.
-- Cabeceras de seguridad activas (nosniff, X-Frame-Options, Referrer-Policy).
+- Cabeceras de seguridad activas (nosniff, X-Frame-Options, Referrer-Policy,
+  CSP, HSTS, Permissions-Policy).
 
 ---
 
