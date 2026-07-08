@@ -14,6 +14,7 @@ import { isFullResolutionAllowed } from './services/resolutionMode.js';
 import { createAuthService, AuthError } from './services/authService.js';
 import { sendWelcomeEmail } from './services/mailer.js';
 import { createRequireAuth } from './middleware/requireAuth.js';
+import { checkAdminKey } from './middleware/adminAuth.js';
 import { createPlaylistService, PlaylistError } from './services/playlistService.js';
 import { createFavoritesService, FavoritesError } from './services/favoritesService.js';
 import { createHistoryService, HistoryError } from './services/historyService.js';
@@ -771,10 +772,8 @@ export function createApp(deps = {}) {
     const page = (title, body) => `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><style>${STYLE}</style></head><body>${body}</body></html>`;
 
     app.get('/api/admin/stats', wrap(async (req, res) => {
-      if (String(req.query.key || '') !== ADMIN_KEY) {
-        return res.status(401).json({ error: 'Clave de administrador inválida.' });
-      }
-      const key = encodeURIComponent(String(req.query.key));
+      const keyCheck = checkAdminKey(req, ADMIN_KEY);
+      if (!keyCheck.ok) return res.status(keyCheck.status).json({ error: keyCheck.error });
       const wantsHtml = String(req.query.html || '') === '1' || (req.headers.accept || '').includes('text/html');
       const userParam = String(req.query.user || '').trim();
 
@@ -788,7 +787,7 @@ export function createApp(deps = {}) {
         const plays = act.plays.map((p) => `<tr><td>${esc(p.title || p.trackId)}</td><td>${esc(p.artist)}</td><td>${fmtDate(p.at)}</td></tr>`).join('') || '<tr><td colspan="3">Sin reproducciones.</td></tr>';
         const searches = act.searches.map((s) => `<tr><td>${esc(s.q)}</td><td>${fmtDate(s.at)}</td></tr>`).join('') || '<tr><td colspan="2">Sin búsquedas.</td></tr>';
         return res.setHeader('Content-Type', 'text/html; charset=utf-8').send(page(`Usuario · ${u.email}`, `
-          <p class="sub"><a href="/api/admin/stats?key=${key}&html=1">← Volver</a></p>
+          <p class="sub"><a href="/api/admin/stats?html=1">← Volver</a></p>
           <h1>${esc(u.displayName || u.email)} ${u.isGuest ? '<span class="tag guest">invitado</span>' : ''}</h1>
           <p class="sub">${esc(u.email)} · registrado ${fmtDate(u.createdAt)}</p>
           <div class="cards">
@@ -810,10 +809,10 @@ export function createApp(deps = {}) {
       if (!wantsHtml) return res.json(data);
       const rows = data.users.map((u) => {
         const ident = encodeURIComponent(u.id || u.email);
-        return `<tr><td><a href="/api/admin/stats?key=${key}&html=1&user=${ident}">${esc(u.email)}</a> ${u.isGuest ? '<span class="tag guest">invitado</span>' : ''}</td><td>${esc(u.displayName || '')}</td><td>${u.loginCount}</td><td>${u.playCount}</td><td>${fmtDate(u.lastActive || u.lastLogin)}</td><td>${u.createdAt ? new Date(u.createdAt).toLocaleDateString('es') : '—'}</td></tr>`;
+        return `<tr><td><a href="/api/admin/stats?html=1&user=${ident}">${esc(u.email)}</a> ${u.isGuest ? '<span class="tag guest">invitado</span>' : ''}</td><td>${esc(u.displayName || '')}</td><td>${u.loginCount}</td><td>${u.playCount}</td><td>${fmtDate(u.lastActive || u.lastLogin)}</td><td>${u.createdAt ? new Date(u.createdAt).toLocaleDateString('es') : '—'}</td></tr>`;
       }).join('');
       return res.setHeader('Content-Type', 'text/html; charset=utf-8').send(page('Velocity · Trazabilidad', `
-        <h1>VELOCITY MUSIC · Trazabilidad</h1><p class="sub">Actualizado: ${new Date().toLocaleString('es')} · toca un correo para ver su detalle</p>
+        <h1>VELOCITY MUSIC · Trazabilidad</h1><p class="sub">Actualizado: ${new Date().toLocaleString('es')} · toca un correo para ver su detalle · <em>tip: usa el header <code>X-Admin-Key</code> en vez de <code>?key=</code></em></p>
         <div class="cards">
           <div class="card"><div class="n">${data.totals.registeredUsers}</div><div class="l">Usuarios</div></div>
           <div class="card"><div class="n">${data.totals.logins}</div><div class="l">Inicios de sesión</div></div>
@@ -879,7 +878,8 @@ export function createApp(deps = {}) {
   // ---- Presencia en tiempo real (Admin_Key) ----
   if (ADMIN_ENABLED && sessionRepo) {
     app.get('/api/admin/presence', async (req, res) => {
-      if (req.query.key !== ADMIN_KEY) return res.status(403).json({ error: 'Clave de administrador inválida.' });
+      const keyCheck = checkAdminKey(req, ADMIN_KEY);
+      if (!keyCheck.ok) return res.status(keyCheck.status).json({ error: keyCheck.error });
       try {
         const users = await sessionRepo.listActive(500);
         return res.json({ users });
@@ -890,14 +890,16 @@ export function createApp(deps = {}) {
   // ---- Alertas de errores de reproducción (Admin_Key) ----
   if (ADMIN_ENABLED && errorRepo) {
     app.get('/api/admin/alerts', async (req, res) => {
-      if (req.query.key !== ADMIN_KEY) return res.status(403).json({ error: 'Clave de administrador inválida.' });
+      const keyCheck = checkAdminKey(req, ADMIN_KEY);
+      if (!keyCheck.ok) return res.status(keyCheck.status).json({ error: keyCheck.error });
       try {
         const alerts = await errorRepo.listActiveAlerts();
         return res.json({ alerts });
       } catch { return res.status(502).json({ error: 'No se pudo obtener las alertas.' }); }
     });
     app.post('/api/admin/alerts/:alertId/resolve', async (req, res) => {
-      if (req.query.key !== ADMIN_KEY) return res.status(403).json({ error: 'Clave de administrador inválida.' });
+      const keyCheck = checkAdminKey(req, ADMIN_KEY);
+      if (!keyCheck.ok) return res.status(keyCheck.status).json({ error: keyCheck.error });
       try {
         const ok = await errorRepo.resolveAlert(req.params.alertId);
         return ok ? res.json({ ok: true }) : res.status(404).json({ error: 'Alerta no encontrada o ya resuelta.' });
