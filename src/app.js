@@ -77,13 +77,43 @@ export function createApp(deps = {}) {
   // se añaden más capas (CDN extra, balanceador), subir este número.
   app.set('trust proxy', 1);
   app.disable('x-powered-by');
-  // ── Cabeceras de seguridad (sin CSP para no romper fuentes/imágenes/OAuth) ──
-  // Se aplican a todas las respuestas; son inocuas para audio, Range y portadas.
+  // ── Cabeceras de seguridad ────────────────────────────────────
+  // Se aplican a todas las respuestas. La CSP es deliberadamente permisiva
+  // en img/media/font (la app carga portadas de YouTube Music y fuentes
+  // inline de Tailwind) pero estricta en script-src ('self' solo — sin
+  // 'unsafe-inline' ni 'unsafe-eval', ya que el build de Vite produce
+  // assets con hash y el SW está en el mismo origen).
+  // El HSTS solo se activa cuando la petición llega por HTTPS (en dev
+  // detrás de localhost no se envía para no romper el ciclo de dev).
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
     res.setHeader('Referrer-Policy', 'no-referrer');
-    res.setHeader('Permissions-Policy', 'browsing-topics=()');
+    res.setHeader('Permissions-Policy', 'browsing-topics=(), camera=(), microphone=(), geolocation=()');
+    // CSP — solo para respuestas HTML/JSON (no para audio, que no la necesita
+    // y cuyo añadirla añadiría overhead en cada Range).
+    const ct = String(req.headers.accept || '');
+    if (ct.includes('text/html') || ct.includes('application/json') || req.path.startsWith('/api/')) {
+      res.setHeader(
+        'Content-Security-Policy',
+        [
+          "default-src 'self'",
+          "script-src 'self'",
+          "style-src 'self' 'unsafe-inline'", // Tailwind/Vite inyectan estilos inline
+          "img-src 'self' data: blob: https:",
+          "media-src 'self' https: blob: data:",
+          "font-src 'self' data:",
+          "connect-src 'self' https://oauth2.googleapis.com https://lrclib.net https://api.lyrics.ovh",
+          "frame-ancestors 'self'",
+          "base-uri 'self'",
+          "form-action 'self' https://accounts.google.com",
+        ].join('; '),
+      );
+    }
+    // HSTS solo en HTTPS. En Cloudflare Tunnel llega como HTTPS al edge.
+    if (req.secure || req.headers['x-forwarded-proto'] === 'https') {
+      res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
+    }
     next();
   });
   // Compresión gzip para respuestas de texto (JSON/HTML/JS/CSS). NO comprime el
@@ -121,10 +151,14 @@ export function createApp(deps = {}) {
   // No se aplica a /api/stream-proxy ni /img para no afectar la reproducción.
   const authLimiter = createRateLimiter({ windowMs: 5 * 60_000, max: 40, message: 'Demasiados intentos. Espera unos minutos.' });
   const apiLimiter = createRateLimiter({ windowMs: 60_000, max: 150 });
+  // Admin endpoints: límite más estricto (30 req/min) para mitigar brute-force
+  // de ADMIN_KEY aunque la comparación sea timing-safe.
+  const adminLimiter = createRateLimiter({ windowMs: 60_000, max: 30, message: 'Demasiadas peticiones admin. Espera un minuto.' });
   app.use('/api/auth', authLimiter);
   for (const p of ['/api/search', '/api/search/all', '/api/resolve', '/api/radio', '/api/artist', '/api/album', '/api/lyrics']) {
     app.use(p, apiLimiter);
   }
+  app.use('/api/admin', adminLimiter);
   if (staticDir) app.use(express.static(staticDir, {
     setHeaders: (res, filePath) => {
       const p = filePath.replace(/\\/g, '/');
@@ -862,9 +896,41 @@ export function createApp(deps = {}) {
       res.json({ nowPlaying: nowPlayingSvc.get(req.userId) });
     });
     // SSE: EventSource no puede enviar Authorization header, aceptar token por query param.
+    // NOTA: pasar tokens por query param los expone en access logs y Referer.
+    // EventSource (nativo del navegador) no soporta headers personalizados, así
+    // que esta es la única opción para SSE estándar. Alternativas futuras:
+    //   - WebSocket con header Authorization
+    //   - EventSource polyfill que use fetch + ReadableStream
+    // Por ahora: logueamos warning la primera vez por sesión para que el
+    // operador tenga visibilidad de la exposición.
+    let sseQueryTokenWarned = false;
     app.get('/api/now-playing/events', async (req, res, next) => {
+      // Preferir Authorization header si viene (algunos clientes custom lo envían).
+      const authHeader = req.headers.authorization || '';
+      if (authHeader.startsWith('Bearer ')) {
+        const result = authService.verifyToken(authHeader.slice(7));
+        if (result) {
+          if (userRepo) {
+            try {
+              const user = await userRepo.findById(result.userId);
+              if (!user) return res.status(401).json({ error: 'Sesión expirada.' });
+            } catch { return res.status(401).json({ error: 'No se pudo verificar la sesión.' }); }
+          }
+          req.userId = result.userId;
+          return next();
+        }
+      }
+      // Fallback: token por query param (legacy EventSource).
       const queryToken = req.query.token;
       if (queryToken) {
+        if (!sseQueryTokenWarned) {
+          console.warn(
+            '[security] SSE /api/now-playing/events autenticado por query param. ' +
+            'El token queda expuesto en access logs y Referer. ' +
+            'Considerar migrar a WebSocket o polyfill EventSource con fetch.',
+          );
+          sseQueryTokenWarned = true;
+        }
         const result = authService.verifyToken(queryToken);
         if (result) {
           if (userRepo) {
