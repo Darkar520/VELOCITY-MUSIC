@@ -70,8 +70,12 @@ export function createApp(deps = {}) {
   } = deps;
 
   const app = express();
-  // Detrás de ngrok/proxy: usar X-Forwarded-For para obtener la IP real del cliente.
-  app.set('trust proxy', true);
+  // ── trust proxy ───────────────────────────────────────────────
+  // Detrás de Cloudflare/ngrok hay 1 hop de proxy. Limitar a 1 (en vez de
+  // `true`) evita que un cliente malicioso pueda inyectar varias IPs en
+  // X-Forwarded-For para falsear req.ip y evadir rate limits. Si en el futuro
+  // se añaden más capas (CDN extra, balanceador), subir este número.
+  app.set('trust proxy', 1);
   app.disable('x-powered-by');
   // ── Cabeceras de seguridad (sin CSP para no romper fuentes/imágenes/OAuth) ──
   // Se aplican a todas las respuestas; son inocuas para audio, Range y portadas.
@@ -90,11 +94,24 @@ export function createApp(deps = {}) {
       return compression.filter(req, res);
     },
   }));
+  // ── CORS ──────────────────────────────────────────────────────
+  // En producción, si ALLOWED_ORIGIN no está configurado, se rechazan las
+  // peticiones cross-origin (fail-closed). Antes el default era '*' lo cual
+  // permitía que cualquier sitio web llamara a la API con credenciales.
+  // En desarrollo (NODE_ENV !== 'production') se mantiene '*' por comodidad.
+  const corsOrigin = (() => {
+    if (process.env.ALLOWED_ORIGIN) return process.env.ALLOWED_ORIGIN;
+    if (process.env.NODE_ENV === 'production') {
+      console.warn('[security] ALLOWED_ORIGIN no configurado en producción. CORS rechazará peticiones cross-origin.');
+      return false; // Rechazar todas las peticiones cross-origin en prod
+    }
+    return '*'; // Dev: permitir todo
+  })();
   app.use(
     cors({
-      origin: process.env.ALLOWED_ORIGIN || '*',
+      origin: corsOrigin,
       methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'Range'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'Range', 'X-Admin-Key'],
       exposedHeaders: ['Content-Length', 'Content-Range', 'Accept-Ranges'],
     }),
   );
