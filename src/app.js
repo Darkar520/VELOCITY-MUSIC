@@ -616,6 +616,7 @@ export function createApp(deps = {}) {
       // pero mitiga abuso si un token filtrado se usa para llenar la tabla
       // revoked_tokens. Registrado inline para que CodeQL lo detecte.
       const logoutLimiter = createRateLimiter({ windowMs: 5 * 60_000, max: 10, message: 'Demasiados logout. Espera unos minutos.' });
+      // lgtm[js/missing-rate-limit] — rate limiting aplicado vía logoutLimiter (custom, factory createRateLimiter). CodeQL no reconoce limiters custom.
       app.post('/api/auth/logout', logoutLimiter, requireAuth, async (req, res) => {
         try {
           await revocationService.revokeToken(req.jti, req.tokenExp);
@@ -632,6 +633,7 @@ export function createApp(deps = {}) {
       // Límite estricto: 5 req / 5 min — operación sensible que invalida
       // todas las sesiones del usuario, no debe poder spammearse.
       const logoutAllLimiter = createRateLimiter({ windowMs: 5 * 60_000, max: 5, message: 'Demasiados logout-all. Espera unos minutos.' });
+      // lgtm[js/missing-rate-limit] — rate limiting aplicado vía logoutAllLimiter (custom, factory createRateLimiter). CodeQL no reconoce limiters custom.
       app.post('/api/auth/logout-all', logoutAllLimiter, requireAuth, async (req, res) => {
         try {
           await revocationService.revokeAllTokens(req.userId);
@@ -966,6 +968,7 @@ export function createApp(deps = {}) {
         }
       }
       return requireAuth(req, res, next);
+    // lgtm[js/missing-rate-limit] — rate limiting aplicado vía sseLimiter en el primer handler de esta misma ruta. CodeQL no asocia limiters entre handlers.
     }, (req, res) => {
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
