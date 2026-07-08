@@ -47,6 +47,39 @@ export function createPgUserRepo(query) {
       const { rowCount } = await query('DELETE FROM users WHERE id = $1', [id]);
       return rowCount > 0;
     },
+    // ── Token revocation (logout all) ──
+    async getTokensInvalidBefore(id) {
+      const { rows } = await query('SELECT tokens_invalid_before FROM users WHERE id = $1', [id]);
+      const v = rows[0]?.tokens_invalid_before;
+      return v ? Number(v) : null;
+    },
+    async setTokensInvalidBefore(id, unixSeconds) {
+      await query('UPDATE users SET tokens_invalid_before = $2 WHERE id = $1', [id, unixSeconds]);
+    },
+  };
+}
+
+/**
+ * Repositorio de tokens revocados por `jti` en PostgreSQL.
+ * Auto-purga de expirados en cada `isRevoked` (delete + check).
+ */
+export function createPgRevokedTokensRepo(query) {
+  return {
+    async revoke(jti, expiresAt) {
+      // No conocemos el userId aquí (lo gestiona el servicio); insertamos solo jti.
+      await query(
+        `INSERT INTO revoked_tokens (jti, expires_at) VALUES ($1, $2)
+         ON CONFLICT (jti) DO NOTHING`,
+        [String(jti), Number(expiresAt) || Math.floor(Date.now() / 1000) + 86400],
+      );
+    },
+    async isRevoked(jti) {
+      // Purga perezosa: borra expirados y comprueba.
+      const now = Math.floor(Date.now() / 1000);
+      await query('DELETE FROM revoked_tokens WHERE expires_at < $1', [now]);
+      const { rows } = await query('SELECT 1 FROM revoked_tokens WHERE jti = $1', [String(jti)]);
+      return rows.length > 0;
+    },
   };
 }
 

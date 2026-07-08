@@ -19,6 +19,23 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active  TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS login_count  INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS play_count   INTEGER NOT NULL DEFAULT 0;
 
+-- ── Seguridad: revocación de tokens ─────────────────────────────
+-- Timestamp Unix (segundos). Cualquier JWT con `iat < tokens_invalid_before`
+-- se rechaza en requireAuth. Permite "logout all" y cambio de contraseña
+-- sin necesidad de enumerar tokens emitidos.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS tokens_invalid_before BIGINT;
+
+-- Tabla de tokens revocados individualmente por `jti` (logout de un solo
+-- dispositivo). Se purga automáticamente los registros expirados.
+CREATE TABLE IF NOT EXISTS revoked_tokens (
+  jti        TEXT PRIMARY KEY,
+  user_id    UUID REFERENCES users(id) ON DELETE CASCADE,
+  expires_at BIGINT NOT NULL,           -- Unix segundos; coincide con `exp` del JWT
+  revoked_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires
+  ON revoked_tokens (expires_at);
+
 -- Álbumes guardados en la biblioteca del usuario.
 CREATE TABLE IF NOT EXISTS saved_albums (
   user_id   UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,

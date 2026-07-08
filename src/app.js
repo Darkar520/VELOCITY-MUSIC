@@ -63,6 +63,8 @@ export function createApp(deps = {}) {
     syncSvc     = null,
     healthSvc   = null,
     nowPlayingSvc = null,
+    // ── Servicio de revocación de tokens (logout real) ──
+    revocationService = null,
     staticDir = path.join(__dirname, '..', 'public'),
   } = deps;
 
@@ -141,7 +143,7 @@ export function createApp(deps = {}) {
   });
 
   const authService = userRepo ? createAuthService({ userRepo, jwtSecret }) : null;
-  const requireAuth = authService ? createRequireAuth(authService, userRepo) : null;
+  const requireAuth = authService ? createRequireAuth(authService, userRepo, revocationService) : null;
   // Auth opcional: devuelve el userId si hay un token válido, si no null (sin bloquear).
   const optionalUserId = (req) => {
     if (!authService) return null;
@@ -540,6 +542,36 @@ export function createApp(deps = {}) {
         return res.status(502).json({ error: 'No se pudo verificar con Google.' });
       }
     });
+
+    // ---- Logout: revocar el token actual ----
+    // El cliente pasa su JWT en Authorization header. El servidor extrae el
+    // `jti` y lo añade a la lista de revocados hasta su `exp`. A partir de
+    // este momento, cualquier petición con ese token recibe 401.
+    if (revocationService) {
+      app.post('/api/auth/logout', requireAuth, async (req, res) => {
+        try {
+          await revocationService.revokeToken(req.jti, req.tokenExp);
+          return res.json({ ok: true });
+        } catch (err) {
+          return res.status(500).json({ error: 'No se pudo cerrar la sesión.' });
+        }
+      });
+
+      // ---- Logout all: invalidar TODOS los tokens del usuario ----
+      // Establece `tokens_invalid_before = now()` en el user record. Cualquier
+      // token (incluido el actual) con `iat < tokens_invalid_before` será
+      // rechazado por requireAuth. El cliente debe re-loguearse.
+      app.post('/api/auth/logout-all', requireAuth, async (req, res) => {
+        try {
+          await revocationService.revokeAllTokens(req.userId);
+          // Revocar también el token actual para feedback inmediato.
+          await revocationService.revokeToken(req.jti, req.tokenExp);
+          return res.json({ ok: true });
+        } catch (err) {
+          return res.status(500).json({ error: 'No se pudieron cerrar todas las sesiones.' });
+        }
+      });
+    }
   }
 
   // ---- Perfil del usuario (protegido) ----

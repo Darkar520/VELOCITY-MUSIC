@@ -15,6 +15,7 @@ import {
   createMemoryFavoritesRepo,
   createMemoryHistoryRepo,
   createMemoryTrackRepo,
+  createMemoryRevokedTokensRepo,
 } from './src/repositories/memory.js';
 import {
   createJsonUserRepo,
@@ -25,6 +26,7 @@ import {
   createJsonSavedPlaylistsRepo,
   createJsonTrackMetaRepo,
   createJsonStatsRepo,
+  createJsonRevokedTokensRepo,
 } from './src/repositories/jsondb.js';
 import { query, checkConnection } from './src/db/pool.js';
 import {
@@ -36,6 +38,7 @@ import {
   createPgSavedPlaylistsRepo,
   createPgTrackMetaRepo,
   createPgStatsRepo,
+  createPgRevokedTokensRepo,
 } from './src/repositories/postgres.js';
 import * as errorRepoModule   from './src/repositories/errorRepo.js';
 import * as sessionRepoModule from './src/repositories/sessionRepo.js';
@@ -43,6 +46,7 @@ import * as syncServiceModule from './src/services/syncService.js';
 import * as healthServiceModule from './src/services/healthService.js';
 import * as retentionServiceModule from './src/services/retentionService.js';
 import * as nowPlayingModule from './src/services/nowPlayingService.js';
+import { createTokenRevocationService } from './src/services/tokenRevocationService.js';
 import { initSchema } from './src/db/init.js';
 import { getPool } from './src/db/pool.js';
 
@@ -97,6 +101,7 @@ export async function bootstrap() {
         trackMetaRepo: createPgTrackMetaRepo(query),
         statsRepo: createPgStatsRepo(query),
         trackRepo: null,
+        revokedTokensRepo: createPgRevokedTokensRepo(query),
         // ── Trazabilidad extendida ──
         errorRepo:   { recordError: (p) => errorRepoModule.recordError(query, p),   checkAndFlagUser: (uid) => errorRepoModule.checkAndFlagUser(query, uid),   listActiveAlerts: () => errorRepoModule.listActiveAlerts(query), resolveAlert: (id) => errorRepoModule.resolveAlert(query, id) },
         sessionRepo: { startSession: (p) => sessionRepoModule.startSession(query, p), endSession: (uid) => sessionRepoModule.endSession(query, uid), listActive: (lim) => sessionRepoModule.listActive(query, lim) },
@@ -119,6 +124,7 @@ export async function bootstrap() {
         trackMetaRepo: createJsonTrackMetaRepo(),
         statsRepo: createJsonStatsRepo(),
         trackRepo: null,
+        revokedTokensRepo: createJsonRevokedTokensRepo(),
         errorRepo: null, sessionRepo: null, syncSvc: null,
         healthSvc:   (startTime) => healthServiceModule.check(null, startTime),
     nowPlayingSvc: {
@@ -127,6 +133,14 @@ export async function bootstrap() {
       subscribe: (uid, res) => nowPlayingModule.subscribeNowPlaying(uid, res),
     },
       };
+
+  // ── Servicio de revocación de tokens (logout real) ──
+  // Necesita userRepo (para tokens_invalid_before) y revokedTokensRepo (para jti).
+  // Si alguno falta, el servicio es null y requireAuth no verifica revocación.
+  const revocationService = createTokenRevocationService({
+    revokedTokensRepo: repos.revokedTokensRepo,
+    userRepo: repos.userRepo,
+  });
 
   // Detección de yt-dlp y modo activo (14.1–14.3).
   let activeMode = 'degraded';
@@ -210,6 +224,7 @@ export async function bootstrap() {
     extractorProbe: probeYtDlp,
     installExtractorImpl: () => installYtDlpByDownload({ binDir: YT_DLP_BIN_DIR, probe: probeYtDlp }),
     startTime: Date.now(),
+    revocationService,
     ...repos,
   });
 

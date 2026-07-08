@@ -23,7 +23,7 @@ const DATA_DIR = process.env.VELOCITY_DATA_DIR
 const DB_FILE = path.join(DATA_DIR, 'velocity-db.json');
 
 function emptyStore() {
-  return { users: {}, emailIndex: {}, playlists: {}, favorites: {}, history: [], savedAlbums: {}, savedPlaylists: {}, tracks: {}, searchLog: [], stats: { logins: 0, plays: 0, searches: 0 }, seq: 0 };
+  return { users: {}, emailIndex: {}, playlists: {}, favorites: {}, history: [], savedAlbums: {}, savedPlaylists: {}, tracks: {}, searchLog: [], revokedTokens: {}, stats: { logins: 0, plays: 0, searches: 0 }, seq: 0 };
 }
 
 let store = emptyStore();
@@ -147,6 +147,42 @@ export function createJsonUserRepo() {
       if (Array.isArray(store.history)) store.history = store.history.filter(h => h.userId !== id);
       save();
       return true;
+    },
+    // ── Token revocation (logout all) ──
+    async getTokensInvalidBefore(id) {
+      const u = store.users[id];
+      return u?.tokensInvalidBefore ?? null;
+    },
+    async setTokensInvalidBefore(id, unixSeconds) {
+      const u = store.users[id];
+      if (u) { u.tokensInvalidBefore = unixSeconds; save(); }
+    },
+  };
+}
+
+/**
+ * Repositorio de tokens revocados por `jti` (logout individual).
+ * Persiste en el mismo archivo JSON. Auto-purga de expirados en cada consulta.
+ */
+export function createJsonRevokedTokensRepo() {
+  const purge = () => {
+    if (!store.revokedTokens || typeof store.revokedTokens !== 'object') return;
+    const now = Math.floor(Date.now() / 1000);
+    let changed = false;
+    for (const [jti, exp] of Object.entries(store.revokedTokens)) {
+      if (Number(exp) <= now) { delete store.revokedTokens[jti]; changed = true; }
+    }
+    if (changed) save();
+  };
+  return {
+    async revoke(jti, expiresAt) {
+      if (!store.revokedTokens || typeof store.revokedTokens !== 'object') store.revokedTokens = {};
+      store.revokedTokens[String(jti)] = Number(expiresAt) || Math.floor(Date.now() / 1000) + 86400;
+      save();
+    },
+    async isRevoked(jti) {
+      purge();
+      return !!store.revokedTokens?.[String(jti)];
     },
   };
 }

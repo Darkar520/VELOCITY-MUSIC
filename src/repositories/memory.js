@@ -23,6 +23,36 @@ export function createMemoryUserRepo() {
       byEmail.set(email, user);
       return user;
     },
+    // ── Token revocation (logout all) ──
+    async getTokensInvalidBefore(id) {
+      const u = byId.get(id);
+      return u?.tokensInvalidBefore ?? null;
+    },
+    async setTokensInvalidBefore(id, unixSeconds) {
+      const u = byId.get(id);
+      if (u) u.tokensInvalidBefore = unixSeconds;
+    },
+  };
+}
+
+/**
+ * Repositorio en memoria para tokens revocados por `jti`.
+ * Auto-purga de entradas expiradas en cada `isRevoked`.
+ */
+export function createMemoryRevokedTokensRepo() {
+  const revoked = new Map(); // jti -> expiresAt (Unix seconds)
+  const purgeExpired = () => {
+    const now = Math.floor(Date.now() / 1000);
+    for (const [jti, exp] of revoked) if (exp <= now) revoked.delete(jti);
+  };
+  return {
+    async revoke(jti, expiresAt) {
+      revoked.set(jti, Number(expiresAt) || Math.floor(Date.now() / 1000) + 86400);
+    },
+    async isRevoked(jti) {
+      purgeExpired();
+      return revoked.has(jti);
+    },
   };
 }
 
