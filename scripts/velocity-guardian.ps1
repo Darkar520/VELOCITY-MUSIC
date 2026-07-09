@@ -125,6 +125,8 @@ function Start-Backend {
   $envVars += '&& set JWT_SECRET=42861e47db4b0dcbd80a0ccdfd9690f307531ed3deed7a81a858fa4692607be8fd09f434e3e37067ddec0370fa0aa2b315c9a51e564e2bfb13d9a61aa323e555'
   $envVars += '&& set ADMIN_KEY=2RzFDO9pI68zqIaYBMhmRaaSwU3NH6ME'
   $envVars += '&& set CLUSTER=1'
+  $envVars += '&& set NODE_ENV=production'
+  $envVars += '&& set ALLOWED_ORIGIN=https://velocitymusic.uk'
   $cmd = '{0}&& npm run start:cluster >> "{1}" 2>&1' -f $envVars, $BackLog
   Start-Process -FilePath $env:ComSpec `
     -ArgumentList '/c', $cmd `
