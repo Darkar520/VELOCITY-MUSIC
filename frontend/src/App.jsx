@@ -54,31 +54,31 @@ function AuthScreen({ onAuthed, T }) {
   const googleLogin = () => {
     if (!googleClientId) return;
     setBusy(true); setErr('');
+    // Flujo de redirect completo (no popup). La ventana principal navega a
+    // Google, que redirige a /auth/google/callback/ con el credential en el
+    // hash. Esa página llama al backend, guarda el JWT en localStorage y
+    // redirige de vuelta a /.
+    //
+    // Este flujo es robusto en TODOS los navegadores (incluido Brave, que
+    // bloquea window.opener en popups cross-origin) y en móviles.
     const redirect = window.location.origin + '/auth/google/callback';
     const url = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=' + encodeURIComponent(googleClientId) + '&redirect_uri=' + encodeURIComponent(redirect) + '&response_type=id_token&scope=openid%20email%20profile&nonce=' + Date.now();
-    const w = 480, h = 600, left = (screen.width - w) / 2, top2 = (screen.height - h) / 2;
-    const popup = window.open(url, 'google-login', 'width=' + w + ',height=' + h + ',top=' + top2 + ',left=' + left);
-    let done = false;  // evita doble invocación si el popup cierra y llega mensaje a la vez
-    const finish = (fn) => { if (done) return; done = true; clearInterval(check); window.removeEventListener('message', onMsg); fn(); };
-    const onMsg = async (e) => {
-      if (!e.data || !e.data.idToken) return;
-      finish(async () => {
-        try {
-          const data = await api.googleLogin(e.data.idToken);
-          // Llamar onAuthed primero monta la app; setBusy nunca se invoca en un
-          // componente desmontado (done=true protege la doble invocación).
-          onAuthed(data.email || '', data.displayName || '');
-        } catch (err2) {
-          setBusy(false);
-          setErr(err2.message || 'No se pudo iniciar con Google.');
-        }
-      });
-    };
-    window.addEventListener('message', onMsg);
-    const check = setInterval(() => {
-      if (popup && popup.closed) finish(() => setBusy(false));
-    }, 500);
+    window.location.assign(url);
   };
+
+  // ── Detección de resultado de Google OAuth tras redirect ──
+  // Después del redirect de vuelta a /, el hash puede contener:
+  //   #google_auth_error=<mensaje>  → mostrar error en el form de login
+  //   (nada)                         → flujo normal, no hacer nada
+  useEffect(() => {
+    const h = window.location.hash;
+    if (h.startsWith('#google_auth_error=')) {
+      const msg = decodeURIComponent(h.slice('#google_auth_error='.length));
+      setErr(msg === 'no_token' ? 'Google no devolvió un token. Intenta de nuevo.' : msg);
+      // Limpiar el hash para que no se quede pegado si el usuario recarga.
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
+  }, []);
 
   const guestLogin = async () => {
     setErr(''); setBusy(true);
