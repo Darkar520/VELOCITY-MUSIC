@@ -3,9 +3,12 @@
 <body style="background:#04060a;color:#fff;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
 <p>Cerrando…</p>
 <script>
-  // El ID token viene en el hash fragment (response_type=id_token).
+  // Google Identity Services (GIS) envía el JWT en el parámetro `credential`.
+  // El formato OAuth 2.0 clásico usaba `id_token`, pero Google lo deprecó
+  // en favor de GIS. Aceptamos ambos por compatibilidad con cualquier
+  // configuración de Google Cloud Console.
   const params = new URLSearchParams(location.hash.slice(1));
-  const idToken = params.get('id_token');
+  const idToken = params.get('credential') || params.get('id_token');
   if (idToken && window.opener) {
     window.opener.postMessage({ idToken }, location.origin);
   }
