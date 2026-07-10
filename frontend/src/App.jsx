@@ -2512,19 +2512,21 @@ export default function App() {
         metas.forEach(m => {
           if (m && m.id && typeof m.cover === 'string' && m.cover.startsWith('data:')) {
             const inCat = trackById(m.id);
-            if (inCat && (!inCat.cover || !inCat.cover.startsWith('data:'))) {
-              // Promover el data: URL al catálogo en memoria para uso offline.
-              cacheTrack({ ...inCat, cover: m.cover });
-            }
+            // Siempre promover data: offline sobre HTTPS/vacío.
+            cacheTrack({ ...(inCat || m), ...m, cover: m.cover });
           }
         });
         const ids = await offline.listIds();
         setDownloaded(new Set(ids));
-        // Refrescar el cover del track actual si el catálogo ahora tiene uno mejor.
+        // Refrescar cover del track actual: data: offline gana a HTTPS rota.
         setTrack(prev => {
           if (!prev || !prev.id) return prev;
           const c = trackById(prev.id);
-          if (c && c.cover && !prev.cover) return { ...prev, cover: c.cover };
+          if (!c || !c.cover) return prev;
+          const prevData = typeof prev.cover === 'string' && prev.cover.startsWith('data:');
+          const catData = typeof c.cover === 'string' && c.cover.startsWith('data:');
+          if (catData && !prevData) return { ...prev, cover: c.cover };
+          if (!prev.cover && c.cover) return { ...prev, cover: c.cover };
           return prev;
         });
         // Si la última pista restaurada está descargada, reproducir desde el blob offline.
@@ -2533,6 +2535,21 @@ export default function App() {
           if (s && s.track && s.track.id && ids.includes(s.track.id)) {
             const b = await offline.getBlob(s.track.id);
             if (b) { const u = URL.createObjectURL(b); objUrlRef.current = u; setPlaySrc(u); }
+          }
+        } catch {}
+        // Rellenar covers de descargas antiguas (solo con red).
+        try {
+          if (navigator.onLine !== false) {
+            const filled = await offline.backfillCovers();
+            if (filled && filled.length) {
+              filled.forEach(cacheTrack);
+              setTrack(prev => {
+                if (!prev || !prev.id) return prev;
+                const m = filled.find(x => x && x.id === prev.id);
+                if (m && m.cover) return { ...prev, cover: m.cover };
+                return prev;
+              });
+            }
           }
         } catch {}
       } catch {}
@@ -3014,29 +3031,40 @@ export default function App() {
   };
 
   useEffect(() => {
-    const onVis = () => {
-      if (document.visibilityState === 'visible') {
-        // Al volver a visible: si el OS pausó el audio, reanudar.
-        const a = audioRef.current;
-        if (a && playingRef.current && !a.ended && a.paused) {
-          setTimeout(forceReacquire, 150);
-        }
+    // Tras video/otra pestaña: el OS deja playing=true pero audio.paused.
+    // Re-enganchar al volver a primer plano (visibility + focus + pageshow).
+    const tryResume = () => {
+      const a = audioRef.current;
+      if (!a || !playingRef.current || a.ended) return;
+      if (!a.paused && a.currentTime > 0) return;
+      // Soft play primero; forceReacquire solo si sigue pausado.
+      if (a.volume === 0) a.volume = vol;
+      const p = a.play();
+      if (p && p.catch) {
+        p.catch(() => { setTimeout(forceReacquire, 120); });
+      } else if (a.paused) {
+        setTimeout(forceReacquire, 120);
       }
-      // Al salir a background: NO intervenir. Chrome + Media Session API
-      // mantienen el audio solos. Cualquier intento de pause()/load()/play()
-      // desde JS en background mata la sesión por autoplay policy.
     };
+    const onVis = () => {
+      if (document.visibilityState === 'visible') setTimeout(tryResume, 80);
+    };
+    const onFocus = () => setTimeout(tryResume, 80);
+    const onPageShow = (e) => { if (e.persisted || document.visibilityState === 'visible') setTimeout(tryResume, 80); };
 
     document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('pageshow', onPageShow);
 
-    // Stuck detector: SOLO en foreground. En background los timers están
-    // congelados de todas formas y intervenir mata la sesión.
     stuckCheckRef.current = setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
       const a = audioRef.current;
       if (!a || !playingRef.current || a.ended) { lastTimeRef.current = 0; return; }
       const ct = a.currentTime || 0;
-      if (lastTimeRef.current > 0 && Math.abs(ct - lastTimeRef.current) < 0.1 && a.paused) {
+      // Pausado con intención de play, o "zombie" (playing pero tiempo congelado).
+      if (a.paused) {
+        tryResume();
+      } else if (lastTimeRef.current > 0 && Math.abs(ct - lastTimeRef.current) < 0.05 && ct > 0.5) {
         forceReacquire();
       }
       lastTimeRef.current = ct;
@@ -3044,6 +3072,8 @@ export default function App() {
 
     return () => {
       document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('pageshow', onPageShow);
       if (stuckCheckRef.current) { clearInterval(stuckCheckRef.current); stuckCheckRef.current = null; }
     };
   }, [vol]);
@@ -3076,7 +3106,9 @@ export default function App() {
       const nt = trackById(nextId);
       if (!nt) { el.removeAttribute('src'); return; }
       try {
-        const url = await api.ensureStreamUrl({ artist: nt.artist, title: nt.title, id: nt.id, quality: qParam });
+        // Preferir firma ya en caché (síncrona); si no, ensure + warm.
+        let url = api.peekStreamUrl({ artist: nt.artist, title: nt.title, id: nt.id, quality: qParam }, 90);
+        if (!url) url = await api.ensureStreamUrl({ artist: nt.artist, title: nt.title, id: nt.id, quality: qParam });
         if (cancelled || !el) return;
         if (el.getAttribute('src') !== url) { el.src = url; try { el.load(); } catch {} }
       } catch {
@@ -3158,27 +3190,39 @@ export default function App() {
     fadeSafetyRef.current = setTimeout(() => { cancelAnimationFrame(fadeRafRef.current); if (audioRef.current) audioRef.current.volume = target; }, dur + 350);
   };
 
-  // Precarga la(s) siguiente(s) pista(s) de la cola en la caché del backend,
-  // para que al dar "siguiente" el arranque sea instantáneo (sin esperar a yt-dlp).
+  // Precarga la(s) siguiente(s) pista(s): firma HMAC + resolve backend.
+  // Crítico para background: next()/onEnded debe poder poner playSrc sin red.
   const prefetchedRef = useRef(new Set());
+  const streamParamsFor = (nt, qParam) => ({
+    artist: nt.artist,
+    title: nt.title,
+    id: nt.id,
+    quality: qParam,
+    stream: (nt.source === 'soundcloud' && nt.stream) ? nt.stream : undefined,
+  });
   const prefetchNext = (currentId, ids, qParam) => {
-    if (!ids || ids.length < 2) return;
+    if (!ids || ids.length < 1) return;
     const i = ids.indexOf(currentId);
     if (i === -1) return;
-    // Precargar las próximas 2 pistas de la cola.
-    for (let n = 1; n <= 2; n++) {
+    // Actual + próximas 3 (pre-firmar mientras la página puede hacer red).
+    for (let n = 0; n <= 3; n++) {
       const nextId = ids[(i + n) % ids.length];
-      if (!nextId || nextId === currentId) continue;
-      if (prefetchedRef.current.has(nextId)) continue;   // ya precargada
-      if (downloaded.has(nextId)) continue;               // ya está offline
+      if (!nextId) continue;
+      if (downloaded.has(nextId)) continue;
       const nt = trackById(nextId);
       if (!nt) continue;
-      prefetchedRef.current.add(nextId);
+      const sp = streamParamsFor(nt, qParam);
+      // Siempre re-warm si la firma está por caducar (peek con margen 5 min).
+      if (api.peekStreamUrl(sp, 300)) {
+        if (n === 0) continue;
+        if (prefetchedRef.current.has(nextId + ':' + qParam)) continue;
+      }
+      prefetchedRef.current.add(nextId + ':' + qParam);
+      api.warmStreamUrl(sp);
       api.prefetchStream({ artist: nt.artist, title: nt.title, id: nt.id, quality: qParam });
     }
-    // Acotar el registro para que no crezca sin límite.
-    if (prefetchedRef.current.size > 60) {
-      prefetchedRef.current = new Set([...prefetchedRef.current].slice(-30));
+    if (prefetchedRef.current.size > 80) {
+      prefetchedRef.current = new Set([...prefetchedRef.current].slice(-40));
     }
   };
 
@@ -3203,15 +3247,49 @@ export default function App() {
     } catch {}
   };
 
-  const play = async (t, list, opts = {}) => {
+  // Generación de play: descarta firmas async obsoletas si el usuario ya cambió de pista.
+  const playGenRef = useRef(0);
+
+  const applyOnlineSrc = (t, sp, gen, fallbackTrack) => {
+    const peeked = api.peekStreamUrl(sp, 90);
+    if (peeked) {
+      setTrack({ ...t, url: peeked }); setPlaySrc(peeked); return;
+    }
+    api.ensureStreamUrl(sp).then((signedUrl) => {
+      if (playGenRef.current !== gen) return;
+      setTrack({ ...t, url: signedUrl }); setPlaySrc(signedUrl);
+    }).catch(() => {
+      if (playGenRef.current !== gen) return;
+      if (fallbackTrack?.url) setPlaySrc(fallbackTrack.url);
+    });
+  };
+
+  const afterPlaySideEffects = (t, trackWithQuality, initialQueue, qParam, opts) => {
+    setRecent(r => [t.id, ...r.filter(x => x !== t.id)].slice(0, 30));
+    recordPlayStat(t);
+    api.recordHistory(t.id).catch(() => {});
+    api.updateNowPlaying({ trackId: t.id, title: t.title, artist: t.artist, cover: t.cover, position: 0, duration: t.durationSeconds || 0, playing: true, deviceName: navigator.userAgent.includes('Mobile') ? 'Móvil' : 'Web', quality: qParam });
+    api.saveTracks([slimTrack(t)]);
+    try { localStorage.setItem('velocity.player', JSON.stringify({ track: trackWithQuality, queue: initialQueue, t: 0 })); } catch {}
+    prefetchNext(t.id, initialQueue, qParam);
+    if (opts.radio) { radioRef.current = true; ensureRadio(t, initialQueue); }
+    else { radioRef.current = false; radioSeedRef.current = null; }
+    if (opts.mixLabel) mixSessionRef.current = { label: opts.mixLabel, used: new Set([opts.mixLabel]) };
+    else if (!opts.keepMix) mixSessionRef.current = { label: null, used: new Set() };
+  };
+
+  const play = (t, list, opts = {}) => {
     if (!t) return;
     // Trackear la playlist de origen si se pasó opts.from. Permite mostrar un
     // botón en el reproductor para volver a la playlist de donde salió la pista.
     if (opts.from !== undefined) setPlayingFrom(opts.from);
-    // Asegurar que la pista tenga cover: si el catálogo la tiene, usarla.
-    // Esto evita que la MediaSession (notificación) quede sin carátula.
+    // Cover: priorizar data: offline del catálogo (notificación + UI).
     const cached = trackById(t.id);
-    if (cached && cached.cover && !t.cover) t = { ...t, cover: cached.cover };
+    if (cached && cached.cover) {
+      if (!t.cover || (String(cached.cover).startsWith('data:') && !String(t.cover || '').startsWith('data:'))) {
+        t = { ...t, cover: cached.cover };
+      }
+    }
     cacheTrack(t); saveMeta();
     // Detener limpiamente la pista anterior para evitar el "clic" al cortar la onda.
     const a = audioRef.current;
@@ -3221,48 +3299,59 @@ export default function App() {
     else { if (a) a.volume = vol; pendingFadeRef.current = false; }      // segundo plano: sin fundido
     const initialQueue = list && list.length ? list : [t.id];
     setQueue(initialQueue);
-    // Mapear preferencia de calidad de la UI al ID del backend.
     const qualityMap = { high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' };
     const qParam = qualityMap[quality] || 'high';
-    // URL firmada (HMAC) para el proxy — <audio> no envía Authorization.
-    let signedUrl = '';
-    try {
-      signedUrl = await api.ensureStreamUrl({ artist: t.artist, title: t.title, id: t.id, quality: qParam });
-    } catch {
-      signedUrl = '';
-    }
-    const trackWithQuality = { ...t, url: signedUrl || api.streamUrl({ artist: t.artist, title: t.title, id: t.id, quality: qParam }) };
-    setTrack(trackWithQuality); setPlaying(true); setLoadingAudio(true);
-    // Fuente: archivo offline si existe, si no el stream del backend.
+    const sp = streamParamsFor(t, qParam);
+    const gen = ++playGenRef.current;
+
     if (objUrlRef.current) { URL.revokeObjectURL(objUrlRef.current); objUrlRef.current = null; }
+
+    // ── Offline: blob local (sin red) ──
     if (downloaded.has(t.id)) {
-      offline.getBlob(t.id).then(b => { if (b) { const u = URL.createObjectURL(b); objUrlRef.current = u; setPlaySrc(u); } else setPlaySrc(trackWithQuality.url); }).catch(() => setPlaySrc(trackWithQuality.url));
-    } else if (backendDown) {
-      // Backend caído y pista no descargada → no intentar streaming.
-      setPlaySrc(''); setLoadingAudio(false); setPlaying(false);
+      const trackWithQuality = { ...t, url: api.streamUrl(sp) };
+      setTrack(trackWithQuality); setPlaying(true); setLoadingAudio(true);
+      offline.getBlob(t.id).then(b => {
+        if (playGenRef.current !== gen) return;
+        if (b) { const u = URL.createObjectURL(b); objUrlRef.current = u; setPlaySrc(u); }
+        else applyOnlineSrc(t, sp, gen, trackWithQuality);
+      }).catch(() => {
+        if (playGenRef.current === gen) applyOnlineSrc(t, sp, gen, { ...t, url: api.streamUrl(sp) });
+      });
+      afterPlaySideEffects(t, { ...t, url: api.streamUrl(sp) }, initialQueue, qParam, opts);
+      return;
+    }
+
+    if (backendDown) {
+      setTrack({ ...t, url: '' }); setPlaySrc(''); setLoadingAudio(false); setPlaying(false);
       showToast('Sin conexión: esta canción no está descargada');
       return;
-    } else if (!signedUrl) {
+    }
+
+    // ── Online: preferir firma ya precalentada (síncrono → funciona con pantalla bloqueada) ──
+    // Margen 90s: suficiente para acabar la pista y arrancar la siguiente en background.
+    const peeked = api.peekStreamUrl(sp, 90);
+    if (peeked) {
+      const trackWithQuality = { ...t, url: peeked };
+      setTrack(trackWithQuality); setPlaying(true); setLoadingAudio(true); setPlaySrc(peeked);
+      afterPlaySideEffects(t, trackWithQuality, initialQueue, qParam, opts);
+      return;
+    }
+
+    // Sin caché: arranque optimista + firma async (foreground o best-effort en bg).
+    const placeholder = { ...t, url: api.streamUrl(sp) };
+    setTrack(placeholder); setPlaying(true); setLoadingAudio(true);
+    afterPlaySideEffects(t, placeholder, initialQueue, qParam, opts);
+    api.ensureStreamUrl(sp).then((signedUrl) => {
+      if (playGenRef.current !== gen) return;
+      const trackWithQuality = { ...t, url: signedUrl };
+      setTrack(trackWithQuality);
+      setPlaySrc(signedUrl);
+      try { localStorage.setItem('velocity.player', JSON.stringify({ track: trackWithQuality, queue: initialQueue, t: 0 })); } catch {}
+    }).catch(() => {
+      if (playGenRef.current !== gen) return;
       setPlaySrc(''); setLoadingAudio(false); setPlaying(false);
       showToast('No se pudo autorizar el stream. Inicia sesión de nuevo.');
-      return;
-    } else { setPlaySrc(trackWithQuality.url); }
-    setRecent(r => [t.id, ...r.filter(x => x !== t.id)].slice(0, 30));
-    recordPlayStat(t);
-    api.recordHistory(t.id).catch(() => {});
-    // Notificar a otros dispositivos en tiempo real.
-    api.updateNowPlaying({ trackId: t.id, title: t.title, artist: t.artist, cover: t.cover, position: 0, duration: t.durationSeconds || 0, playing: true, deviceName: navigator.userAgent.includes('Mobile') ? 'Móvil' : 'Web', quality: qParam });
-    api.saveTracks([slimTrack(t)]); // sincronizar metadatos entre dispositivos
-    try { localStorage.setItem('velocity.player', JSON.stringify({ track: trackWithQuality, queue: initialQueue, t: 0 })); } catch {}
-    // Precargar la(s) siguiente(s) pista(s) de la cola para que el cambio sea instantáneo.
-    prefetchNext(t.id, initialQueue, qParam);
-    // Modo radio: llena la cola con relacionadas a la pista elegida.
-    if (opts.radio) { radioRef.current = true; ensureRadio(t, initialQueue); }
-    else { radioRef.current = false; radioSeedRef.current = null; }
-    // Sesión de mezcla: reproducir una mezcla la inicia; cualquier otra
-    // reproducción la limpia; las auto-continuaciones la preservan (keepMix).
-    if (opts.mixLabel) mixSessionRef.current = { label: opts.mixLabel, used: new Set([opts.mixLabel]) };
-    else if (!opts.keepMix) mixSessionRef.current = { label: null, used: new Set() };
+    });
   };
   const togglePlay = () => {
     if (!track) return;
@@ -3804,23 +3893,52 @@ export default function App() {
   // ── Media Session API: controles de pantalla de bloqueo y notificación del OS ──
   // (Debe declararse ANTES de cualquier return condicional para no romper el
   //  orden de los hooks de React.)
+  const mediaArtBlobRef = useRef(null);
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;
-    if (track) {
-      navigator.mediaSession.metadata = new MediaMetadata({
-        title: track.title || '',
-        artist: track.artist || '',
-        album: track.album || '',
-        // Solo carátulas HTTP(S) sirven en la notificación del SO (data:/blob: no).
-        // Fallback al ícono de la app para que nunca quede sin imagen.
-        artwork: (track.cover && /^https?:/.test(track.cover)) ? [
-          { src: track.cover.replace(/=w\d+-h\d+/, '=w512-h512').replace(/=s\d+/, '=s512'), sizes: '512x512', type: 'image/jpeg' },
-        ] : [
-          { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },
-          { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
-        ],
-      });
-    }
+    let cancelled = false;
+    const appArt = [
+      { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },
+      { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
+    ];
+    const applyMeta = (artwork) => {
+      if (cancelled || !track) return;
+      try {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: track.title || '',
+          artist: track.artist || '',
+          album: track.album || '',
+          artwork: artwork && artwork.length ? artwork : appArt,
+        });
+      } catch {}
+    };
+    (async () => {
+      if (!track) return;
+      const cover = track.cover || (trackById(track.id) || {}).cover || '';
+      // HTTPS: ok en la mayoría de SO. data:/blob: → blob same-origin (mejor que data: crudo).
+      if (cover && /^https?:/i.test(cover)) {
+        applyMeta([{
+          src: cover.replace(/=w\d+-h\d+/, '=w512-h512').replace(/=s\d+/, '=s512'),
+          sizes: '512x512', type: 'image/jpeg',
+        }]);
+        return;
+      }
+      if (cover && (cover.startsWith('data:') || cover.startsWith('blob:'))) {
+        try {
+          const res = await fetch(cover);
+          const blob = await res.blob();
+          if (cancelled) return;
+          if (mediaArtBlobRef.current) {
+            try { URL.revokeObjectURL(mediaArtBlobRef.current); } catch {}
+          }
+          const u = URL.createObjectURL(blob);
+          mediaArtBlobRef.current = u;
+          applyMeta([{ src: u, sizes: '512x512', type: blob.type || 'image/jpeg' }]);
+          return;
+        } catch { /* fall through to app icon */ }
+      }
+      applyMeta(appArt);
+    })();
     const a = () => audioRef.current;
     const doPlay = () => { const el = a(); if (el) { if (el.volume === 0) el.volume = vol; el.play().catch(() => {}); setPlaying(true); } };
     const doPause = () => { const el = a(); if (el) { el.pause(); setPlaying(false); } };
@@ -3829,11 +3947,11 @@ export default function App() {
     navigator.mediaSession.setActionHandler('previoustrack', () => prev());
     navigator.mediaSession.setActionHandler('nexttrack', () => next());
     try { navigator.mediaSession.setActionHandler('seekto', (e) => { if (e.seekTime != null) seek(e.seekTime); }); } catch {}
-    // Algunos audífonos envían seekforward/seekbackward en vez de next/prev.
     try { navigator.mediaSession.setActionHandler('seekforward', () => next()); } catch {}
     try { navigator.mediaSession.setActionHandler('seekbackward', () => prev()); } catch {}
     try { navigator.mediaSession.setActionHandler('stop', () => doPause()); } catch {}
     return () => {
+      cancelled = true;
       ['play','pause','previoustrack','nexttrack','seekto','seekforward','seekbackward','stop'].forEach(act => {
         try { navigator.mediaSession.setActionHandler(act, null); } catch {}
       });

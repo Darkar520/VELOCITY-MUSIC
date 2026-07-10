@@ -14,15 +14,28 @@ export function cacheTrack(t) {
     const prev = _catalog.get(t.id);
     if (prev) {
       // Prioridad de carátula (mayor → menor): data: URL > HTTPS > vacío.
-      // 1. Nunca degradar una carátula real ya conocida a vacío.
-      if (hasCover(prev.cover) && !hasCover(t.cover)) t = { ...t, cover: prev.cover };
-      // 2. Si el catálogo ya tiene un data: URL (descargado offline), no lo
-      //    degradar a HTTPS: sin internet la HTTPS no carga → carátula rota.
-      else if (isDataUrl(prev.cover) && !isDataUrl(t.cover)) t = { ...t, cover: prev.cover };
+      // 1. Entrante data: siempre gana a HTTPS/vacío (offline IDB).
+      if (isDataUrl(t.cover)) {
+        // keep t.cover
+      } else if (isDataUrl(prev.cover) && !isDataUrl(t.cover)) {
+        // 2. No degradar data: offline a HTTPS remota.
+        t = { ...t, cover: prev.cover };
+      } else if (hasCover(prev.cover) && !hasCover(t.cover)) {
+        // 3. Nunca degradar una carátula real ya conocida a vacío.
+        t = { ...t, cover: prev.cover };
+      }
     }
     _catalog.set(t.id, t);
   }
   return t;
+}
+
+/** Mejor carátula conocida para un id (prioriza data: de IDB/catálogo). */
+export function bestCoverFor(id, fallback) {
+  const c = trackById(id);
+  if (c && hasCover(c.cover)) return c.cover;
+  if (fallback && hasCover(fallback)) return fallback;
+  return (c && c.cover) || fallback || '';
 }
 export function cacheTracks(arr) { (arr || []).forEach(cacheTrack); return arr || []; }
 export const trackById = (id) => _catalog.get(id) || null;

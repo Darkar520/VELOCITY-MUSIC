@@ -61,6 +61,11 @@ La reproducción NUNCA debe cortarse. Invariantes:
 - **Firma HMAC obligatoria** en `/api/stream-proxy` (`exp` + `sig`). El
   `<audio>` no envía Bearer; el cliente obtiene la firma vía
   `GET /api/stream-sign` (JWT) → `api.ensureStreamUrl()`. Sin firma → 401.
+- **Prefirma de cola (P1):** mientras la app está visible se precalientan
+  firmas de la actual + próximas pistas (`warmStreamUrl` / `peekStreamUrl`).
+  `play()` / `next()` / `onEnded` deben poder poner `playSrc` **en síncrono**
+  si hay hit de caché (margen ≥90s). No depender de `await` de red al
+  avanzar con la pantalla bloqueada (online fallaba; offline no).
 - **`/api/resolve` requiere JWT** (prefetch/warm-up). Sin token → 401.
 
 ## 4. Carátulas

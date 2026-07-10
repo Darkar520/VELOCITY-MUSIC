@@ -364,6 +364,29 @@ test('Frontend api: buildSignedStreamUrl incluye exp y sig', () => {
   assert.ok(url.includes('artist=A'));
 });
 
+test('Frontend api: peekStreamUrl es síncrono y respeta margen de TTL', () => {
+  const params = { artist: 'Peek', title: 'Hit', id: 'pk1', quality: 'high' };
+  api._streamSignCache.clear();
+  assert.equal(api.peekStreamUrl(params, 90), null);
+  const exp = Math.floor(Date.now() / 1000) + 3600;
+  const url = api.buildSignedStreamUrl({ ...params, exp, sig: 'sigTEST' });
+  api._streamSignCache.set(api._streamSignKey(params), { exp, url });
+  assert.equal(api.peekStreamUrl(params, 90), url);
+  // Exp casi vencido → null con margen 90s
+  api._streamSignCache.set(api._streamSignKey(params), { exp: Math.floor(Date.now() / 1000) + 30, url });
+  assert.equal(api.peekStreamUrl(params, 90), null);
+});
+
+test('Frontend catalog: data: offline gana a HTTPS al re-cachear', async () => {
+  const { cacheTrack, trackById } = await import('../frontend/src/catalog.js');
+  const id = 'cover-priority-' + Math.random().toString(36).slice(2);
+  cacheTrack({ id, title: 'T', artist: 'A', cover: 'https://example.com/a.jpg' });
+  cacheTrack({ id, title: 'T', artist: 'A', cover: 'data:image/jpeg;base64,xxx' });
+  assert.ok(trackById(id).cover.startsWith('data:'), 'data: debe ganar');
+  cacheTrack({ id, title: 'T', artist: 'A', cover: 'https://example.com/b.jpg' });
+  assert.ok(trackById(id).cover.startsWith('data:'), 'no degradar data: a HTTPS');
+});
+
 test('Frontend api: streamUrl incluye param stream para pistas de SoundCloud', () => {
   const scUrl = 'https://api.soundcloud.com/tracks/123/stream';
   const url = api.streamUrl({

@@ -79,40 +79,72 @@ export const api = {
     params.set('sig', String(sig));
     return `/api/stream-proxy?${params.toString()}`;
   },
-  // Caché de firmas (clave por pista/calidad). Margen 60s antes de exp.
+  // Caché de firmas (clave por pista/calidad). Margen 60s al reutilizar con ensure.
   _streamSignCache: new Map(),
+  _streamSignInflight: new Map(),
   _streamSignKey({ artist, title, id, quality, stream }) {
     return [artist || '', title || '', id || '', quality || '', stream || ''].join('\0');
   },
+  /**
+   * Lectura síncrona de la caché de firmas (sin red).
+   * @param {object} params artist/title/id/quality/stream
+   * @param {number} [minRemainingSec=90] segundos mínimos de vida restante
+   * @returns {string|null} URL firmada o null
+   */
+  peekStreamUrl(params, minRemainingSec = 90) {
+    const key = this._streamSignKey(params || {});
+    const hit = this._streamSignCache.get(key);
+    if (!hit) return null;
+    const now = Math.floor(Date.now() / 1000);
+    if (hit.exp - now < (minRemainingSec || 0)) return null;
+    return hit.url;
+  },
   // Obtiene URL firmada lista para <audio src> o fetch de blob.
   // Requiere JWT (Bearer). Reutiliza firma en caché si queda >60s de vida.
+  // Dedup inflight: varias llamadas concurrentes al mismo key = 1 fetch.
   async ensureStreamUrl({ artist, title, id, quality, stream }) {
-    const key = this._streamSignKey({ artist, title, id, quality, stream });
+    const params = { artist, title, id, quality, stream };
+    const key = this._streamSignKey(params);
     const now = Math.floor(Date.now() / 1000);
     const hit = this._streamSignCache.get(key);
     if (hit && hit.exp - now > 60) return hit.url;
 
-    const params = new URLSearchParams();
-    if (artist) params.set('artist', artist);
-    if (title) params.set('title', title);
-    if (id) params.set('id', id);
-    if (quality) params.set('quality', quality);
-    if (stream) params.set('stream', stream);
-    const data = await jsonOrThrow(
-      await fetch(`/api/stream-sign?${params.toString()}`, { headers: authHeaders() }),
-    );
-    const url = this.buildSignedStreamUrl({
-      artist, title, id, quality, stream,
-      exp: data.exp,
-      sig: data.sig,
-    });
-    this._streamSignCache.set(key, { exp: Number(data.exp), url });
-    // Evitar crecimiento ilimitado de la caché.
-    if (this._streamSignCache.size > 200) {
-      const oldest = this._streamSignCache.keys().next().value;
-      this._streamSignCache.delete(oldest);
+    const inflight = this._streamSignInflight.get(key);
+    if (inflight) return inflight;
+
+    const p = (async () => {
+      const q = new URLSearchParams();
+      if (artist) q.set('artist', artist);
+      if (title) q.set('title', title);
+      if (id) q.set('id', id);
+      if (quality) q.set('quality', quality);
+      if (stream) q.set('stream', stream);
+      const data = await jsonOrThrow(
+        await fetch(`/api/stream-sign?${q.toString()}`, { headers: authHeaders() }),
+      );
+      const url = this.buildSignedStreamUrl({
+        artist, title, id, quality, stream,
+        exp: data.exp,
+        sig: data.sig,
+      });
+      this._streamSignCache.set(key, { exp: Number(data.exp), url });
+      if (this._streamSignCache.size > 200) {
+        const oldest = this._streamSignCache.keys().next().value;
+        this._streamSignCache.delete(oldest);
+      }
+      return url;
+    })();
+
+    this._streamSignInflight.set(key, p);
+    try {
+      return await p;
+    } finally {
+      this._streamSignInflight.delete(key);
     }
-    return url;
+  },
+  // Prefirma en background (errores silenciados). Usar en foreground al armar cola.
+  warmStreamUrl(params) {
+    return this.ensureStreamUrl(params).catch(() => null);
   },
   // Precarga (warm-up) de la resolución de una pista en la caché del backend.
   // No descarga audio: solo fuerza a que yt-dlp resuelva la URL y quede cacheada,
