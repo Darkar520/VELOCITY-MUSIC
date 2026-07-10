@@ -512,6 +512,42 @@ function SearchTab({ ctx }) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// SEARCH BAR — input reutilizable para filtrar dentro de cualquier lista
+// de canciones (playlist, mix, álbum, artista). Solo se muestra si la lista
+// tiene 8+ canciones para no ocupar espacio en listas chicas.
+// ═══════════════════════════════════════════════════════════════
+function SearchBar({ value, onChange, placeholder = 'Buscar…', T }) {
+  return (
+    <div style={{ position:'relative', marginBottom:16 }}>
+      <input
+        type="text"
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder}
+        style={{ width:'100%', background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:12, padding:'11px 38px 11px 14px', fontSize:13, color:'var(--txt-0)', outline:'none', fontFamily:'Inter,sans-serif' }}
+      />
+      <div style={{ position:'absolute', right:12, top:'50%', transform:'translateY(-50%)', display:'flex', alignItems:'center', pointerEvents:'none' }}>
+        {value
+          ? <button onClick={() => onChange('')} style={{ background:'none', border:'none', cursor:'pointer', padding:4, display:'flex', alignItems:'center', color:'var(--txt-2)', pointerEvents:'auto' }}><Icon.X c="var(--txt-2)" sz={16} /></button>
+          : <Icon.Search c="var(--txt-3)" sz={16} />}
+      </div>
+    </div>
+  );
+}
+
+// Hook reutilizable para el estado de búsqueda dentro de una vista.
+// Devuelve [search, setSearch, filtered] donde filtered es la lista filtrada.
+function useListSearch(list) {
+  const [search, setSearch] = useState('');
+  const showSearch = list.length >= 8;
+  const norm = (s) => String(s || '').toLowerCase();
+  const filtered = search.trim()
+    ? list.filter(t => norm(t.title).includes(norm(search)) || norm(t.artist).includes(norm(search)))
+    : list;
+  return [search, setSearch, filtered, showSearch];
+}
+
+// ═══════════════════════════════════════════════════════════════
 // LIBRARY TAB
 // ═══════════════════════════════════════════════════════════════
 function LibraryTab({ ctx }) {
@@ -535,6 +571,15 @@ function LibraryTab({ ctx }) {
   // Limpiar la búsqueda al cambiar de playlist (no heredar filtro entre vistas).
   useEffect(() => { setPlSearch(''); }, [openPlaylist]);
 
+  // Mapea el openPlaylist string al formato de objeto que usa playingFrom.
+  // Se pasa como opts.from en las llamadas a play() dentro de esta vista.
+  const fromForOpenPlaylist = (op) => {
+    if (!op) return undefined;
+    if (op === 'liked') return { kind: 'liked' };
+    if (op.startsWith('saved:')) return { kind: 'saved-playlist', id: op.slice(6) };
+    return { kind: 'user-playlist', id: op };
+  };
+
   if (openPlaylist) {
     const isLiked = openPlaylist === 'liked';
     const isSaved = openPlaylist.startsWith('saved:');
@@ -544,8 +589,6 @@ function LibraryTab({ ctx }) {
     if (!pl) { setOpenPlaylist(null); return null; }
     const list = pl.trackIds.map(trackById).filter(Boolean);
     // ── Búsqueda dentro de la playlist ──
-    // Filtra por título o artista (case-insensitive). Solo se muestra la barra
-    // de búsqueda si la playlist tiene 8+ canciones (en listas chicas no aporta).
     const showSearch = list.length >= 8;
     const norm = (s) => String(s || '').toLowerCase();
     const filtered = plSearch.trim()
@@ -566,28 +609,13 @@ function LibraryTab({ ctx }) {
           </div>
         </div>
         <div style={{ display:'flex', gap:8, marginBottom:12, flexWrap:'wrap' }}>
-          {list.length > 0 && <button onClick={() => play(list[0], pl.trackIds, { from: openPlaylist })} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:8, background:grad(T), border:'none', borderRadius:99, padding:'9px 20px', cursor:'pointer', color:'#04060a', fontSize:12.5, fontWeight:800, boxShadow:`0 6px 18px ${hex2rgba(T.accent,.45)}` }}><Icon.Play c="#04060a" sz={16} /> Reproducir</button>}
+          {list.length > 0 && <button onClick={() => play(list[0], pl.trackIds, { from: fromForOpenPlaylist(openPlaylist) })} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:8, background:grad(T), border:'none', borderRadius:99, padding:'9px 20px', cursor:'pointer', color:'#04060a', fontSize:12.5, fontWeight:800, boxShadow:`0 6px 18px ${hex2rgba(T.accent,.45)}` }}><Icon.Play c="#04060a" sz={16} /> Reproducir</button>}
           {pl.trackIds.length > 0 && <DownloadAllButton ids={pl.trackIds} downloaded={downloaded} downloading={downloading} onClick={() => downloadMany(pl.trackIds)} T={T} />}
           {!isLiked && !isSaved && <button onClick={() => { deletePlaylist(pl.id); setOpenPlaylist(null); }} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:7, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:99, padding:'9px 16px', cursor:'pointer', color:'var(--txt-1)', fontSize:12, fontWeight:700 }}><Icon.Trash c="var(--txt-1)" sz={15} /> Eliminar</button>}
           {isSaved && <button onClick={() => { unsavePlaylist(savedPl.playlistId); setOpenPlaylist(null); }} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:7, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:99, padding:'9px 16px', cursor:'pointer', color:'var(--txt-1)', fontSize:12, fontWeight:700 }}><Icon.Trash c="var(--txt-1)" sz={15} /> Eliminar</button>}
         </div>
         {/* Barra de búsqueda — solo si hay 8+ canciones */}
-        {showSearch && (
-          <div style={{ position:'relative', marginBottom:16 }}>
-            <input
-              type="text"
-              value={plSearch}
-              onChange={e => setPlSearch(e.target.value)}
-              placeholder="Buscar en esta playlist…"
-              style={{ width:'100%', background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:12, padding:'11px 38px 11px 14px', fontSize:13, color:'var(--txt-0)', outline:'none', fontFamily:'Inter,sans-serif' }}
-            />
-            <div style={{ position:'absolute', right:12, top:'50%', transform:'translateY(-50%)', display:'flex', alignItems:'center', pointerEvents:'none' }}>
-              {plSearch
-                ? <button onClick={() => setPlSearch('')} style={{ background:'none', border:'none', cursor:'pointer', padding:4, display:'flex', alignItems:'center', color:'var(--txt-2)', pointerEvents:'auto' }}><Icon.X c="var(--txt-2)" sz={16} /></button>
-                : <Icon.Search c="var(--txt-3)" sz={16} />}
-            </div>
-          </div>
-        )}
+        {showSearch && <SearchBar value={plSearch} onChange={setPlSearch} placeholder="Buscar en esta playlist…" T={T} />}
         {pl.trackIds.length === 0 ? (
           <div style={{ textAlign:'center', color:'var(--txt-2)', fontSize:13, paddingTop:30 }}>Esta playlist está vacía. Añade canciones con el botón +.</div>
         ) : filtered.length === 0 ? (
@@ -596,7 +624,7 @@ function LibraryTab({ ctx }) {
           <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
             {filtered.map(t => (
               <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T}
-                onClick={() => play(t, pl.trackIds, { from: openPlaylist })}
+                onClick={() => play(t, pl.trackIds, { from: fromForOpenPlaylist(openPlaylist) })}
                 onFav={toggleFav} faved={favs.includes(t.id)} onMenu={onMenu}
                 downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)}
                 selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect}
@@ -1071,7 +1099,7 @@ function CoverSwipe({ next, prev, playing, glowF, ambientRgba, art, track, loadi
 // EXPANDED PLAYER
 // ═══════════════════════════════════════════════════════════════
 function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next, prev, time, dur, seek,
-  vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved, toggleFav, T, quality, glow, compact, desktop, onAdd, onMenu, loadingAudio, onQueue, outputs, sinkId, setOutput, lyricOffset = 0, setLyricOffset, audioRef, nextCover, prevCover, playingFrom = null, goToPlayingPlaylist = null }) {
+  vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved, toggleFav, T, quality, glow, compact, desktop, onAdd, onMenu, loadingAudio, onQueue, outputs, sinkId, setOutput, lyricOffset = 0, setLyricOffset, audioRef, nextCover, prevCover }) {
   const [showLyrics, setShowLyrics] = useState(false);
   // iOS no permite controlar el volumen por software (solo botones físicos).
   const isIOS = typeof navigator !== 'undefined' && /iphone|ipad|ipod/i.test(navigator.userAgent) && !/crios|fxios/i.test(navigator.userAgent);
@@ -1214,7 +1242,6 @@ function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next, prev,
                 <div style={{ fontSize:15, color:T.accent, marginTop:5, fontWeight:700, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.artist}</div>
               </div>
               <button aria-label="Me gusta" onClick={() => toggleFav(track.id)} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer', padding:6, flexShrink:0 }}><Icon.Heart c={T.accent} filled={faved} sz={26} /></button>
-              {playingFrom && goToPlayingPlaylist && <button aria-label="Ir a la playlist" onClick={goToPlayingPlaylist} className="btn-tap" title="Ir a la playlist" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:42, height:42, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}><Icon.List c="var(--txt-1)" sz={20} /></button>}
               {onAdd && <button aria-label="Añadir" onClick={() => onAdd(track.id)} className="btn-tap" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:42, height:42, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}><Icon.Plus c="var(--txt-1)" sz={20} /></button>}
             </div>
           </div>
@@ -1332,7 +1359,6 @@ function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next, prev,
             <div style={{ fontSize:13, color:T.accent, marginTop:5, fontWeight:700 }}>{track.artist}</div>
           </div>
           <button aria-label={faved?'Quitar de Me gusta':'Añadir a Me gusta'} onClick={() => toggleFav(track.id)} className="btn-tap" style={{ background: faved ? hex2rgba(T.accent,.14) : 'var(--surf-1)', border:`1px solid ${faved ? hex2rgba(T.accent,.4) : 'var(--line)'}`, borderRadius:'50%', width:38, height:38, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', marginRight:10, flexShrink:0 }}><Icon.Heart c={faved ? T.accent : 'var(--txt-1)'} filled={faved} sz={18} /></button>
-          {playingFrom && goToPlayingPlaylist && <button aria-label="Ir a la playlist" onClick={goToPlayingPlaylist} title="Ir a la playlist" className="btn-tap" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:38, height:38, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', marginRight:10, flexShrink:0 }}><Icon.List c="var(--txt-1)" sz={18} /></button>}
           {onAdd && <button aria-label="Añadir" onClick={() => onAdd(track.id)} className="btn-tap" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:38, height:38, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', marginRight:10, flexShrink:0 }}><Icon.Plus c="var(--txt-1)" sz={18} /></button>}
           {onMenu && <button aria-label="Más" onClick={() => onMenu(track.id)} className="btn-tap" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:38, height:38, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}><Icon.Dots c="var(--txt-1)" sz={18} /></button>}
         </div>
@@ -1381,7 +1407,10 @@ function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next, prev,
 function DetailView({ view, ctx }) {
   const { T, track, playing, play, favs, toggleFav, addToTarget, onMenu, goArtist, goAlbum, setView, detailLoading, detailData, downloaded, downloading, downloadMany, isAlbumSaved, saveAlbum, unsaveAlbum, isPlaylistSaved, savePlaylist, unsavePlaylist, selecting, selection, toggleSelect, startSelection, addToQueue, removeFromQueue } = ctx;
   const [showAll, setShowAll] = useState(false);
-  useEffect(() => { setShowAll(false); }, [view]);
+  // Búsqueda dentro de la vista de detalle (mix, álbum, artista). Hook al nivel
+  // superior para cumplir con las Rules of Hooks de React.
+  const [detailSearch, setDetailSearch] = useState('');
+  useEffect(() => { setShowAll(false); setDetailSearch(''); }, [view]);
   const d = detailData && detailData.type === view.type ? detailData : null;
 
   // Fuzzy match: verifica si una pista está descargada por ID exacto o por
@@ -1408,6 +1437,14 @@ function DetailView({ view, ctx }) {
   if (view.type === 'mix') {
     const songs = (view.tracks || []).map(t => trackById(t.id) || t).filter(Boolean);
     const ids = songs.map(s => s.id);
+    // Búsqueda dentro del mix
+    const showSearch = songs.length >= 8;
+    const normS = (s) => String(s || '').toLowerCase();
+    const filteredSongs = detailSearch.trim()
+      ? songs.filter(t => normS(t.title).includes(normS(detailSearch)) || normS(t.artist).includes(normS(detailSearch)))
+      : songs;
+    // Origen para el botón "Ir a la playlist" del menú de 3 puntitos
+    const mixFrom = { kind:'mix', label: view.label, tracks: view.tracks };
     let covers = [...new Set(songs.map(s => s.cover).filter(c => c && !c.startsWith('data:')))].slice(0, 4);
     if (!covers.length) covers = [FALLBACK_COVER];
     while (covers.length < 4) covers.push(covers[covers.length - 1]);
@@ -1421,12 +1458,12 @@ function DetailView({ view, ctx }) {
           <div style={{ minWidth:0 }}>
             <div style={{ fontSize:9, fontWeight:900, letterSpacing:2.5, color:T.accent, textTransform:'uppercase' }}>Mezcla</div>
             <div style={{ fontSize:24, fontWeight:900, color:'var(--txt-0)', letterSpacing:-.6, marginTop:3 }}>{view.label}</div>
-            <div style={{ fontSize:11, color:'var(--txt-2)', marginTop:3 }}>{songs.length} canciones</div>
+            <div style={{ fontSize:11, color:'var(--txt-2)', marginTop:3 }}>{songs.length} canciones{detailSearch.trim() && filteredSongs.length !== songs.length ? ` · ${filteredSongs.length} resultados` : ''}</div>
           </div>
         </div>
         {songs.length > 0 && (
           <div style={{ display:'flex', gap:8, marginBottom:18, flexWrap:'wrap' }}>
-            <button onClick={() => play(songs[0], ids, { mixLabel: view.label })} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:8, background:grad(T), border:'none', borderRadius:99, padding:'10px 22px', cursor:'pointer', color:'#04060a', fontSize:12.5, fontWeight:800, boxShadow:`0 6px 18px ${hex2rgba(T.accent,.45)}` }}><Icon.Play c="#04060a" sz={16} /> Reproducir</button>
+            <button onClick={() => play(songs[0], ids, { mixLabel: view.label, from: mixFrom })} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:8, background:grad(T), border:'none', borderRadius:99, padding:'10px 22px', cursor:'pointer', color:'#04060a', fontSize:12.5, fontWeight:800, boxShadow:`0 6px 18px ${hex2rgba(T.accent,.45)}` }}><Icon.Play c="#04060a" sz={16} /> Reproducir</button>
             <DownloadAllButton ids={ids} downloaded={downloaded} downloading={downloading} onClick={() => downloadMany(ids)} T={T} />
             {(() => {
               const pid = 'mix:' + (view.label || '').toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').slice(0, 60);
@@ -1440,9 +1477,14 @@ function DetailView({ view, ctx }) {
             {!selecting && <button onClick={() => startSelection()} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:7, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:99, padding:'10px 16px', cursor:'pointer', color:'var(--txt-1)', fontSize:12, fontWeight:700 }}><Icon.Check c={T.accent} sz={15} /> Seleccionar</button>}
           </div>
         )}
-        <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-          {songs.map(t => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => play(t, ids)} onSwipeRemove={removeFromQueue} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={isDownloaded(t)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
-        </div>
+        {showSearch && <SearchBar value={detailSearch} onChange={setDetailSearch} placeholder="Buscar en esta mezcla…" T={T} />}
+        {filteredSongs.length === 0 ? (
+          <div style={{ textAlign:'center', color:'var(--txt-2)', fontSize:13, paddingTop:30 }}>No se encontraron canciones para “{detailSearch}”.</div>
+        ) : (
+          <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
+            {filteredSongs.map(t => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => play(t, ids, { mixLabel: view.label, from: mixFrom })} onSwipeRemove={removeFromQueue} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={isDownloaded(t)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
+          </div>
+        )}
       </div>
     );
   }
@@ -1451,7 +1493,15 @@ function DetailView({ view, ctx }) {
     const name = d?.name || view.name || 'Artista';
     const albums = d?.albums || [];
     const all = d?.topSongs || [];
-    const songs = showAll ? all : all.slice(0, 25);
+    // Búsqueda dentro de las canciones populares del artista
+    const showSearch = all.length >= 8;
+    const normA = (s) => String(s || '').toLowerCase();
+    const filteredAll = detailSearch.trim()
+      ? all.filter(t => normA(t.title).includes(normA(detailSearch)) || normA(t.artist).includes(normA(detailSearch)))
+      : all;
+    const songs = showAll ? filteredAll : filteredAll.slice(0, 25);
+    // Origen para el botón "Ir a la playlist" del menú de 3 puntitos
+    const artistFrom = { kind:'artist', artistId: view.artistId, name };
     return (
       <div className="fade-up" style={{ paddingBottom:8 }}>
         <Back />
@@ -1462,8 +1512,8 @@ function DetailView({ view, ctx }) {
           <div style={{ minWidth:0 }}>
             <div style={{ fontSize:9, fontWeight:900, letterSpacing:2.5, color:T.accent, textTransform:'uppercase' }}>Artista</div>
             <div style={{ fontSize:26, fontWeight:900, color:'var(--txt-0)', letterSpacing:-.6, marginTop:3 }}>{name}</div>
-            <div style={{ fontSize:11.5, color:'var(--txt-2)', marginTop:5 }}>{albums.length} álbum(es) · {all.length} canciones</div>
-            {all.length > 0 && <button onClick={() => play(all[0], all.map(s=>s.id))} className="btn-tap" style={{ marginTop:12, display:'flex', alignItems:'center', gap:8, background:grad(T), border:'none', borderRadius:99, padding:'9px 20px', cursor:'pointer', color:'#04060a', fontSize:12.5, fontWeight:800, boxShadow:`0 6px 18px ${hex2rgba(T.accent,.45)}` }}><Icon.Play c="#04060a" sz={16} /> Reproducir</button>}
+            <div style={{ fontSize:11.5, color:'var(--txt-2)', marginTop:5 }}>{albums.length} álbum(es) · {all.length} canciones{detailSearch.trim() && filteredAll.length !== all.length ? ` · ${filteredAll.length} resultados` : ''}</div>
+            {all.length > 0 && <button onClick={() => play(all[0], all.map(s=>s.id), { from: artistFrom })} className="btn-tap" style={{ marginTop:12, display:'flex', alignItems:'center', gap:8, background:grad(T), border:'none', borderRadius:99, padding:'9px 20px', cursor:'pointer', color:'#04060a', fontSize:12.5, fontWeight:800, boxShadow:`0 6px 18px ${hex2rgba(T.accent,.45)}` }}><Icon.Play c="#04060a" sz={16} /> Reproducir</button>}
           </div>
         </div>
         {detailLoading && !d ? (
@@ -1477,10 +1527,15 @@ function DetailView({ view, ctx }) {
               </div>
             </>}
             <SectionHeader label="Canciones populares" accent={T.accent} action={!selecting && <button onClick={() => startSelection()} className="press" style={{ background:'none', border:'none', cursor:'pointer', color:T.accent, fontSize:11.5, fontWeight:800 }}>Seleccionar</button>} />
-            <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-              {songs.map(t => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => play(t, all.map(s=>s.id))} onSwipeRemove={removeFromQueue} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={isDownloaded(t)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
-            </div>
-            {!showAll && all.length > 25 && (
+            {showSearch && <SearchBar value={detailSearch} onChange={setDetailSearch} placeholder="Buscar canciones de este artista…" T={T} />}
+            {songs.length === 0 && detailSearch.trim() ? (
+              <div style={{ textAlign:'center', color:'var(--txt-2)', fontSize:13, paddingTop:30 }}>No se encontraron canciones para “{detailSearch}”.</div>
+            ) : (
+              <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
+                {songs.map(t => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => play(t, all.map(s=>s.id), { from: artistFrom })} onSwipeRemove={removeFromQueue} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={isDownloaded(t)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
+              </div>
+            )}
+            {!showAll && filteredAll.length > 25 && (
               <button onClick={() => setShowAll(true)} className="press" style={{ display:'block', margin:'16px auto 0', background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:99, padding:'10px 22px', cursor:'pointer', color:'var(--txt-0)', fontSize:12.5, fontWeight:700 }}>Ver más canciones</button>
             )}
           </>
@@ -1492,8 +1547,16 @@ function DetailView({ view, ctx }) {
   // álbum
   const name = d?.name || view.name || 'Álbum';
   const artist = d?.artist || view.artist;
-  const songs = d?.tracks || [];
+  const allSongs = d?.tracks || [];
+  // Búsqueda dentro del álbum
+  const showSearch = allSongs.length >= 8;
+  const normAl = (s) => String(s || '').toLowerCase();
+  const songs = detailSearch.trim()
+    ? allSongs.filter(t => normAl(t.title).includes(normAl(detailSearch)) || normAl(t.artist).includes(normAl(detailSearch)))
+    : allSongs;
   const cover = d?.cover || view.cover || songs[0]?.cover;
+  // Origen para el botón "Ir a la playlist" del menú de 3 puntitos
+  const albumFrom = { kind:'album', albumId: view.albumId, name, artist, cover };
   return (
     <div className="fade-up" style={{ paddingBottom:8 }}>
       <Back />
@@ -1506,30 +1569,35 @@ function DetailView({ view, ctx }) {
           </div>
           <div style={{ fontSize:24, fontWeight:900, color:'var(--txt-0)', letterSpacing:-.6, marginTop:3 }}>{name}</div>
           <button onClick={() => goArtist(d?.artistId, artist)} className="press" style={{ background:'none', border:'none', cursor:'pointer', padding:0, fontSize:12.5, color:'var(--txt-1)', fontWeight:700, marginTop:5 }}>{artist}</button>
-          <div style={{ fontSize:11, color:'var(--txt-2)', marginTop:3 }}>{songs.length} canciones</div>
+          <div style={{ fontSize:11, color:'var(--txt-2)', marginTop:3 }}>{allSongs.length} canciones{detailSearch.trim() && songs.length !== allSongs.length ? ` · ${songs.length} resultados` : ''}</div>
         </div>
       </div>
       {detailLoading && !d ? (
         <div style={{ display:'flex', justifyContent:'center', padding:'40px 0' }}><Spinner c={T.accent} sz={24} /></div>
-      ) : songs.length === 0 ? (
+      ) : allSongs.length === 0 ? (
         <div style={{ textAlign:'center', color:'var(--txt-2)', fontSize:13, paddingTop:30 }}>No se encontró el álbum de esta canción.</div>
       ) : (
         <>
-          {songs.length > 0 && (
+          {allSongs.length > 0 && (
             <div style={{ display:'flex', gap:8, marginBottom:18, flexWrap:'wrap' }}>
-              <button onClick={() => play(songs[0], songs.map(s=>s.id))} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:8, background:grad(T), border:'none', borderRadius:99, padding:'10px 22px', cursor:'pointer', color:'#04060a', fontSize:12.5, fontWeight:800, boxShadow:`0 6px 18px ${hex2rgba(T.accent,.45)}` }}><Icon.Play c="#04060a" sz={16} /> Reproducir</button>
+              <button onClick={() => play(allSongs[0], allSongs.map(s=>s.id), { from: albumFrom })} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:8, background:grad(T), border:'none', borderRadius:99, padding:'10px 22px', cursor:'pointer', color:'#04060a', fontSize:12.5, fontWeight:800, boxShadow:`0 6px 18px ${hex2rgba(T.accent,.45)}` }}><Icon.Play c="#04060a" sz={16} /> Reproducir</button>
               {(() => { const albumId = view.albumId || d?.albumId; const saved = albumId && isAlbumSaved(albumId); const meta = { albumId, name, artist, cover, year: d?.year }; return (
                 <button onClick={() => saved ? unsaveAlbum(albumId) : saveAlbum(meta)} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:7, background: saved ? hex2rgba(T.accent,.14) : 'var(--surf-1)', border:`1px solid ${saved ? hex2rgba(T.accent,.4) : 'var(--line)'}`, borderRadius:99, padding:'10px 18px', cursor:'pointer', color: saved ? T.accent : 'var(--txt-1)', fontSize:12, fontWeight:700 }}>
                   <Icon.Heart c={saved ? T.accent : 'var(--txt-1)'} filled={saved} sz={15} /> {saved ? 'Guardado' : 'Guardar'}
                 </button>
               ); })()}
-              <DownloadAllButton ids={songs.map(s=>s.id)} downloaded={downloaded} downloading={downloading} onClick={() => { const albumId = view.albumId || d?.albumId; downloadMany(songs.map(s=>s.id)); if (albumId) saveAlbum({ albumId, name, artist, cover, year: d?.year }); }} T={T} />
+              <DownloadAllButton ids={allSongs.map(s=>s.id)} downloaded={downloaded} downloading={downloading} onClick={() => { const albumId = view.albumId || d?.albumId; downloadMany(allSongs.map(s=>s.id)); if (albumId) saveAlbum({ albumId, name, artist, cover, year: d?.year }); }} T={T} />
               {!selecting && <button onClick={() => startSelection()} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:7, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:99, padding:'10px 16px', cursor:'pointer', color:'var(--txt-1)', fontSize:12, fontWeight:700 }}><Icon.Check c={T.accent} sz={15} /> Seleccionar</button>}
             </div>
           )}
-          <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-            {songs.map((t, i) => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => play(t, songs.map(s=>s.id))} onSwipeRemove={removeFromQueue} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={isDownloaded(t)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
-          </div>
+          {showSearch && <SearchBar value={detailSearch} onChange={setDetailSearch} placeholder="Buscar en este álbum…" T={T} />}
+          {songs.length === 0 ? (
+            <div style={{ textAlign:'center', color:'var(--txt-2)', fontSize:13, paddingTop:30 }}>No se encontraron canciones para “{detailSearch}”.</div>
+          ) : (
+            <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
+              {songs.map((t, i) => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => play(t, allSongs.map(s=>s.id), { from: albumFrom })} onSwipeRemove={removeFromQueue} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={isDownloaded(t)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
+            </div>
+          )}
         </>
       )}
     </div>
@@ -1629,7 +1697,7 @@ function PlayerBar({ track, playing, togglePlay, next, prev, time, dur, seek, vo
 // TRACK MENU + TOAST
 // ═══════════════════════════════════════════════════════════════
 function TrackMenu({ trackId, onClose, ctx }) {
-  const { T, favs, toggleFav, addToTarget, goArtist, goAlbum, shareTrack, addToQueue, download, removeDownload, downloaded } = ctx;
+  const { T, track, favs, toggleFav, addToTarget, goArtist, goAlbum, shareTrack, addToQueue, download, removeDownload, downloaded, playingFrom, goToPlayingPlaylist } = ctx;
   if (!trackId) return null;
   const tk = trackById(trackId);
   if (!tk) return null;
@@ -1639,13 +1707,26 @@ function TrackMenu({ trackId, onClose, ctx }) {
     { icon: Icon.Queue, label:'Añadir a la cola', action: () => { addToQueue(trackId); onClose(); } },
     { icon: Icon.Disc,  label:'Ir al álbum',      action: () => { goAlbum(tk.albumId, tk.album, tk.artist, tk.title, tk.cover); onClose(); } },
     { icon: Icon.User,  label:'Ir al artista',    action: () => { goArtist(tk.artistId, tk.artist); onClose(); } },
+  ];
+  // "Ir a la playlist/mix/álbum" — solo si la pista actual se reprodujo desde
+  // un origen trackeable (playingFrom != null) Y la pista del menú es la que
+  // se está reproduciendo ahora mismo.
+  if (playingFrom && goToPlayingPlaylist && track?.id === trackId) {
+    const label = playingFrom.kind === 'liked' ? 'Ir a Me gusta'
+      : playingFrom.kind === 'mix' ? 'Ir a la mezcla'
+      : playingFrom.kind === 'album' ? 'Ir al álbum'
+      : playingFrom.kind === 'artist' ? 'Ir al artista'
+      : 'Ir a la playlist';
+    items.push({ icon: Icon.List, label, action: () => { goToPlayingPlaylist(); onClose(); }, hl: true });
+  }
+  items.push(
     { icon: Icon.Plus,  label:'Añadir a playlist',action: () => { addToTarget(trackId); onClose(); } },
     { icon: Icon.Heart, label: faved ? 'Quitar de Me gusta' : 'Añadir a Me gusta', action: () => { toggleFav(trackId); onClose(); }, filled: faved },
     isDl
       ? { icon: Icon.Trash, label:'Eliminar descarga', action: () => { removeDownload(trackId); onClose(); } }
       : { icon: Icon.Down,  label:'Descargar (offline)', action: () => { download(tk); onClose(); } },
     { icon: Icon.Share, label:'Compartir enlace', action: () => { shareTrack(tk); onClose(); } },
-  ];
+  );
   return (
     <>
       <div onClick={onClose} style={{ position:'fixed', inset:0, background:'#04060acc', backdropFilter:'blur(8px)', WebkitBackdropFilter:'blur(8px)', zIndex:130 }} />
@@ -1796,11 +1877,15 @@ export default function App() {
 
   // UI transitoria
   const [openPlaylist, setOpenPlaylist] = useState(null);
-  // ID de la playlist desde la que se está reproduciendo la pista actual.
-  // Puede ser: 'liked' (Me gusta), 'saved:<id>' (playlist guardada), un UUID
-  // de playlist del usuario, o null (reproducción desde search/album/radio).
-  // Se setea al llamar play(t, list, { from: <id> }) y se usa para mostrar un
-  // botón en el reproductor que lleva a la playlist de origen.
+  // Origen de la pista que se está reproduciendo, para el botón "Ir a la playlist"
+  // del menú de 3 puntitos. Formatos:
+  //   { kind:'liked' }                                    → Me gusta
+  //   { kind:'user-playlist', id: <uuid> }                → playlist del usuario
+  //   { kind:'saved-playlist', id: <pid> }                → playlist guardada
+  //   { kind:'mix', label, tracks }                       → mix del feed
+  //   { kind:'album', albumId, name, artist, cover }      → álbum
+  //   { kind:'artist', artistId, name }                   → artista (top songs)
+  //   null                                                 → reproducido desde search/radio
   const [playingFrom, setPlayingFrom] = useState(null);
   const [addTarget, setAddTarget] = useState(null);
   const [menuTarget, setMenuTarget] = useState(null);
@@ -2987,26 +3072,41 @@ export default function App() {
       .catch(fallback)
       .finally(() => setDetailLoading(false));
   };
-  // Navegar a la playlist desde la que se está reproduciendo la pista actual.
-  // Si playingFrom es null (la pista se reprodujo desde search/album/radio),
-  // no hace nada. Si la playlist ya no existe (fue borrada), también no-op.
+  // Navegar al origen de la pista que se está reproduciendo. Soporta cualquier
+  // tipo de origen (playlist, mix, álbum, artista). Al navegar, OCULTA el
+  // reproductor expandido para que el usuario llegue limpio a la lista.
   const goToPlayingPlaylist = () => {
     if (!playingFrom) return;
-    // Verificar que la playlist siga existiendo antes de navegar.
-    if (playingFrom === 'liked') {
-      setTab('library'); setView(null); setOpenPlaylist('liked');
-      return;
+    setExpanded(false); // ocultar reproductor expandido
+    switch (playingFrom.kind) {
+      case 'liked':
+        setTab('library'); setView(null); setOpenPlaylist('liked');
+        return;
+      case 'user-playlist': {
+        const exists = playlists.some(p => p.id === playingFrom.id);
+        if (!exists) return;
+        setTab('library'); setView(null); setOpenPlaylist(playingFrom.id);
+        return;
+      }
+      case 'saved-playlist': {
+        const exists = savedPlaylists?.some(p => p.playlistId === playingFrom.id);
+        if (!exists) return;
+        setTab('library'); setView(null); setOpenPlaylist('saved:' + playingFrom.id);
+        return;
+      }
+      case 'mix':
+        // Re-abrir el mix con los tracks que ya tenemos en playingFrom
+        setTab('home'); setView({ type:'mix', label: playingFrom.label, tracks: playingFrom.tracks });
+        return;
+      case 'album':
+        setView({ type:'album', albumId: playingFrom.albumId, name: playingFrom.name, artist: playingFrom.artist, cover: playingFrom.cover });
+        return;
+      case 'artist':
+        setView({ type:'artist', artistId: playingFrom.artistId, name: playingFrom.name });
+        // Trigger fetch de datos del artista
+        goArtist(playingFrom.artistId, playingFrom.name);
+        return;
     }
-    if (playingFrom.startsWith('saved:')) {
-      const exists = savedPlaylists?.some(p => p.playlistId === playingFrom.slice(6));
-      if (!exists) return;
-      setTab('library'); setView(null); setOpenPlaylist(playingFrom);
-      return;
-    }
-    // Playlist del usuario (UUID).
-    const exists = playlists.some(p => p.id === playingFrom);
-    if (!exists) return;
-    setTab('library'); setView(null); setOpenPlaylist(playingFrom);
   };
   const goAlbum = (albumId, name, artist, songTitle, cover) => {
     // Pasar la carátula al `view` para que el hero la muestre de inmediato
@@ -3261,6 +3361,7 @@ export default function App() {
     displayName, saveProfileName, deleteAccount, avatar, saveAvatar,
     onboardPrefs, setOnboardPrefs, GENRES: ONBOARDING_GENRES,
     backendDown,
+    playingFrom, goToPlayingPlaylist,
   };
 
   const playerProps = { track, playing, togglePlay, next, prev, time, dur, seek, vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved: track ? favs.includes(track.id) : false, toggleFav, T, loadingAudio, nextCover, prevCover };
@@ -3376,8 +3477,7 @@ export default function App() {
     <ExpandedPlayer open={expanded} onClose={() => setExpanded(false)} {...playerProps} audioRef={audioRef}
       glow={glow} quality={quality} compact={!wide} desktop={wide} onAdd={setAddTarget} onMenu={setMenuTarget}
       onQueue={() => setShowQueue(true)} outputs={outputs} sinkId={sinkId} setOutput={setSinkId}
-      lyricOffset={lyricOffset} setLyricOffset={setLyricOffset}
-      playingFrom={playingFrom} goToPlayingPlaylist={goToPlayingPlaylist} />
+      lyricOffset={lyricOffset} setLyricOffset={setLyricOffset} />
   );
   const addModal = <AddToPlaylistModal trackId={addTarget} onClose={() => { setAddTarget(null); if (selecting) clearSelection(); }} playlists={playlists} createPlaylist={createPlaylist} addToPlaylist={addToPlaylist} removeFromPlaylist={removeFromPlaylist} T={T} />;
   const trackMenu = <TrackMenu trackId={menuTarget} onClose={() => setMenuTarget(null)} ctx={ctx} />;
