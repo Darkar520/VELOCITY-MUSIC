@@ -20,9 +20,18 @@ echo   VELOCITY MUSIC - Reinicio completo
 echo ============================================
 echo.
 
-:: 1. Matar procesos node que puedan estar colgados
-echo [1/5] Limpiando procesos node colgados...
-taskkill /f /im node.exe >nul 2>&1
+:: 1. Matar SOLO node de Velocity (NO Adobe, MCP, IDEs)
+echo [1/5] Limpiando procesos Node de Velocity (no toca Adobe/MCP)...
+powershell -NoProfile -Command ^
+  "$proj='C:\Users\irisp\OneDrive\Escritorio\VELOCITY MUSIC';" ^
+  "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" -EA SilentlyContinue | ForEach-Object {" ^
+  "  if ($_.CommandLine -and ($_.CommandLine -match [regex]::Escape($proj) -or $_.CommandLine -match 'cluster\.js|server\.js')) {" ^
+  "    Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue" ^
+  "  }" ^
+  "};" ^
+  "Get-CimInstance Win32_Process -Filter \"Name='powershell.exe'\" -EA SilentlyContinue | ForEach-Object {" ^
+  "  if ($_.CommandLine -and $_.CommandLine -match 'velocity-guardian') { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }" ^
+  "}"
 echo       Hecho.
 timeout /t 2 /nobreak >nul
 
