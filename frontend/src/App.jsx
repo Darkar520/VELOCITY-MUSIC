@@ -519,6 +519,9 @@ function LibraryTab({ ctx }) {
           removeFromPlaylist, deletePlaylist, openPlaylist, setOpenPlaylist, addToTarget, onMenu, downloaded, downloading, downloadMany, savedAlbums, goAlbum, goMix, savedPlaylists, savePlaylist, unsavePlaylist, isPlaylistSaved, selecting, selection, toggleSelect, startSelection, hydrateTracks, addToQueue, removeFromQueue } = ctx;
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
+  // Búsqueda dentro de la playlist abierta. Hook al nivel superior (no dentro
+  // del if openPlaylist) para cumplir con las Rules of Hooks de React.
+  const [plSearch, setPlSearch] = useState('');
 
   // Al abrir una playlist / Me gusta, recuperar metadatos faltantes del backend.
   useEffect(() => {
@@ -529,6 +532,9 @@ function LibraryTab({ ctx }) {
     hydrateTracks(ids);
   }, [openPlaylist]);
 
+  // Limpiar la búsqueda al cambiar de playlist (no heredar filtro entre vistas).
+  useEffect(() => { setPlSearch(''); }, [openPlaylist]);
+
   if (openPlaylist) {
     const isLiked = openPlaylist === 'liked';
     const isSaved = openPlaylist.startsWith('saved:');
@@ -537,6 +543,14 @@ function LibraryTab({ ctx }) {
     const pl = isLiked ? { name:'Me gusta', trackIds:favs } : isSaved ? { name: savedPl.name, trackIds: savedPl.trackIds || [] } : playlists.find(p => p.id === openPlaylist);
     if (!pl) { setOpenPlaylist(null); return null; }
     const list = pl.trackIds.map(trackById).filter(Boolean);
+    // ── Búsqueda dentro de la playlist ──
+    // Filtra por título o artista (case-insensitive). Solo se muestra la barra
+    // de búsqueda si la playlist tiene 8+ canciones (en listas chicas no aporta).
+    const showSearch = list.length >= 8;
+    const norm = (s) => String(s || '').toLowerCase();
+    const filtered = plSearch.trim()
+      ? list.filter(t => norm(t.title).includes(norm(plSearch)) || norm(t.artist).includes(norm(plSearch)))
+      : list;
     return (
       <div className="fade-up" style={{ paddingBottom:8 }}>
         <button onClick={() => setOpenPlaylist(null)} className="press" style={{ display:'flex', alignItems:'center', gap:6, background:'none', border:'none', cursor:'pointer', color:'var(--txt-1)', marginBottom:16, paddingTop:4, fontSize:13, fontWeight:700 }}>
@@ -548,22 +562,41 @@ function LibraryTab({ ctx }) {
           </div>
           <div style={{ minWidth:0, flex:1 }}>
             <div style={{ fontSize:22, fontWeight:900, color:'var(--txt-0)', letterSpacing:-.5, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{pl.name}</div>
-            <div style={{ fontSize:11.5, color:'var(--txt-2)', marginTop:4 }}>{list.length} {list.length===1?'canción':'canciones'}</div>
+            <div style={{ fontSize:11.5, color:'var(--txt-2)', marginTop:4 }}>{list.length} {list.length===1?'canción':'canciones'}{plSearch.trim() && filtered.length !== list.length ? ` · ${filtered.length} resultados` : ''}</div>
           </div>
         </div>
-        <div style={{ display:'flex', gap:8, marginBottom:20, flexWrap:'wrap' }}>
-          {list.length > 0 && <button onClick={() => play(list[0], pl.trackIds)} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:8, background:grad(T), border:'none', borderRadius:99, padding:'9px 20px', cursor:'pointer', color:'#04060a', fontSize:12.5, fontWeight:800, boxShadow:`0 6px 18px ${hex2rgba(T.accent,.45)}` }}><Icon.Play c="#04060a" sz={16} /> Reproducir</button>}
+        <div style={{ display:'flex', gap:8, marginBottom:12, flexWrap:'wrap' }}>
+          {list.length > 0 && <button onClick={() => play(list[0], pl.trackIds, { from: openPlaylist })} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:8, background:grad(T), border:'none', borderRadius:99, padding:'9px 20px', cursor:'pointer', color:'#04060a', fontSize:12.5, fontWeight:800, boxShadow:`0 6px 18px ${hex2rgba(T.accent,.45)}` }}><Icon.Play c="#04060a" sz={16} /> Reproducir</button>}
           {pl.trackIds.length > 0 && <DownloadAllButton ids={pl.trackIds} downloaded={downloaded} downloading={downloading} onClick={() => downloadMany(pl.trackIds)} T={T} />}
           {!isLiked && !isSaved && <button onClick={() => { deletePlaylist(pl.id); setOpenPlaylist(null); }} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:7, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:99, padding:'9px 16px', cursor:'pointer', color:'var(--txt-1)', fontSize:12, fontWeight:700 }}><Icon.Trash c="var(--txt-1)" sz={15} /> Eliminar</button>}
           {isSaved && <button onClick={() => { unsavePlaylist(savedPl.playlistId); setOpenPlaylist(null); }} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:7, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:99, padding:'9px 16px', cursor:'pointer', color:'var(--txt-1)', fontSize:12, fontWeight:700 }}><Icon.Trash c="var(--txt-1)" sz={15} /> Eliminar</button>}
         </div>
+        {/* Barra de búsqueda — solo si hay 8+ canciones */}
+        {showSearch && (
+          <div style={{ position:'relative', marginBottom:16 }}>
+            <input
+              type="text"
+              value={plSearch}
+              onChange={e => setPlSearch(e.target.value)}
+              placeholder="Buscar en esta playlist…"
+              style={{ width:'100%', background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:12, padding:'11px 38px 11px 14px', fontSize:13, color:'var(--txt-0)', outline:'none', fontFamily:'Inter,sans-serif' }}
+            />
+            <div style={{ position:'absolute', right:12, top:'50%', transform:'translateY(-50%)', display:'flex', alignItems:'center', pointerEvents:'none' }}>
+              {plSearch
+                ? <button onClick={() => setPlSearch('')} style={{ background:'none', border:'none', cursor:'pointer', padding:4, display:'flex', alignItems:'center', color:'var(--txt-2)', pointerEvents:'auto' }}><Icon.X c="var(--txt-2)" sz={16} /></button>
+                : <Icon.Search c="var(--txt-3)" sz={16} />}
+            </div>
+          </div>
+        )}
         {pl.trackIds.length === 0 ? (
           <div style={{ textAlign:'center', color:'var(--txt-2)', fontSize:13, paddingTop:30 }}>Esta playlist está vacía. Añade canciones con el botón +.</div>
+        ) : filtered.length === 0 ? (
+          <div style={{ textAlign:'center', color:'var(--txt-2)', fontSize:13, paddingTop:30 }}>No se encontraron canciones para “{plSearch}”.</div>
         ) : (
           <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-            {list.map(t => (
+            {filtered.map(t => (
               <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T}
-                onClick={() => play(t, pl.trackIds)}
+                onClick={() => play(t, pl.trackIds, { from: openPlaylist })}
                 onFav={toggleFav} faved={favs.includes(t.id)} onMenu={onMenu}
                 downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)}
                 selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect}
@@ -1038,7 +1071,7 @@ function CoverSwipe({ next, prev, playing, glowF, ambientRgba, art, track, loadi
 // EXPANDED PLAYER
 // ═══════════════════════════════════════════════════════════════
 function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next, prev, time, dur, seek,
-  vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved, toggleFav, T, quality, glow, compact, desktop, onAdd, onMenu, loadingAudio, onQueue, outputs, sinkId, setOutput, lyricOffset = 0, setLyricOffset, audioRef, nextCover, prevCover }) {
+  vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved, toggleFav, T, quality, glow, compact, desktop, onAdd, onMenu, loadingAudio, onQueue, outputs, sinkId, setOutput, lyricOffset = 0, setLyricOffset, audioRef, nextCover, prevCover, playingFrom = null, goToPlayingPlaylist = null }) {
   const [showLyrics, setShowLyrics] = useState(false);
   // iOS no permite controlar el volumen por software (solo botones físicos).
   const isIOS = typeof navigator !== 'undefined' && /iphone|ipad|ipod/i.test(navigator.userAgent) && !/crios|fxios/i.test(navigator.userAgent);
@@ -1181,6 +1214,7 @@ function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next, prev,
                 <div style={{ fontSize:15, color:T.accent, marginTop:5, fontWeight:700, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.artist}</div>
               </div>
               <button aria-label="Me gusta" onClick={() => toggleFav(track.id)} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer', padding:6, flexShrink:0 }}><Icon.Heart c={T.accent} filled={faved} sz={26} /></button>
+              {playingFrom && goToPlayingPlaylist && <button aria-label="Ir a la playlist" onClick={goToPlayingPlaylist} className="btn-tap" title="Ir a la playlist" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:42, height:42, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}><Icon.List c="var(--txt-1)" sz={20} /></button>}
               {onAdd && <button aria-label="Añadir" onClick={() => onAdd(track.id)} className="btn-tap" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:42, height:42, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}><Icon.Plus c="var(--txt-1)" sz={20} /></button>}
             </div>
           </div>
@@ -1298,6 +1332,7 @@ function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next, prev,
             <div style={{ fontSize:13, color:T.accent, marginTop:5, fontWeight:700 }}>{track.artist}</div>
           </div>
           <button aria-label={faved?'Quitar de Me gusta':'Añadir a Me gusta'} onClick={() => toggleFav(track.id)} className="btn-tap" style={{ background: faved ? hex2rgba(T.accent,.14) : 'var(--surf-1)', border:`1px solid ${faved ? hex2rgba(T.accent,.4) : 'var(--line)'}`, borderRadius:'50%', width:38, height:38, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', marginRight:10, flexShrink:0 }}><Icon.Heart c={faved ? T.accent : 'var(--txt-1)'} filled={faved} sz={18} /></button>
+          {playingFrom && goToPlayingPlaylist && <button aria-label="Ir a la playlist" onClick={goToPlayingPlaylist} title="Ir a la playlist" className="btn-tap" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:38, height:38, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', marginRight:10, flexShrink:0 }}><Icon.List c="var(--txt-1)" sz={18} /></button>}
           {onAdd && <button aria-label="Añadir" onClick={() => onAdd(track.id)} className="btn-tap" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:38, height:38, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', marginRight:10, flexShrink:0 }}><Icon.Plus c="var(--txt-1)" sz={18} /></button>}
           {onMenu && <button aria-label="Más" onClick={() => onMenu(track.id)} className="btn-tap" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:38, height:38, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}><Icon.Dots c="var(--txt-1)" sz={18} /></button>}
         </div>
@@ -1761,6 +1796,12 @@ export default function App() {
 
   // UI transitoria
   const [openPlaylist, setOpenPlaylist] = useState(null);
+  // ID de la playlist desde la que se está reproduciendo la pista actual.
+  // Puede ser: 'liked' (Me gusta), 'saved:<id>' (playlist guardada), un UUID
+  // de playlist del usuario, o null (reproducción desde search/album/radio).
+  // Se setea al llamar play(t, list, { from: <id> }) y se usa para mostrar un
+  // botón en el reproductor que lleva a la playlist de origen.
+  const [playingFrom, setPlayingFrom] = useState(null);
   const [addTarget, setAddTarget] = useState(null);
   const [menuTarget, setMenuTarget] = useState(null);
   const [view, setView] = useState(null);
@@ -2566,6 +2607,9 @@ export default function App() {
 
   const play = (t, list, opts = {}) => {
     if (!t) return;
+    // Trackear la playlist de origen si se pasó opts.from. Permite mostrar un
+    // botón en el reproductor para volver a la playlist de donde salió la pista.
+    if (opts.from !== undefined) setPlayingFrom(opts.from);
     // Asegurar que la pista tenga cover: si el catálogo la tiene, usarla.
     // Esto evita que la MediaSession (notificación) quede sin carátula.
     const cached = trackById(t.id);
@@ -2943,6 +2987,27 @@ export default function App() {
       .catch(fallback)
       .finally(() => setDetailLoading(false));
   };
+  // Navegar a la playlist desde la que se está reproduciendo la pista actual.
+  // Si playingFrom es null (la pista se reprodujo desde search/album/radio),
+  // no hace nada. Si la playlist ya no existe (fue borrada), también no-op.
+  const goToPlayingPlaylist = () => {
+    if (!playingFrom) return;
+    // Verificar que la playlist siga existiendo antes de navegar.
+    if (playingFrom === 'liked') {
+      setTab('library'); setView(null); setOpenPlaylist('liked');
+      return;
+    }
+    if (playingFrom.startsWith('saved:')) {
+      const exists = savedPlaylists?.some(p => p.playlistId === playingFrom.slice(6));
+      if (!exists) return;
+      setTab('library'); setView(null); setOpenPlaylist(playingFrom);
+      return;
+    }
+    // Playlist del usuario (UUID).
+    const exists = playlists.some(p => p.id === playingFrom);
+    if (!exists) return;
+    setTab('library'); setView(null); setOpenPlaylist(playingFrom);
+  };
   const goAlbum = (albumId, name, artist, songTitle, cover) => {
     // Pasar la carátula al `view` para que el hero la muestre de inmediato
     // mientras carga (antes desaparecía porque el detalle no la recibía).
@@ -3311,7 +3376,8 @@ export default function App() {
     <ExpandedPlayer open={expanded} onClose={() => setExpanded(false)} {...playerProps} audioRef={audioRef}
       glow={glow} quality={quality} compact={!wide} desktop={wide} onAdd={setAddTarget} onMenu={setMenuTarget}
       onQueue={() => setShowQueue(true)} outputs={outputs} sinkId={sinkId} setOutput={setSinkId}
-      lyricOffset={lyricOffset} setLyricOffset={setLyricOffset} />
+      lyricOffset={lyricOffset} setLyricOffset={setLyricOffset}
+      playingFrom={playingFrom} goToPlayingPlaylist={goToPlayingPlaylist} />
   );
   const addModal = <AddToPlaylistModal trackId={addTarget} onClose={() => { setAddTarget(null); if (selecting) clearSelection(); }} playlists={playlists} createPlaylist={createPlaylist} addToPlaylist={addToPlaylist} removeFromPlaylist={removeFromPlaylist} T={T} />;
   const trackMenu = <TrackMenu trackId={menuTarget} onClose={() => setMenuTarget(null)} ctx={ctx} />;
