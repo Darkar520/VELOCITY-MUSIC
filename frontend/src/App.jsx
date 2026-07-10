@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { api, isAuthed, setOnUnauthorized } from './api.js';
 import * as offline from './offline.js';
-import { isSpotifyUrl, parseSpotifyResource, spotifyAuthUrl, fetchSpotifyTracks } from './spotifyImport.js';
+import { isSpotifyUrl } from './spotifyImport.js';
 import { CSS, THEMES, SEED_ROWS, LATIN_ROWS, DISCOVERY, GENRES, ONBOARDING_GENRES, MOODS, ERAS, FALLBACK_COVER, BASE_VARS } from './constants.js';
 import { fmt, hex2rgba, grad, hiResCover, dedupeByTitle, capPerArtist, slimTrack, parseLRC, tintedVars } from './helpers.js';
 import { cacheTrack, cacheTracks, trackById, allCached, loadMeta, loadPlayerState, saveMeta, normalizeTrack } from './catalog.js';
@@ -1067,50 +1067,146 @@ function parseTextPlaylist(text) {
   return tracks;
 }
 
-function ImportPlaylistModal({ onClose, onImport, T }) {
-  const [url, setUrl] = useState('');
-  const [busy, setBusy] = useState(false);
+// Bookmarklet gratis: lee la playlist abierta en open.spotify.com (sesión del usuario, sin API Premium).
+const SPOTIFY_BOOKMARKLET = `javascript:(function(){try{const lines=[];const seen=new Set();const add=(t,a)=>{t=(t||'').trim();if(!t||t.length>200)return;const k=t.toLowerCase()+'|'+(a||'').toLowerCase();if(seen.has(k))return;seen.add(k);lines.push(a?t+' - '+a:t)};document.querySelectorAll('[data-testid="tracklist-row"],[data-testid="track-list"] [role="row"],div[role="row"]').forEach(row=>{const titleEl=row.querySelector('[data-testid="internal-track-link"],a[href*="/track/"]');const t=titleEl?(titleEl.getAttribute('aria-label')||titleEl.textContent||''):'';const arts=[...row.querySelectorAll('a[href*="/artist/"]')].map(x=>(x.textContent||'').trim()).filter(Boolean);const uniq=[...new Set(arts)];add(t.split(/\\n/)[0],uniq.join(', '))});if(!lines.length){document.querySelectorAll('a[href*="/track/"]').forEach(a=>{const t=(a.textContent||'').trim();const row=a.closest('[role="row"],div')||a.parentElement;const arts=row?[...row.querySelectorAll('a[href*="/artist/"]')].map(x=>(x.textContent||'').trim()).filter(Boolean):[];add(t,[...new Set(arts)].join(', '))})}if(!lines.length){alert('No encontré canciones.\\n\\n1) Abre la playlist en open.spotify.com (navegador, no la app).\\n2) Desplázate un poco para cargar temas.\\n3) Vuelve a tocar el marcador.');return}const txt=lines.join('\\n');const done=()=>alert('✓ '+lines.length+' canciones copiadas.\\n\\nVuelve a Velocity → Importar → pega la lista.');if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(txt).then(done).catch(()=>{window.prompt('Copia (Ctrl+C) y pega en Velocity:',txt)})}else{window.prompt('Copia (Ctrl+C) y pega en Velocity:',txt)}}catch(e){alert('Error: '+(e&&e.message||e))}})();`;
 
-  const submit = (e) => {
+function ImportPlaylistModal({ onClose, onImport, onImportText, T }) {
+  const [mode, setMode] = useState('yt'); // 'yt' | 'spotify'
+  const [url, setUrl] = useState('');
+  const [playlistName, setPlaylistName] = useState('');
+  const [trackList, setTrackList] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [bmCopied, setBmCopied] = useState(false);
+  const parsedCount = useMemo(() => parseTextPlaylist(trackList).length, [trackList]);
+
+  const submitYt = (e) => {
     e.preventDefault();
     const v = url.trim();
     if (!v || busy) return;
+    if (isSpotifyUrl(v)) {
+      setMode('spotify');
+      return;
+    }
     setBusy(true);
     Promise.resolve(onImport(v)).finally(() => setBusy(false));
   };
 
+  const submitSpotify = (e) => {
+    e.preventDefault();
+    if (!trackList.trim() || busy) return;
+    const name = playlistName.trim() || 'Playlist de Spotify';
+    setBusy(true);
+    Promise.resolve(onImportText(name, trackList.trim())).finally(() => setBusy(false));
+  };
+
+  const copyBookmarklet = async () => {
+    try {
+      await navigator.clipboard.writeText(SPOTIFY_BOOKMARKLET);
+      setBmCopied(true);
+      setTimeout(() => setBmCopied(false), 2500);
+    } catch {
+      window.prompt('Copia este marcador y guárdalo en favoritos:', SPOTIFY_BOOKMARKLET);
+    }
+  };
+
+  const pasteClipboard = async () => {
+    try {
+      const t = await navigator.clipboard.readText();
+      if (t && t.trim()) {
+        setTrackList(t.trim());
+        if (!playlistName.trim()) setPlaylistName('Playlist de Spotify');
+      }
+    } catch {
+      /* permisos denegados: el usuario pega con Ctrl+V */
+    }
+  };
+
+  const onFile = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      setTrackList(String(ev.target.result || ''));
+      if (!playlistName.trim()) setPlaylistName(file.name.replace(/\.[^.]+$/, '') || 'Playlist importada');
+    };
+    reader.readAsText(file);
+  };
+
+  const segBtn = (id, label) => (
+    <button type="button" onClick={() => setMode(id)} style={{ flex:1, padding:'9px 0', border:'none', borderRadius:11, background: mode === id ? 'var(--surf-0)' : 'transparent', color: mode === id ? 'var(--txt-0)' : 'var(--txt-2)', fontSize:12, fontWeight:800, cursor:'pointer', boxShadow: mode === id ? '0 1px 4px #0005' : 'none' }}>{label}</button>
+  );
+
   return (
     <>
       <div onClick={onClose} style={{ position:'fixed', inset:0, background:'#04060acc', backdropFilter:'blur(10px)', WebkitBackdropFilter:'blur(10px)', zIndex:120 }} />
-      <div className="fade-up" style={{ position:'fixed', left:0, right:0, bottom:0, margin:'0 auto', width:'100%', maxWidth:460, maxHeight:'85dvh', overflowY:'auto', background:'linear-gradient(180deg, var(--surf-1), var(--surf-0))', border:'1px solid var(--line)', borderRadius:'26px 26px 0 0', padding:'10px 18px calc(env(safe-area-inset-bottom, 16px) + 18px)', zIndex:121, boxShadow:'0 -30px 80px #000d' }}>
+      <div className="fade-up" style={{ position:'fixed', left:0, right:0, bottom:0, margin:'0 auto', width:'100%', maxWidth:460, maxHeight:'88dvh', overflowY:'auto', background:'linear-gradient(180deg, var(--surf-1), var(--surf-0))', border:'1px solid var(--line)', borderRadius:'26px 26px 0 0', padding:'10px 18px calc(env(safe-area-inset-bottom, 16px) + 18px)', zIndex:121, boxShadow:'0 -30px 80px #000d' }}>
         <div style={{ width:40, height:4, borderRadius:99, background:'var(--surf-2)', margin:'6px auto 14px' }} />
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
           <div style={{ fontSize:16, fontWeight:900, color:'var(--txt-0)' }}>Importar playlist</div>
           <button aria-label="Cerrar" onClick={onClose} className="press" style={{ background:'none', border:'none', cursor:'pointer' }}><Icon.X c="var(--txt-1)" sz={20} /></button>
         </div>
-        <div style={{ fontSize:12, color:'var(--txt-2)', marginBottom:16, lineHeight:1.55 }}>
-          Pega el enlace de una playlist de <b style={{ color:'var(--txt-1)' }}>YouTube Music</b> o <b style={{ color:'var(--txt-1)' }}>Spotify</b> (pública o privada de tu cuenta, incluyendo mezclas Made For You).
-          Las canciones se buscan en YouTube Music y se guardan en tu biblioteca.
+
+        <div style={{ display:'flex', gap:4, background:'var(--surf-2)', padding:4, borderRadius:14, marginBottom:16 }}>
+          {segBtn('yt', 'YouTube Music')}
+          {segBtn('spotify', 'Spotify (gratis)')}
         </div>
-        <form onSubmit={submit} style={{ display:'flex', flexDirection:'column', gap:12 }}>
-          <input
-            autoFocus
-            type="url"
-            inputMode="url"
-            autoComplete="off"
-            value={url}
-            onChange={e => setUrl(e.target.value)}
-            placeholder="https://open.spotify.com/playlist/…  o  music.youtube.com/playlist?list=…"
-            style={{ width:'100%', background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:12, padding:'12px 14px', fontSize:13, color:'var(--txt-0)', outline:'none', fontFamily:'Inter,sans-serif' }}
-          />
-          <button type="submit" disabled={!url.trim() || busy} className="btn-tap" style={{ background:grad(T), border:'none', borderRadius:14, padding:'13px 0', cursor: (!url.trim() || busy) ? 'default' : 'pointer', color:'#04060a', fontSize:13, fontWeight:800, textAlign:'center', display:'flex', alignItems:'center', justifyContent:'center', gap:8, opacity: (!url.trim() || busy) ? 0.55 : 1 }}>
-            {busy ? <Spinner c="#04060a" sz={18} /> : <Icon.Down c="#04060a" sz={18} />}
-            {busy ? 'Preparando…' : 'Empezar importación'}
-          </button>
-        </form>
-        <div style={{ fontSize:10.5, color:'var(--txt-3)', marginTop:14, lineHeight:1.45 }}>
-          Spotify privado: la primera vez te pedirá iniciar sesión en Spotify (una sola vez). Luego basta con pegar el enlace.
-        </div>
+
+        {mode === 'yt' && (
+          <>
+            <div style={{ fontSize:12, color:'var(--txt-2)', marginBottom:14, lineHeight:1.5 }}>
+              Pega el enlace de una playlist <b style={{ color:'var(--txt-1)' }}>pública</b> de YouTube o YouTube Music. Se importa con un toque.
+            </div>
+            <form onSubmit={submitYt} style={{ display:'flex', flexDirection:'column', gap:12 }}>
+              <input autoFocus type="url" inputMode="url" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://music.youtube.com/playlist?list=…" style={{ width:'100%', background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:12, padding:'12px 14px', fontSize:13, color:'var(--txt-0)', outline:'none' }} />
+              <button type="submit" disabled={!url.trim() || busy} className="btn-tap" style={{ background:grad(T), border:'none', borderRadius:14, padding:'13px 0', cursor:'pointer', color:'#04060a', fontSize:13, fontWeight:800, display:'flex', alignItems:'center', justifyContent:'center', gap:8, opacity: (!url.trim() || busy) ? 0.55 : 1 }}>
+                {busy ? <Spinner c="#04060a" sz={18} /> : <Icon.Down c="#04060a" sz={18} />}
+                Empezar importación
+              </button>
+            </form>
+          </>
+        )}
+
+        {mode === 'spotify' && (
+          <>
+            <div style={{ fontSize:12, color:'var(--txt-2)', marginBottom:12, lineHeight:1.55 }}>
+              Spotify bloqueó su API gratis (exige Premium). Esta vía es <b style={{ color:'var(--txt-1)' }}>100% gratis</b>: lees la playlist en el navegador y Velocity busca cada tema en YouTube Music.
+            </div>
+
+            <div style={{ background:'var(--surf-2)', borderRadius:14, padding:'12px 14px', marginBottom:14, fontSize:11.5, color:'var(--txt-1)', lineHeight:1.55 }}>
+              <div style={{ fontWeight:800, color:'var(--txt-0)', marginBottom:8 }}>En 3 pasos</div>
+              <div style={{ marginBottom:6 }}><b style={{ color:T.accent }}>1.</b> Abre tu playlist o mix en <b>open.spotify.com</b> (navegador web, con tu cuenta).</div>
+              <div style={{ marginBottom:6 }}><b style={{ color:T.accent }}>2.</b> Usa el <b>extractor</b> (marcador) para copiar todas las canciones.</div>
+              <div><b style={{ color:T.accent }}>3.</b> Vuelve aquí, pega la lista e importa.</div>
+            </div>
+
+            <button type="button" onClick={copyBookmarklet} className="btn-tap" style={{ width:'100%', marginBottom:10, background: hex2rgba(T.accent, 0.14), border:`1px solid ${hex2rgba(T.accent, 0.35)}`, borderRadius:12, padding:'12px 14px', cursor:'pointer', color:T.accent, fontSize:12.5, fontWeight:800, display:'flex', alignItems:'center', justifyContent:'center', gap:8 }}>
+              <Icon.List c={T.accent} sz={16} />
+              {bmCopied ? '✓ Extractor copiado — pégalo como marcador' : 'Copiar extractor (marcador)'}
+            </button>
+            <div style={{ fontSize:10.5, color:'var(--txt-3)', marginBottom:14, lineHeight:1.45 }}>
+              Cómo instalarlo una vez: en el navegador crea un marcador nuevo y como URL pega lo copiado. En la playlist de Spotify, toca ese marcador.
+            </div>
+
+            <form onSubmit={submitSpotify} style={{ display:'flex', flexDirection:'column', gap:10 }}>
+              <input type="text" value={playlistName} onChange={e => setPlaylistName(e.target.value)} placeholder="Nombre de la playlist en Velocity" style={{ width:'100%', background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:12, padding:'11px 14px', fontSize:13, color:'var(--txt-0)', outline:'none' }} />
+              <textarea value={trackList} onChange={e => setTrackList(e.target.value)} placeholder={'Pega aquí la lista, una por línea:\nCanción - Artista\nCanción - Artista'} rows={6} style={{ width:'100%', background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:12, padding:'11px 14px', fontSize:12, color:'var(--txt-0)', outline:'none', resize:'vertical', fontFamily:'ui-monospace,monospace', lineHeight:1.45 }} />
+              <div style={{ display:'flex', gap:8 }}>
+                <button type="button" onClick={pasteClipboard} className="press" style={{ flex:1, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:11, padding:'10px 0', cursor:'pointer', color:'var(--txt-1)', fontSize:11.5, fontWeight:700 }}>Pegar portapapeles</button>
+                <label className="press" style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:11, padding:'10px 0', cursor:'pointer', color:'var(--txt-1)', fontSize:11.5, fontWeight:700 }}>
+                  Archivo CSV
+                  <input type="file" accept=".csv,.txt,text/csv,text/plain" onChange={onFile} style={{ display:'none' }} />
+                </label>
+              </div>
+              {parsedCount > 0 && (
+                <div style={{ fontSize:11, color:T.accent, fontWeight:700 }}>{parsedCount} canciones detectadas</div>
+              )}
+              <button type="submit" disabled={parsedCount < 1 || busy} className="btn-tap" style={{ background:grad(T), border:'none', borderRadius:14, padding:'13px 0', cursor:'pointer', color:'#04060a', fontSize:13, fontWeight:800, display:'flex', alignItems:'center', justifyContent:'center', gap:8, opacity: (parsedCount < 1 || busy) ? 0.55 : 1 }}>
+                {busy ? <Spinner c="#04060a" sz={18} /> : <Icon.Down c="#04060a" sz={18} />}
+                Buscar en YouTube Music e importar
+              </button>
+            </form>
+          </>
+        )}
       </div>
     </>
   );
@@ -2080,61 +2176,16 @@ export default function App() {
   const [showImport, setShowImport] = useState(false);
   const [importJob, setImportJob] = useState(null);
 
-  const beginSpotifyOAuth = async (pendingUrl) => {
-    try {
-      const cfg = await api.authConfig();
-      const clientId = (cfg && cfg.spotifyClientId) || '';
-      if (!clientId) {
-        showToast('Spotify no está configurado (SPOTIFY_CLIENT_ID en el servidor).');
-        return false;
-      }
-      try { sessionStorage.setItem('velocity.spotify_pending_import', pendingUrl || ''); } catch {}
-      window.location.href = spotifyAuthUrl(clientId, `${window.location.origin}/`);
-      return true;
-    } catch {
-      showToast('No se pudo iniciar sesión en Spotify.');
-      return false;
-    }
-  };
-
-  /** Spotify: token → tracks → emparejar en YouTube Music (startImportText). */
-  const startImportSpotify = async (url) => {
-    const resource = parseSpotifyResource(url);
-    if (!resource) {
-      showToast('Enlace de Spotify no válido. Usa open.spotify.com/playlist/…');
-      return;
-    }
-    const token = localStorage.getItem('velocity.spotify_token') || '';
-    if (!token) {
-      await beginSpotifyOAuth(url);
-      return;
-    }
-    setShowImport(false);
-    showToast('Leyendo playlist de Spotify…');
-    try {
-      const { name, lines } = await fetchSpotifyTracks(resource, token);
-      // Pipeline de búsqueda YT Music (no marcar busy aquí: startImportText lo gestiona).
-      await startImportText(name, lines.join('\n'));
-    } catch (e) {
-      console.error(e);
-      if (e && e.code === 'AUTH') {
-        localStorage.removeItem('velocity.spotify_token');
-        await beginSpotifyOAuth(url);
-        return;
-      }
-      setImportJob({ busy: false, error: (e && e.message) || 'Error Spotify' });
-      showToast((e && e.message) || 'Error al importar desde Spotify');
-    }
-  };
-
   const startImport = async (url) => {
     if (importJob && importJob.busy) return;
     const raw = String(url || '').trim();
     if (!raw) return;
 
-    // Spotify (público o privado de la cuenta conectada)
+    // Spotify API exige Premium: redirigir al flujo gratis (extractor + pegar lista).
     if (isSpotifyUrl(raw)) {
-      return startImportSpotify(raw);
+      showToast('Spotify: usa la pestaña «Spotify (gratis)» — sin pagar Premium.');
+      setShowImport(true);
+      return;
     }
 
     // YouTube / YouTube Music (flujo existente)
@@ -2278,32 +2329,6 @@ export default function App() {
       setImportJob(null);
     }
   };
-
-  // OAuth Spotify (hash #access_token=…) + reanudar import pendiente tras login.
-  useEffect(() => {
-    if (!authed) return;
-    const hash = window.location.hash;
-    if (hash && hash.includes('access_token')) {
-      const params = new URLSearchParams(hash.replace('#', '?'));
-      const token = params.get('access_token');
-      if (token) {
-        localStorage.setItem('velocity.spotify_token', token);
-        window.history.replaceState(null, null, window.location.pathname + window.location.search);
-        let pending = '';
-        try {
-          pending = sessionStorage.getItem('velocity.spotify_pending_import') || '';
-          sessionStorage.removeItem('velocity.spotify_pending_import');
-        } catch {}
-        if (pending) {
-          showToast('Spotify conectado — importando…');
-          setTimeout(() => { startImport(pending); }, 200);
-        } else {
-          showToast('Conectado a Spotify');
-        }
-      }
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authed]);
 
   // ── Detección de versión desactualizada + auto-actualización ──
   // Estrategia doble para no depender solo del Service Worker:
@@ -4060,7 +4085,7 @@ export default function App() {
       <button aria-label="Después" onClick={() => setUpdateReady(false)} className="press" style={{ flexShrink:0, background:'#04060a22', border:'none', borderRadius:'50%', width:28, height:28, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}><Icon.X c="#04060a" sz={14} /></button>
     </div>
   ) : null;
-  const importModal = showImport ? <ImportPlaylistModal onClose={() => setShowImport(false)} onImport={startImport} T={T} /> : null;
+  const importModal = showImport ? <ImportPlaylistModal onClose={() => setShowImport(false)} onImport={startImport} onImportText={startImportText} T={T} /> : null;
   const importBanner = <ImportBanner job={importJob} T={T} />;
   const importResultModal = importJob && !importJob.busy ? <ImportResultModal job={importJob} onClose={() => setImportJob(null)} onGoToPlaylist={openImportedPlaylist} T={T} /> : null;
 
