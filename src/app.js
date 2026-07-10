@@ -3,6 +3,7 @@ import express from 'express';
 import compression from 'compression';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import YTMusic from 'ytmusic-api';
 import { createRateLimiter } from './middleware/rateLimit.js';
 
 import { StreamCache } from './services/streamCache.js';
@@ -20,6 +21,34 @@ import { createFavoritesService, FavoritesError } from './services/favoritesServ
 import { createHistoryService, HistoryError } from './services/historyService.js';
 import { extractorStatus } from './services/extractorSetup.js';
 import { updateNowPlaying, getNowPlaying, subscribeNowPlaying } from './services/nowPlayingService.js';
+
+let _importClient = null;
+let _importClientInit = null;
+async function getImportClient() {
+  if (_importClient) return _importClient;
+  if (!_importClientInit) {
+    _importClientInit = (async () => {
+      const c = new YTMusic();
+      await c.initialize();
+      _importClient = c;
+      return c;
+    })();
+  }
+  return _importClientInit;
+}
+
+function extractPlaylistId(urlOrId) {
+  const s = String(urlOrId || '').trim();
+  if (!s) return null;
+  try {
+    if (s.includes('http://') || s.includes('https://')) {
+      const urlObj = new URL(s);
+      const listId = urlObj.searchParams.get('list');
+      if (listId) return listId;
+    }
+  } catch {}
+  return s;
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -702,6 +731,44 @@ export function createApp(deps = {}) {
       await playlistService.delete(req.userId, req.params.id);
       res.json({ ok: true });
     }, PlaylistError));
+    app.post('/api/playlists/import', requireAuth, wrap(async (req, res) => {
+      const { url } = req.body;
+      if (!url) {
+        return res.status(400).json({ error: 'La URL de la playlist es obligatoria.' });
+      }
+      const playlistId = extractPlaylistId(url);
+      if (!playlistId) {
+        return res.status(400).json({ error: 'URL de playlist inválida.' });
+      }
+      try {
+        const yt = await getImportClient();
+        const playlistInfo = await yt.getPlaylist(playlistId);
+        const videos = await yt.getPlaylistVideos(playlistId);
+        const mappedTracks = (videos || []).map(v => {
+          const artwork = v.thumbnails?.[v.thumbnails.length - 1]?.url || null;
+          return {
+            id: v.videoId || null,
+            title: v.name || null,
+            artist: v.artist?.name || 'Desconocido',
+            artistId: v.artist?.artistId || null,
+            album: null,
+            albumId: null,
+            durationSeconds: v.duration || null,
+            artworkUrl: artwork,
+            streamUrl: null,
+            releaseDate: null,
+            genre: null,
+          };
+        }).filter(t => t.id && t.title);
+        res.json({
+          name: playlistInfo.name || 'Playlist importada',
+          tracks: mappedTracks
+        });
+      } catch (err) {
+        console.error('Error importing playlist:', err);
+        res.status(502).json({ error: 'No se pudo obtener la información de la playlist de YouTube Music.' });
+      }
+    }));
   }
 
   if (requireAuth && favoritesService) {

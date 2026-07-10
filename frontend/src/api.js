@@ -185,6 +185,12 @@ export const api = {
     }));
     return d.id;
   },
+  async importPlaylist(url) {
+    return jsonOrThrow(await fetch('/api/playlists/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ url }),
+    }));
+  },
   async playlistTracks(id) {
     const d = await jsonOrThrow(await fetch(`/api/playlists/${encodeURIComponent(id)}`, { headers: authHeaders() }));
     return d.tracks || [];

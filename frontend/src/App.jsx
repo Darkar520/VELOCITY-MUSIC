@@ -552,7 +552,7 @@ function useListSearch(list) {
 // ═══════════════════════════════════════════════════════════════
 function LibraryTab({ ctx }) {
   const { track, playing, play, T, favs, toggleFav, playlists, createPlaylist,
-          removeFromPlaylist, deletePlaylist, openPlaylist, setOpenPlaylist, addToTarget, onMenu, downloaded, downloading, downloadMany, savedAlbums, goAlbum, goMix, savedPlaylists, savePlaylist, unsavePlaylist, isPlaylistSaved, selecting, selection, toggleSelect, startSelection, hydrateTracks, addToQueue, removeFromQueue } = ctx;
+          removeFromPlaylist, deletePlaylist, openPlaylist, setOpenPlaylist, addToTarget, onMenu, downloaded, downloading, downloadMany, savedAlbums, goAlbum, goMix, savedPlaylists, savePlaylist, unsavePlaylist, isPlaylistSaved, selecting, selection, toggleSelect, startSelection, hydrateTracks, addToQueue, removeFromQueue, setShowImport } = ctx;
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
   // Búsqueda dentro de la playlist abierta. Hook al nivel superior (no dentro
@@ -643,6 +643,7 @@ function LibraryTab({ ctx }) {
         <div style={{ display:'flex', gap:10 }}>
           <button aria-label="Me gusta" onClick={() => setOpenPlaylist('liked')} className="press" style={{ width:36, height:36, borderRadius:'50%', background:`linear-gradient(135deg, ${hex2rgba(T.accent,.18)}, ${hex2rgba(T.accent2,.06)})`, border:`1px solid ${hex2rgba(T.accent,.3)}`, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}><Icon.Heart c={T.accent} filled sz={18} /></button>
           <button aria-label="Crear playlist" onClick={() => setCreating(c=>!c)} className="press" style={{ width:36, height:36, borderRadius:'50%', background:'var(--surf-1)', border:'1px solid var(--line)', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}><Icon.Plus c={T.accent} sz={20} /></button>
+          <button aria-label="Importar playlist" onClick={() => setShowImport(true)} className="press" style={{ width:36, height:36, borderRadius:'50%', background:'var(--surf-1)', border:'1px solid var(--line)', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}><Icon.Down c={T.accent} sz={18} /></button>
         </div>
       </div>
       <div style={{ fontSize:12.5, color:'var(--txt-2)', marginBottom:18, marginTop:4 }}>{playlists.length + 1 + (savedPlaylists?.length || 0)} playlists</div>
@@ -988,6 +989,88 @@ function AddToPlaylistModal({ trackId, onClose, playlists, createPlaylist, addTo
                 </button>
               );
             })}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// IMPORT PLAYLIST MODAL
+// ═══════════════════════════════════════════════════════════════
+function ImportPlaylistModal({ onClose, onImport, T }) {
+  const [url, setUrl] = useState('');
+  return (
+    <>
+      <div onClick={onClose} style={{ position:'fixed', inset:0, background:'#04060acc', backdropFilter:'blur(10px)', WebkitBackdropFilter:'blur(10px)', zIndex:120 }} />
+      <div className="fade-up" style={{ position:'fixed', left:0, right:0, bottom:0, margin:'0 auto', width:'100%', maxWidth:460, maxHeight:'85dvh', overflowY:'auto', background:'linear-gradient(180deg, var(--surf-1), var(--surf-0))', border:'1px solid var(--line)', borderRadius:'26px 26px 0 0', padding:'10px 18px calc(env(safe-area-inset-bottom, 16px) + 18px)', zIndex:121, boxShadow:'0 -30px 80px #000d' }}>
+        <div style={{ width:40, height:4, borderRadius:99, background:'var(--surf-2)', margin:'6px auto 14px' }} />
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
+          <div style={{ fontSize:16, fontWeight:900, color:'var(--txt-0)' }}>Importar playlist</div>
+          <button aria-label="Cerrar" onClick={onClose} className="press" style={{ background:'none', border:'none', cursor:'pointer' }}><Icon.X c="var(--txt-1)" sz={20} /></button>
+        </div>
+        <div style={{ fontSize:11.5, color:'var(--txt-2)', marginBottom:16 }}>Introduce una URL de playlist pública de YouTube o YouTube Music para importarla a tu biblioteca de Velocity.</div>
+        <form onSubmit={e => { e.preventDefault(); if (url.trim()) { onImport(url.trim()); } }} style={{ display:'flex', flexDirection:'column', gap:12 }}>
+          <input autoFocus type="text" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://music.youtube.com/playlist?list=..." style={{ width:'100%', background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:12, padding:'12px 14px', fontSize:13, color:'var(--txt-0)', outline:'none', fontFamily:'Inter,sans-serif' }} />
+          <button type="submit" className="btn-tap" style={{ background:grad(T), border:'none', borderRadius:14, padding:'13px 0', cursor:'pointer', color:'#04060a', fontSize:13, fontWeight:800, textAlign:'center', display:'flex', alignItems:'center', justifyContent:'center', gap:8 }}>
+            <Icon.Down c="#04060a" sz={18} /> Empezar importación
+          </button>
+        </form>
+      </div>
+    </>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// IMPORT PROGRESS BANNER
+// ═══════════════════════════════════════════════════════════════
+function ImportBanner({ job, T }) {
+  if (!job || !job.busy) return null;
+  return (
+    <div className="fade-up glass" style={{ position:'fixed', bottom: 90, left: 16, right: 16, margin: '0 auto', maxWidth: 428, zIndex: 125, display:'flex', alignItems:'center', gap:12, background:`linear-gradient(135deg, ${hex2rgba(T.accent,.15)}, var(--surf-0))`, border:`1px solid ${hex2rgba(T.accent,.3)}`, borderRadius:18, padding:'12px 16px', boxShadow:'0 10px 30px #0008' }}>
+      <Spinner c={T.accent} sz={18} />
+      <div style={{ flex:1, minWidth:0 }}>
+        <div style={{ fontSize:12.5, fontWeight:800, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>Importando: {job.name}</div>
+        <div style={{ fontSize:10, color:'var(--txt-2)', marginTop:2 }}>{job.total > 0 ? `Procesando ${job.current} de ${job.total} canciones (${job.progress}%)` : 'Conectando con YouTube...'}</div>
+        <div style={{ width: '100%', height: 3, background: 'var(--surf-2)', borderRadius: 99, marginTop: 6, overflow: 'hidden' }}>
+          <div style={{ width: `${job.progress}%`, height: '100%', background: grad(T), borderRadius: 99, transition: 'width .2s ease' }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// IMPORT RESULT MODAL
+// ═══════════════════════════════════════════════════════════════
+function ImportResultModal({ job, onClose, onGoToPlaylist, T }) {
+  if (!job) return null;
+  return (
+    <>
+      <div onClick={onClose} style={{ position:'fixed', inset:0, background:'#04060acc', backdropFilter:'blur(10px)', WebkitBackdropFilter:'blur(10px)', zIndex:120 }} />
+      <div className="fade-up" style={{ position:'fixed', left:0, right:0, bottom:0, margin:'0 auto', width:'100%', maxWidth:460, maxHeight:'85dvh', overflowY:'auto', background:'linear-gradient(180deg, var(--surf-1), var(--surf-0))', border:'1px solid var(--line)', borderRadius:'26px 26px 0 0', padding:'10px 18px calc(env(safe-area-inset-bottom, 16px) + 18px)', zIndex:121, boxShadow:'0 -30px 80px #000d' }}>
+        <div style={{ width:40, height:4, borderRadius:99, background:'var(--surf-2)', margin:'6px auto 14px' }} />
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
+          <div style={{ fontSize:16, fontWeight:900, color:'var(--txt-0)' }}>Importación finalizada</div>
+          <button aria-label="Cerrar" onClick={onClose} className="press" style={{ background:'none', border:'none', cursor:'pointer' }}><Icon.X c="var(--txt-1)" sz={20} /></button>
+        </div>
+        {job.error ? (
+          <div style={{ textAlign:'center', padding:'20px 0' }}>
+            <div style={{ width:48, height:48, borderRadius:'50%', background:hex2rgba('#fb7185',.15), display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 12px' }}><Icon.X c="#fb7185" sz={24} /></div>
+            <div style={{ fontSize:14, fontWeight:800, color:'var(--txt-0)', marginBottom:6 }}>Hubo un problema</div>
+            <div style={{ fontSize:12, color:'var(--txt-2)', lineHeight:1.5 }}>{job.error}</div>
+            <button onClick={onClose} className="btn-tap" style={{ background:'var(--surf-2)', border:'1px solid var(--line)', borderRadius:12, padding:'11px 24px', cursor:'pointer', color:'var(--txt-0)', fontSize:12.5, fontWeight:800, marginTop:16 }}>Cerrar</button>
+          </div>
+        ) : (
+          <div style={{ textAlign:'center', padding:'20px 0' }}>
+            <div style={{ width:48, height:48, borderRadius:'50%', background:hex2rgba(T.accent,.15), display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 12px' }}><Icon.Check c={T.accent} sz={24} /></div>
+            <div style={{ fontSize:14, fontWeight:800, color:'var(--txt-0)', marginBottom:6 }}>¡Éxito al importar!</div>
+            <div style={{ fontSize:12, color:'var(--txt-2)', lineHeight:1.5, marginBottom:16 }}>Se importó la playlist <b>{job.name}</b> con {job.total} canciones.</div>
+            <div style={{ display:'flex', gap:8 }}>
+              <button onClick={onClose} className="btn-tap" style={{ flex:1, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:12, padding:'12px 0', cursor:'pointer', color:'var(--txt-0)', fontSize:12.5, fontWeight:800 }}>Cerrar</button>
+              <button onClick={onGoToPlaylist} className="btn-tap" style={{ flex:1, background:grad(T), border:'none', borderRadius:12, padding:'12px 0', cursor:'pointer', color:'#04060a', fontSize:12.5, fontWeight:800 }}>Ver playlist</button>
+            </div>
           </div>
         )}
       </div>
@@ -1899,6 +1982,76 @@ export default function App() {
   const [catVer, setCatVer] = useState(0);
   const toastTimer = useRef(null);
   const showToast = (m) => { setToast(m); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 2400); };
+
+  const [showImport, setShowImport] = useState(false);
+  const [importJob, setImportJob] = useState(null);
+
+  const startImport = async (url) => {
+    if (importJob && importJob.busy) return;
+    setImportJob({ busy: true, current: 0, total: 0, progress: 0, name: 'Conectando...', playlistId: null, error: null });
+    setShowImport(false);
+    try {
+      const data = await api.importPlaylist(url);
+      const { name, tracks } = data;
+      if (!tracks || !tracks.length) {
+        throw new Error('La playlist no contiene canciones o es privada.');
+      }
+      setImportJob(prev => ({ ...prev, total: tracks.length, name, current: 0, progress: 0 }));
+      const playlistId = await api.createPlaylist(name);
+      if (!playlistId) {
+        throw new Error('No se pudo crear la playlist.');
+      }
+      setImportJob(prev => ({ ...prev, playlistId }));
+
+      const batchSize = 50;
+      for (let i = 0; i < tracks.length; i += batchSize) {
+        const batch = tracks.slice(i, i + batchSize);
+        await api.saveTracks(batch);
+      }
+
+      const normalizedTracks = tracks.map(t => normalizeTrack(t));
+      saveMeta();
+
+      for (let i = 0; i < normalizedTracks.length; i++) {
+        const t = normalizedTracks[i];
+        try {
+          await api.addToPlaylist(playlistId, t.id);
+        } catch (e) {
+          console.error('Error al agregar a la playlist:', e);
+        }
+        setImportJob(prev => {
+          if (!prev) return null;
+          const current = i + 1;
+          const progress = Math.round((current / normalizedTracks.length) * 100);
+          return { ...prev, current, progress };
+        });
+      }
+
+      const pls = await api.playlists().catch(() => null);
+      if (pls) {
+        const withTracks = await Promise.all(pls.map(async p => {
+          const ids = await api.playlistTracks(p.id).catch(() => []);
+          return { id: p.id, name: p.name, trackIds: ids };
+        }));
+        setPlaylists(withTracks);
+      }
+
+      setImportJob(prev => ({ ...prev, busy: false }));
+      showToast('Playlist importada con éxito');
+    } catch (e) {
+      console.error(e);
+      setImportJob({ busy: false, error: e.message || 'Error al conectar' });
+      showToast('Error al importar la playlist');
+    }
+  };
+
+  const openImportedPlaylist = () => {
+    if (importJob && importJob.playlistId) {
+      setOpenPlaylist(importJob.playlistId);
+      setTab('library');
+      setImportJob(null);
+    }
+  };
 
   // ── Detección de versión desactualizada + auto-actualización ──
   // Estrategia doble para no depender solo del Service Worker:
@@ -3362,6 +3515,7 @@ export default function App() {
     onboardPrefs, setOnboardPrefs, GENRES: ONBOARDING_GENRES,
     backendDown,
     playingFrom, goToPlayingPlaylist,
+    showImport, setShowImport, importJob, setImportJob, startImport,
   };
 
   const playerProps = { track, playing, togglePlay, next, prev, time, dur, seek, vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved: track ? favs.includes(track.id) : false, toggleFav, T, loadingAudio, nextCover, prevCover };
@@ -3513,6 +3667,9 @@ export default function App() {
       <button aria-label="Después" onClick={() => setUpdateReady(false)} className="press" style={{ flexShrink:0, background:'#04060a22', border:'none', borderRadius:'50%', width:28, height:28, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}><Icon.X c="#04060a" sz={14} /></button>
     </div>
   ) : null;
+  const importModal = showImport ? <ImportPlaylistModal onClose={() => setShowImport(false)} onImport={startImport} T={T} /> : null;
+  const importBanner = <ImportBanner job={importJob} T={T} />;
+  const importResultModal = importJob && !importJob.busy ? <ImportResultModal job={importJob} onClose={() => setImportJob(null)} onGoToPlaylist={openImportedPlaylist} T={T} /> : null;
 
   // ───────────── DESKTOP ─────────────
   if (wide) {
@@ -3527,7 +3684,7 @@ export default function App() {
           </main>
         </div>
         <PlayerBar {...playerProps} onExpand={() => setExpanded(true)} onMenu={setMenuTarget} onQueue={() => setShowQueue(true)} />
-        {expandedPlayer}{addModal}{trackMenu}{queuePanel}{selectionBar}{updateBanner}{offlineBanner}
+        {expandedPlayer}{addModal}{trackMenu}{queuePanel}{selectionBar}{updateBanner}{offlineBanner}{importModal}{importBanner}{importResultModal}
         <Toast msg={toast} T={T} />
       </div>
     );
@@ -3560,7 +3717,7 @@ export default function App() {
           })}
         </div>
       </div>
-      {expandedPlayer}{addModal}{trackMenu}{queuePanel}{selectionBar}{updateBanner}{offlineBanner}
+      {expandedPlayer}{addModal}{trackMenu}{queuePanel}{selectionBar}{updateBanner}{offlineBanner}{importModal}{importBanner}{importResultModal}
       {remotePlaying && remotePlaying.trackId && remotePlaying.trackId !== track?.id && (
         <div className="fade-up" style={{ position:'fixed', bottom:80, left:12, right:12, zIndex:80, background:'var(--surf-0)', border:`1px solid ${hex2rgba(T.accent,.3)}`, borderRadius:16, padding:'12px 14px', display:'flex', alignItems:'center', gap:12, boxShadow:'0 8px 24px #000a' }}>
           <img src={remotePlaying.cover ? hiResCover(remotePlaying.cover, 64) : FALLBACK_COVER} alt="" referrerPolicy="no-referrer" style={{ width:44, height:44, borderRadius:10, objectFit:'cover', flexShrink:0 }} />
