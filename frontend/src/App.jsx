@@ -1072,6 +1072,81 @@ function ImportPlaylistModal({ onClose, onImport, onImportText, T }) {
   const [playlistName, setPlaylistName] = useState('');
   const [trackList, setTrackList] = useState('');
   
+  // Spotify Direct states
+  const [spotifyToken, setSpotifyToken] = useState(() => localStorage.getItem('velocity.spotify_token') || '');
+  const [spotifyClientId, setSpotifyClientId] = useState(() => localStorage.getItem('velocity.spotify_client_id') || '');
+  const [playlists, setPlaylists] = useState([]);
+  const [loadingPlaylists, setLoadingPlaylists] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [importingId, setImportingId] = useState(null);
+
+  useEffect(() => {
+    if (tab === 'spotify' && spotifyToken) {
+      setLoadingPlaylists(true);
+      fetch('https://api.spotify.com/v1/me/playlists?limit=50', {
+        headers: { 'Authorization': `Bearer ${spotifyToken}` }
+      })
+      .then(res => {
+        if (!res.ok) {
+          if (res.status === 401) {
+            localStorage.removeItem('velocity.spotify_token');
+            setSpotifyToken('');
+          }
+          throw new Error('Error al conectar con Spotify');
+        }
+        return res.json();
+      })
+      .then(data => {
+        setPlaylists(data.items || []);
+        setLoadingPlaylists(false);
+      })
+      .catch(err => {
+        console.error(err);
+        setLoadingPlaylists(false);
+      });
+    }
+  }, [tab, spotifyToken]);
+
+  const connectSpotify = () => {
+    const cid = spotifyClientId.trim();
+    if (!cid) return;
+    localStorage.setItem('velocity.spotify_client_id', cid);
+    const scopes = 'playlist-read-private playlist-read-collaborative user-library-read';
+    const redirectUri = window.location.origin + '/';
+    const authUrl = `https://accounts.spotify.com/authorize?client_id=${cid}&response_type=token&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scopes)}`;
+    window.location.href = authUrl;
+  };
+
+  const handleImportSpotifyPlaylist = async (id, name) => {
+    setImportingId(id);
+    try {
+      let tracks = [];
+      let url = `https://api.spotify.com/v1/playlists/${id}/tracks?limit=100`;
+      while (url) {
+        const res = await fetch(url, { headers: { 'Authorization': `Bearer ${spotifyToken}` } });
+        if (!res.ok) {
+          if (res.status === 401) {
+            localStorage.removeItem('velocity.spotify_token');
+            setSpotifyToken('');
+            throw new Error('Sesión de Spotify expirada. Por favor, conéctate de nuevo.');
+          }
+          throw new Error('Error al obtener canciones de la playlist.');
+        }
+        const data = await res.json();
+        tracks = tracks.concat(data.items.map(item => {
+          if (!item.track) return null;
+          return `${item.track.name} - ${item.track.artists.map(a => a.name).join(', ')}`;
+        }).filter(Boolean));
+        url = data.next;
+      }
+      onImportText(name, tracks.join('\n'));
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      setImportingId(null);
+    }
+  };
+
   const bookmarkletCode = `javascript:(function(){const rows=document.querySelectorAll('[data-testid="trackrow"]');const tracks=[];rows.forEach(row=>{const titleEl=row.querySelector('[data-testid="tracklist-row-title"] div, a[href^="/track/"]');const artistEls=row.querySelectorAll('a[href^="/artist/"]');if(titleEl){const title=titleEl.textContent.trim();const artists=Array.from(artistEls).map(a=>a.textContent.trim()).join(", ");tracks.push(title+" - "+artists)}});if(tracks.length===0){alert("No se encontraron canciones. Asegúrate de estar en una playlist de Spotify en el navegador.")}else{const txt=tracks.join("\\n");const el=document.createElement("textarea");el.value=txt;document.body.appendChild(el);el.select();document.execCommand("copy");document.body.removeChild(el);alert("¡Copiadas "+tracks.length+" canciones al portapapeles! Ahora pégalas en Velocity Music.")}})();`;
 
   const copyBookmarklet = () => {
@@ -1104,11 +1179,12 @@ function ImportPlaylistModal({ onClose, onImport, onImportText, T }) {
         </div>
 
         <div style={{ display:'flex', gap:6, background:'var(--surf-2)', padding:3, borderRadius:12, marginBottom:16 }}>
-          <button onClick={() => setTab('yt')} style={{ flex:1, padding:'7px 0', border:'none', borderRadius:10, background: tab === 'yt' ? 'var(--surf-0)' : 'none', color: tab === 'yt' ? 'var(--txt-0)' : 'var(--txt-2)', fontSize:11.5, fontWeight:800, cursor:'pointer' }}>YouTube URL</button>
-          <button onClick={() => setTab('text')} style={{ flex:1, padding:'7px 0', border:'none', borderRadius:10, background: tab === 'text' ? 'var(--surf-0)' : 'none', color: tab === 'text' ? 'var(--txt-0)' : 'var(--txt-2)', fontSize:11.5, fontWeight:800, cursor:'pointer' }}>Texto / Spotify / CSV</button>
+          <button onClick={() => setTab('yt')} style={{ flex:1, padding:'7px 0', border:'none', borderRadius:10, background: tab === 'yt' ? 'var(--surf-0)' : 'none', color: tab === 'yt' ? 'var(--txt-0)' : 'var(--txt-2)', fontSize:11, fontWeight:800, cursor:'pointer' }}>YouTube URL</button>
+          <button onClick={() => setTab('text')} style={{ flex:1, padding:'7px 0', border:'none', borderRadius:10, background: tab === 'text' ? 'var(--surf-0)' : 'none', color: tab === 'text' ? 'var(--txt-0)' : 'var(--txt-2)', fontSize:11, fontWeight:800, cursor:'pointer' }}>Texto / CSV</button>
+          <button onClick={() => setTab('spotify')} style={{ flex:1, padding:'7px 0', border:'none', borderRadius:10, background: tab === 'spotify' ? 'var(--surf-0)' : 'none', color: tab === 'spotify' ? 'var(--txt-0)' : 'var(--txt-2)', fontSize:11, fontWeight:800, cursor:'pointer' }}>Spotify Directo</button>
         </div>
 
-        {tab === 'yt' ? (
+        {tab === 'yt' && (
           <>
             <div style={{ fontSize:11.5, color:'var(--txt-2)', marginBottom:16 }}>Introduce una URL de playlist pública de YouTube o YouTube Music para importarla a tu biblioteca de Velocity.</div>
             <form onSubmit={e => { e.preventDefault(); if (url.trim()) { onImport(url.trim()); } }} style={{ display:'flex', flexDirection:'column', gap:12 }}>
@@ -1118,10 +1194,12 @@ function ImportPlaylistModal({ onClose, onImport, onImportText, T }) {
               </button>
             </form>
           </>
-        ) : (
+        )}
+
+        {tab === 'text' && (
           <>
             <div style={{ fontSize:11.5, color:'var(--txt-2)', marginBottom:14, lineHeight:1.5 }}>
-              Para playlists de Spotify (públicas o privadas), puedes usar <b>Exportify</b> (exportify.net) para bajar un CSV, arrastrar el archivo o usar el bookmarklet para copiar los temas.
+              Puedes usar <b>Exportify</b> (exportify.net) para bajar un CSV de Spotify, arrastrar el archivo o usar el bookmarklet para copiar los temas.
             </div>
             
             <div style={{ display:'flex', gap:8, marginBottom:16 }}>
@@ -1142,6 +1220,63 @@ function ImportPlaylistModal({ onClose, onImport, onImportText, T }) {
               </button>
             </form>
           </>
+        )}
+
+        {tab === 'spotify' && (
+          !spotifyToken ? (
+            <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+              <div style={{ fontSize:11.5, color:'var(--txt-2)', lineHeight:1.5 }}>
+                Para listar tus playlists, crea una app gratis de desarrollador en Spotify (toma 1 minuto):
+              </div>
+              <div style={{ background:'var(--surf-2)', borderRadius:12, padding:'10px 14px', fontSize:11, color:'var(--txt-1)', lineHeight:1.5 }}>
+                1. Ve al <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noreferrer" style={{ color:T.accent, fontWeight:700, textDecoration:'underline' }}>Spotify Developer Dashboard</a>.<br/>
+                2. Crea una App (ej. "Velocity Music").<br/>
+                3. En la configuración de la app, añade en <b>Redirect URIs</b>:<br/>
+                <code style={{ background:'var(--surf-0)', padding:'2px 6px', borderRadius:4, fontSize:10.5, wordBreak:'break-all', display:'inline-block', marginTop:4 }}>{window.location.origin + '/'}</code><br/>
+                4. Guarda, copia el <b>Client ID</b> y pégalo abajo:
+              </div>
+              
+              <input type="text" value={spotifyClientId} onChange={e => setSpotifyClientId(e.target.value)} placeholder="Pega aquí tu Spotify Client ID" style={{ width:'100%', background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:12, padding:'11px 14px', fontSize:13, color:'var(--txt-0)', outline:'none', fontFamily:'Inter,sans-serif' }} />
+              
+              <button onClick={connectSpotify} className="btn-tap" style={{ background:grad(T), border:'none', borderRadius:14, padding:'13px 0', cursor:'pointer', color:'#04060a', fontSize:13, fontWeight:800, textAlign:'center', display:'flex', alignItems:'center', justifyContent:'center', gap:8, opacity: spotifyClientId.trim()?1:.6 }} disabled={!spotifyClientId.trim()}>
+                <Icon.Wifi c="#04060a" sz={18} /> Guardar y Conectar
+              </button>
+            </div>
+          ) : (
+            <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                <div style={{ fontSize:11.5, color:'var(--txt-2)' }}>Selecciona una playlist para importarla:</div>
+                <button onClick={() => { localStorage.removeItem('velocity.spotify_token'); setSpotifyToken(''); }} style={{ background:'none', border:'none', color:'#fb7185', fontSize:10.5, fontWeight:700, cursor:'pointer', textDecoration:'underline' }}>Desconectar</button>
+              </div>
+              
+              <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Filtrar playlists..." style={{ width:'100%', background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:12, padding:'10px 14px', fontSize:12.5, color:'var(--txt-0)', outline:'none' }} />
+              
+              {loadingPlaylists ? (
+                <div style={{ display:'flex', justifyContent:'center', padding:'30px 0' }}><Spinner c={T.accent} sz={24} /></div>
+              ) : (
+                <div style={{ display:'flex', flexDirection:'column', gap:8, maxHeight:240, overflowY:'auto', paddingRight:4 }}>
+                  {playlists.filter(p => p.name.toLowerCase().includes(searchQuery.toLowerCase())).map(p => {
+                    const isImporting = importingId === p.id;
+                    return (
+                      <div key={p.id} style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 10px', background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:12 }}>
+                        <img src={(p.images && p.images[0]) ? p.images[0].url : FALLBACK_COVER} alt="" style={{ width:40, height:40, borderRadius:8, objectFit:'cover', flexShrink:0 }} />
+                        <div style={{ flex:1, minWidth:0 }}>
+                          <div style={{ fontSize:12.5, fontWeight:700, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{p.name}</div>
+                          <div style={{ fontSize:10, color:'var(--txt-2)', marginTop:2 }}>{p.tracks.total} canciones · {p.public ? 'Pública' : 'Privada'}</div>
+                        </div>
+                        <button disabled={isImporting} onClick={() => handleImportSpotifyPlaylist(p.id, p.name)} className="btn-tap" style={{ background: isImporting ? 'var(--surf-2)' : grad(T), border:'none', borderRadius:8, padding:'6px 12px', cursor:'pointer', color: isImporting ? 'var(--txt-2)' : '#04060a', fontSize:11, fontWeight:800 }}>
+                          {isImporting ? 'Cargando...' : 'Importar'}
+                        </button>
+                      </div>
+                    );
+                  })}
+                  {playlists.length === 0 && (
+                    <div style={{ fontSize:11.5, color:'var(--txt-2)', textAlign:'center', padding:'20px 0' }}>No se encontraron playlists en tu cuenta.</div>
+                  )}
+                </div>
+              )}
+            </div>
+          )
         )}
       </div>
     </>
@@ -1976,6 +2111,21 @@ export default function App() {
     if (document.getElementById('ms-global')) return;
     const el = document.createElement('style'); el.id = 'ms-global'; el.textContent = CSS;
     document.head.appendChild(el);
+  }, []);
+
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (hash && hash.includes('access_token')) {
+      const params = new URLSearchParams(hash.replace('#', '?'));
+      const token = params.get('access_token');
+      if (token) {
+        localStorage.setItem('velocity.spotify_token', token);
+        window.history.replaceState(null, null, window.location.pathname);
+        setTimeout(() => {
+          showToast('Conectado a Spotify');
+        }, 100);
+      }
+    }
   }, []);
 
   const [authed, setAuthed] = useState(isAuthed());
