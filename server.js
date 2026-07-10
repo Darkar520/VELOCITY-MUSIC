@@ -1,6 +1,6 @@
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import path from 'node:path';
-
+import { loadEnv } from './src/lib/loadEnv.js';
 import { createApp } from './src/app.js';
 import { StreamCache } from './src/services/streamCache.js';
 import { createLimiter, createInflight } from './src/lib/concurrency.js';
@@ -50,9 +50,12 @@ import { createTokenRevocationService } from './src/services/tokenRevocationServ
 import { initSchema } from './src/db/init.js';
 import { getPool } from './src/db/pool.js';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Cargar .env antes de leer PORT/USE_POSTGRES (no pisa vars del SO/guardian).
+loadEnv(__dirname);
+
 const PORT = process.env.PORT || 3000;
 const USE_POSTGRES = process.env.USE_POSTGRES === '1';
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Máximo de procesos yt-dlp simultáneos POR PROCESO. En cluster, el lanzador
 // reparte el total entre workers vía WORKER_RESOLVE_CONCURRENCY.
 const RESOLVE_CONCURRENCY = Number(process.env.WORKER_RESOLVE_CONCURRENCY || process.env.RESOLVE_CONCURRENCY) || 4;

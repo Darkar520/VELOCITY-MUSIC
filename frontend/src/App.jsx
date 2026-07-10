@@ -3062,25 +3062,33 @@ export default function App() {
   // ── Pre-buffer del AUDIO de las siguientes 2 pistas (estilo Spotify) ──
   // Dos <audio> ocultos descargan por adelantado los streams de las próximas 2
   // pistas. Al cambiar, el navegador sirve desde caché → arranque instantáneo.
+  // URLs firmadas (HMAC): el proxy rechaza sin exp/sig.
   useEffect(() => {
+    let cancelled = false;
     const ids = queue.length ? queue : (track ? [track.id] : []);
     const i = track ? ids.indexOf(track.id) : -1;
     const qualityMap = { high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' };
     const qParam = qualityMap[quality] || 'high';
-    const preload = (el, offset) => {
+    const preload = async (el, offset) => {
       if (!el || !track || i === -1 || ids.length < 2) { if (el) el.removeAttribute('src'); return; }
       const nextId = ids[(i + offset) % ids.length];
       if (!nextId || nextId === track.id || downloaded.has(nextId)) { el.removeAttribute('src'); return; }
       const nt = trackById(nextId);
       if (!nt) { el.removeAttribute('src'); return; }
-      const url = api.streamUrl({ artist: nt.artist, title: nt.title, id: nt.id, quality: qParam });
-      if (el.getAttribute('src') !== url) { el.src = url; try { el.load(); } catch {} }
+      try {
+        const url = await api.ensureStreamUrl({ artist: nt.artist, title: nt.title, id: nt.id, quality: qParam });
+        if (cancelled || !el) return;
+        if (el.getAttribute('src') !== url) { el.src = url; try { el.load(); } catch {} }
+      } catch {
+        if (!cancelled && el) el.removeAttribute('src');
+      }
     };
     preload(preloadAudioRef.current, 1);
     preload(preloadAudio2Ref.current, 2);
     // volume=0 en los pre-buffer (no muted: muted causa throttle en mobile).
     if (preloadAudioRef.current) preloadAudioRef.current.volume = 0;
     if (preloadAudio2Ref.current) preloadAudio2Ref.current.volume = 0;
+    return () => { cancelled = true; };
     // NO depender de downloaded: causa re-renders que limpian el buffer.
   }, [track?.id, queue, quality]);
 
@@ -3195,7 +3203,7 @@ export default function App() {
     } catch {}
   };
 
-  const play = (t, list, opts = {}) => {
+  const play = async (t, list, opts = {}) => {
     if (!t) return;
     // Trackear la playlist de origen si se pasó opts.from. Permite mostrar un
     // botón en el reproductor para volver a la playlist de donde salió la pista.
@@ -3216,8 +3224,14 @@ export default function App() {
     // Mapear preferencia de calidad de la UI al ID del backend.
     const qualityMap = { high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' };
     const qParam = qualityMap[quality] || 'high';
-    // Reconstruir URL con la calidad actual en el momento de reproducir.
-    const trackWithQuality = { ...t, url: api.streamUrl({ artist: t.artist, title: t.title, id: t.id, quality: qParam }) };
+    // URL firmada (HMAC) para el proxy — <audio> no envía Authorization.
+    let signedUrl = '';
+    try {
+      signedUrl = await api.ensureStreamUrl({ artist: t.artist, title: t.title, id: t.id, quality: qParam });
+    } catch {
+      signedUrl = '';
+    }
+    const trackWithQuality = { ...t, url: signedUrl || api.streamUrl({ artist: t.artist, title: t.title, id: t.id, quality: qParam }) };
     setTrack(trackWithQuality); setPlaying(true); setLoadingAudio(true);
     // Fuente: archivo offline si existe, si no el stream del backend.
     if (objUrlRef.current) { URL.revokeObjectURL(objUrlRef.current); objUrlRef.current = null; }
@@ -3227,6 +3241,10 @@ export default function App() {
       // Backend caído y pista no descargada → no intentar streaming.
       setPlaySrc(''); setLoadingAudio(false); setPlaying(false);
       showToast('Sin conexión: esta canción no está descargada');
+      return;
+    } else if (!signedUrl) {
+      setPlaySrc(''); setLoadingAudio(false); setPlaying(false);
+      showToast('No se pudo autorizar el stream. Inicia sesión de nuevo.');
       return;
     } else { setPlaySrc(trackWithQuality.url); }
     setRecent(r => [t.id, ...r.filter(x => x !== t.id)].slice(0, 30));
@@ -3305,9 +3323,8 @@ export default function App() {
   };
 
   // ── Descargas offline (IndexedDB, sin diálogo de guardado) ──
-  // URL de streaming con la calidad actual: coincide con la clave de caché que
-  // usan reproducir/precargar, así una canción ya resuelta se descarga al instante.
-  const streamUrlQ = (t) => api.streamUrl({ artist: t.artist, title: t.title, id: t.id, quality: ({ high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' }[quality] || 'high') });
+  // URL firmada con la calidad actual (misma firma/caché que play/prefetch).
+  const streamUrlQ = async (t) => api.ensureStreamUrl({ artist: t.artist, title: t.title, id: t.id, quality: ({ high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' }[quality] || 'high') });
   const fetchBlobWithTimeout = async (url, ms = 90000) => {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), ms);
@@ -3320,10 +3337,15 @@ export default function App() {
   // Descarga resiliente: reintenta una vez con re-resolución fresca (la resolución
   // en frío de yt-dlp puede tardar/fallar la primera vez).
   const fetchTrackBlob = async (tk) => {
-    try { return await fetchBlobWithTimeout(streamUrlQ(tk), 90000); }
-    catch (e) {
+    try {
+      const url = await streamUrlQ(tk);
+      return await fetchBlobWithTimeout(url, 90000);
+    } catch (e) {
       await new Promise(r => setTimeout(r, 1500));
-      return await fetchBlobWithTimeout(streamUrlQ(tk) + '&_r=' + Date.now(), 90000);
+      // Nueva firma (caché invalidada por reintento con re-sign).
+      api._streamSignCache?.clear?.();
+      const url = await streamUrlQ(tk);
+      return await fetchBlobWithTimeout(url + (url.includes('?') ? '&' : '?') + '_r=' + Date.now(), 90000);
     }
   };
   const download = async (tk) => {
@@ -3905,13 +3927,14 @@ export default function App() {
       setLoadingAudio(true);
       const delays = [1500, 3000, 5000, 8000, 12000, 16000];
       const delay = delays[Math.min(attempt - 1, delays.length - 1)];
-      setTimeout(() => {
+      setTimeout(async () => {
         if (!audioRef.current || trackRef.current?.id !== cur) return;
         try {
           const q = ({ high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' }[quality] || 'high');
-          const base = api.streamUrl({ artist: track.artist, title: track.title, id: track.id, quality: q });
-          // Primeros 2 intentos: URL normal (backend ya resolvió → caché).
-          // Últimos 2: cache-bust para forzar re-resolución fresca.
+          if (attempt > 2) api._streamSignCache?.clear?.();
+          const base = await api.ensureStreamUrl({ artist: track.artist, title: track.title, id: track.id, quality: q });
+          // Primeros intentos: URL firmada (backend/caché).
+          // Últimos: cache-bust de query (la firma sigue válida; solo fuerza re-fetch red).
           audioRef.current.src = attempt > 2 ? (base + '&_r=' + Date.now()) : base;
           audioRef.current.load();
           const p = audioRef.current.play(); if (p && p.catch) p.catch(() => {});

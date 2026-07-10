@@ -89,16 +89,24 @@ git push -u origin feature/mi-cambio
   ```
 - Verificar tras reiniciar: `GET /api/status` → `{"status":"operational"}`.
 
-## 7. Variables de entorno de producción (guardián)
+## 7. Variables de entorno de producción
 
-Definidas en `scripts/velocity-guardian.ps1`:
+**Fuente única de secretos:** archivo `.env` en la raíz del proyecto (gitignored).
 
-- `JWT_SECRET` — secreto largo aleatorio (obligatorio).
-- `ADMIN_KEY` — clave del panel admin (≥8 chars; sin ella el panel se deshabilita).
-- `GOOGLE_CLIENT_ID` — OAuth de Google.
-- `USE_POSTGRES=1`, `DATABASE_URL`, `CLUSTER=1`.
+1. Copia `.env.example` → `.env` y rellena valores reales.
+2. `scripts/velocity-guardian.ps1` **carga** `.env` y arranca el cluster; **no** contiene secretos hardcodeados.
+3. `server.js` / `cluster.js` también llaman a `loadEnv` (útil sin guardián).
 
-Nunca se commitean valores reales de secretos fuera del guardián local.
+Variables críticas:
+
+- `JWT_SECRET` — secreto largo aleatorio (JWT + firma HMAC de stream). Obligatorio.
+- `ADMIN_KEY` — panel admin y `POST /api/setup/extractor/install` en prod (≥8 chars).
+- `DATABASE_URL` — Postgres (obligatorio con `USE_POSTGRES=1`).
+- `GOOGLE_CLIENT_ID`, `ALLOWED_ORIGIN`, `CLUSTER=1`, `NODE_ENV=production`.
+
+**Nunca** commitear `.env` ni pegar secretos en el guardián, scripts o commits.
+
+**Rotación:** al cambiar `JWT_SECRET` todos los tokens y firmas de stream quedan inválidos → re-login.
 
 ## 8. Rollback
 

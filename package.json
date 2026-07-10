@@ -26,7 +26,7 @@
     "express": "^4.19.2",
     "express-rate-limit": "^8.5.2",
     "jsonwebtoken": "^9.0.2",
-    "nodemailer": "^6.9.16",
+    "nodemailer": "^9.0.3",
     "pg": "^8.12.0",
     "ytmusic-api": "^5.3.1"
   },

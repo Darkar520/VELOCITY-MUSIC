@@ -58,6 +58,10 @@ La reproducción NUNCA debe cortarse. Invariantes:
   nodos que puedan degradar/interferir el audio.
 - El **proxy de streaming** (`/api/stream-proxy`) NO pasa por gzip ni por rate
   limiting (rompería Range/playback). Ver §6.
+- **Firma HMAC obligatoria** en `/api/stream-proxy` (`exp` + `sig`). El
+  `<audio>` no envía Bearer; el cliente obtiene la firma vía
+  `GET /api/stream-sign` (JWT) → `api.ensureStreamUrl()`. Sin firma → 401.
+- **`/api/resolve` requiere JWT** (prefetch/warm-up). Sin token → 401.
 
 ## 4. Carátulas
 
@@ -100,7 +104,9 @@ La reproducción NUNCA debe cortarse. Invariantes:
 - **gzip** solo para texto (JSON/HTML/JS/CSS); excluye `/api/stream-proxy` y
   `/img`.
 - **Rate limiting** por IP en endpoints costosos (`/api/auth`, search, resolve,
-  radio, artist, album, lyrics). NUNCA en el streaming.
+  radio, artist, album, lyrics, stream-sign). NUNCA en el body del streaming.
+- **`POST /api/setup/extractor/install`**: en `NODE_ENV=production` exige
+  `ADMIN_KEY` (header `X-Admin-Key`). Sin ella → 401/503.
 - **Resolución yt-dlp:** limitador de concurrencia (`RESOLVE_CONCURRENCY`, def.
   4) + deduplicación en vuelo (mismas peticiones simultáneas = 1 sola).
 - **StreamCache** persistente en disco (`data/stream-cache.json`), TTL ~4h,

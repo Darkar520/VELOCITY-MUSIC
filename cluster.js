@@ -13,6 +13,12 @@
 // ═══════════════════════════════════════════════════════════════
 import cluster from 'node:cluster';
 import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { loadEnv } from './src/lib/loadEnv.js';
+
+// Cargar .env antes de decidir cluster/PG (no pisa vars ya definidas).
+loadEnv(path.dirname(fileURLToPath(import.meta.url)));
 
 const wantCluster = process.env.CLUSTER === '1' || Number(process.env.WEB_CONCURRENCY) > 1;
 const usePg = process.env.USE_POSTGRES === '1';

@@ -55,7 +55,7 @@ export const api = {
   async searchAll(q, signal) {
     return jsonOrThrow(await fetch(`/api/search/all?q=${encodeURIComponent(q)}`, { signal, headers: authHeaders() }));
   },
-  // URL de streaming (proxy que resuelve con yt-dlp). Se usa como src del <audio>.
+  // URL base del proxy (sin firma). Preferir ensureStreamUrl para <audio>/descargas.
   // quality: 'high' | 'medium' | 'low' (mapeado desde la preferencia del usuario)
   // stream: URL directa (opcional, para SoundCloud/fuentes sin resolución).
   streamUrl({ artist, title, id, quality, stream }) {
@@ -66,6 +66,53 @@ export const api = {
     if (quality) params.set('quality', quality);
     if (stream) params.set('stream', stream);  // URL directa: no requiere yt-dlp
     return `/api/stream-proxy?${params.toString()}`;
+  },
+  // Ensambla URL firmada a partir de exp/sig del backend (puro, sin red).
+  buildSignedStreamUrl({ artist, title, id, quality, stream, exp, sig }) {
+    const params = new URLSearchParams();
+    if (artist) params.set('artist', artist);
+    if (title) params.set('title', title);
+    if (id) params.set('id', id);
+    if (quality) params.set('quality', quality);
+    if (stream) params.set('stream', stream);
+    params.set('exp', String(exp));
+    params.set('sig', String(sig));
+    return `/api/stream-proxy?${params.toString()}`;
+  },
+  // Caché de firmas (clave por pista/calidad). Margen 60s antes de exp.
+  _streamSignCache: new Map(),
+  _streamSignKey({ artist, title, id, quality, stream }) {
+    return [artist || '', title || '', id || '', quality || '', stream || ''].join('\0');
+  },
+  // Obtiene URL firmada lista para <audio src> o fetch de blob.
+  // Requiere JWT (Bearer). Reutiliza firma en caché si queda >60s de vida.
+  async ensureStreamUrl({ artist, title, id, quality, stream }) {
+    const key = this._streamSignKey({ artist, title, id, quality, stream });
+    const now = Math.floor(Date.now() / 1000);
+    const hit = this._streamSignCache.get(key);
+    if (hit && hit.exp - now > 60) return hit.url;
+
+    const params = new URLSearchParams();
+    if (artist) params.set('artist', artist);
+    if (title) params.set('title', title);
+    if (id) params.set('id', id);
+    if (quality) params.set('quality', quality);
+    if (stream) params.set('stream', stream);
+    const data = await jsonOrThrow(
+      await fetch(`/api/stream-sign?${params.toString()}`, { headers: authHeaders() }),
+    );
+    const url = this.buildSignedStreamUrl({
+      artist, title, id, quality, stream,
+      exp: data.exp,
+      sig: data.sig,
+    });
+    this._streamSignCache.set(key, { exp: Number(data.exp), url });
+    // Evitar crecimiento ilimitado de la caché.
+    if (this._streamSignCache.size > 200) {
+      const oldest = this._streamSignCache.keys().next().value;
+      this._streamSignCache.delete(oldest);
+    }
+    return url;
   },
   // Precarga (warm-up) de la resolución de una pista en la caché del backend.
   // No descarga audio: solo fuerza a que yt-dlp resuelva la URL y quede cacheada,
@@ -78,7 +125,11 @@ export const api = {
     if (quality) params.set('quality', quality);
     // redirect:'manual' → no seguimos el 302 (no descargamos el audio),
     // solo disparamos la resolución que llena el StreamCache del backend.
-    return fetch(`/api/resolve?${params.toString()}`, { redirect: 'manual' }).catch(() => {});
+    // Requiere JWT (resolve está protegido).
+    return fetch(`/api/resolve?${params.toString()}`, {
+      redirect: 'manual',
+      headers: authHeaders(),
+    }).catch(() => {});
   },
   async lyrics({ artist, title, album, duration, id, sync }, signal) {
     const params = new URLSearchParams({ artist, title });

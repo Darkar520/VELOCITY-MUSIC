@@ -353,6 +353,17 @@ test('Frontend api: streamUrl genera URL correcta para pistas de YouTube', () =>
   assert.ok(!url.includes('stream='), 'YouTube no debe tener param stream');
 });
 
+test('Frontend api: buildSignedStreamUrl incluye exp y sig', () => {
+  const url = api.buildSignedStreamUrl({
+    artist: 'A', title: 'B', id: 'x', quality: 'high',
+    exp: 1700000000, sig: 'abcSIG',
+  });
+  assert.ok(url.startsWith('/api/stream-proxy?'));
+  assert.ok(url.includes('exp=1700000000'));
+  assert.ok(url.includes('sig=abcSIG'));
+  assert.ok(url.includes('artist=A'));
+});
+
 test('Frontend api: streamUrl incluye param stream para pistas de SoundCloud', () => {
   const scUrl = 'https://api.soundcloud.com/tracks/123/stream';
   const url = api.streamUrl({

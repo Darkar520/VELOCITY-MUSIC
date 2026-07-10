@@ -23,6 +23,7 @@ import {
   createStreamProxyHandler,
   validateProxyParams,
 } from '../src/services/streamProxy.js';
+import { signStreamParams } from '../src/lib/streamSign.js';
 import {
   createMemoryUserRepo,
   createMemoryPlaylistRepo,
@@ -32,6 +33,12 @@ import {
 } from '../src/repositories/memory.js';
 
 const RUNS = { numRuns: 60 };
+const JWT_SECRET = 'test-secret';
+
+function signedQuery(params) {
+  const { exp, sig } = signStreamParams(params, JWT_SECRET);
+  return { ...params, exp, sig };
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -393,9 +400,16 @@ test('Regresión: cabeceras de seguridad presentes en /api/search (no solo /stat
 // ─────────────────────────────────────────────────────────────────────────────
 test('Regresión: /api/stream-proxy no tiene Content-Encoding: gzip', async () => {
   const app = buildApp();
-  const res = await request(app)
+  // Sin firma → 401; con firma también no debe comprimir. Ambas rutas sin gzip.
+  const unsigned = await request(app)
     .get('/api/stream-proxy')
     .query({ artist: 'A', title: 'B' })
+    .set('Accept-Encoding', 'gzip');
+  assert.notEqual(unsigned.headers['content-encoding'], 'gzip');
+
+  const res = await request(app)
+    .get('/api/stream-proxy')
+    .query(signedQuery({ artist: 'A', title: 'B' }))
     .set('Accept-Encoding', 'gzip');
   // El proxy puede responder con cualquier código, pero NUNCA debe comprimir.
   assert.notEqual(res.headers['content-encoding'], 'gzip');

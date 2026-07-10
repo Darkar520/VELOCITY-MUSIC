@@ -16,6 +16,7 @@ import { createAuthService, AuthError } from './services/authService.js';
 import { sendWelcomeEmail } from './services/mailer.js';
 import { createRequireAuth } from './middleware/requireAuth.js';
 import { checkAdminKey } from './middleware/adminAuth.js';
+import { signStreamParams, verifyStreamParams } from './lib/streamSign.js';
 import { createPlaylistService, PlaylistError } from './services/playlistService.js';
 import { createFavoritesService, FavoritesError } from './services/favoritesService.js';
 import { createHistoryService, HistoryError } from './services/historyService.js';
@@ -234,7 +235,9 @@ export function createApp(deps = {}) {
     } catch { return res.status(502).end(); }
   });
 
-  const authService = userRepo ? createAuthService({ userRepo, jwtSecret }) : null;
+  // Secreto compartido: JWT + firma HMAC de stream (mismo valor, propósitos distintos).
+  const streamSecret = jwtSecret || process.env.JWT_SECRET || 'dev-secret-change-me';
+  const authService = userRepo ? createAuthService({ userRepo, jwtSecret: streamSecret }) : null;
   const requireAuth = authService ? createRequireAuth(authService, userRepo, revocationService) : null;
   // Auth opcional: devuelve el userId si hay un token válido, si no null (sin bloquear).
   const optionalUserId = (req) => {
@@ -487,8 +490,8 @@ export function createApp(deps = {}) {
     }
   });
 
-  // ---- Resolución de audio ----
-  app.get('/api/resolve', async (req, res) => {
+  // ---- Resolución de audio (requiere JWT: fetch del cliente, no <audio>) ----
+  const resolveHandler = async (req, res) => {
     const mode = getActiveMode();
     const stream = String(req.query.stream || '').trim() || undefined;
     const videoId = String(req.query.id || '').trim() || undefined;
@@ -514,13 +517,46 @@ export function createApp(deps = {}) {
       if (err instanceof ResolveError) return res.status(err.status).json({ error: err.message });
       return res.status(502).json({ error: 'No se pudo resolver el audio.' });
     }
-  });
+  };
+  if (requireAuth) {
+    app.get('/api/resolve', requireAuth, resolveHandler);
+  } else {
+    // Sin userRepo (tests mínimos / modo sin auth): resolve cerrado por seguridad.
+    app.get('/api/resolve', (_req, res) => res.status(503).json({ error: 'Auth no configurada.' }));
+  }
 
-  // ---- Proxy de streaming ----
-  app.get(
-    '/api/stream-proxy',
-    createStreamProxyHandler({ resolveUrl: (params, opts) => doResolve(params, opts), timeoutMs: 85000 }),
-  );
+  // ---- Firma de URL de stream (JWT → exp+sig para <audio src>) ----
+  // El elemento media no envía Authorization; el cliente pide firma y monta la URL.
+  if (requireAuth) {
+    app.get('/api/stream-sign', requireAuth, apiLimiter, (req, res) => {
+      const artist = String(req.query.artist || '').trim();
+      const title = String(req.query.title || '').trim();
+      if (!artist || !title) {
+        return res.status(400).json({ error: 'Se requieren artist y title.' });
+      }
+      const params = {
+        artist,
+        title,
+        id: String(req.query.id || '').trim() || undefined,
+        quality: String(req.query.quality || '').trim() || undefined,
+        stream: String(req.query.stream || '').trim() || undefined,
+      };
+      const { exp, sig } = signStreamParams(params, streamSecret);
+      return res.json({ exp, sig });
+    });
+  }
+
+  // ---- Proxy de streaming (firma HMAC en query; NO rate-limit; NO gzip) ----
+  const streamProxyHandler = createStreamProxyHandler({
+    resolveUrl: (params, opts) => doResolve(params, opts),
+    timeoutMs: 85000,
+  });
+  app.get('/api/stream-proxy', (req, res, next) => {
+    if (!verifyStreamParams(req.query, streamSecret)) {
+      return res.status(401).json({ error: 'Enlace de stream inválido o caducado.' });
+    }
+    return streamProxyHandler(req, res, next);
+  });
 
   // ---- Estado ----
   app.get('/api/status', (req, res) => {
@@ -556,6 +592,15 @@ export function createApp(deps = {}) {
   });
 
   app.post('/api/setup/extractor/install', async (req, res) => {
+    // En producción: solo con ADMIN_KEY (evita que Internet instale binarios en el host).
+    if (process.env.NODE_ENV === 'production') {
+      const ADMIN_KEY_INSTALL = process.env.ADMIN_KEY || '';
+      if (ADMIN_KEY_INSTALL.length < 8) {
+        return res.status(503).json({ error: 'Instalación deshabilitada (ADMIN_KEY no configurada).' });
+      }
+      const keyCheck = checkAdminKey(req, ADMIN_KEY_INSTALL);
+      if (!keyCheck.ok) return res.status(keyCheck.status).json({ error: keyCheck.error });
+    }
     if (typeof installExtractorImpl !== 'function') {
       return res.status(501).json({ error: 'La instalación automática no está disponible.' });
     }

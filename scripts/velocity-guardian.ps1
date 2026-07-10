@@ -107,27 +107,52 @@ function Wait-Postgres {
   return $false
 }
 
+# ── Carga .env del proyecto (secretos NUNCA hardcodeados aquí) ──
+# Las variables se exportan al proceso del guardián y el hijo npm/node las hereda
+# (sin poner secretos en la línea de comandos).
+function Import-DotEnv([string]$Path) {
+  if (-not (Test-Path -LiteralPath $Path)) { return $false }
+  Get-Content -LiteralPath $Path -Encoding UTF8 | ForEach-Object {
+    $line = $_.Trim()
+    if ($line -eq '' -or $line.StartsWith('#')) { return }
+    $eq = $line.IndexOf('=')
+    if ($eq -lt 1) { return }
+    $key = $line.Substring(0, $eq).Trim()
+    if ($key -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') { return }
+    $val = $line.Substring($eq + 1).Trim()
+    if (($val.StartsWith('"') -and $val.EndsWith('"')) -or ($val.StartsWith("'") -and $val.EndsWith("'"))) {
+      $val = $val.Substring(1, $val.Length - 2)
+    }
+    # No pisar variables ya definidas en el proceso del guardián/SO.
+    $existing = [Environment]::GetEnvironmentVariable($key, 'Process')
+    if ($null -eq $existing -or $existing -eq '') {
+      [Environment]::SetEnvironmentVariable($key, $val, 'Process')
+    }
+  }
+  return $true
+}
+
 function Start-Backend {
   # No arrancar el backend si PostgreSQL no está listo
   if (-not (Test-Postgres)) {
     Log "Backend no iniciado: PostgreSQL no esta disponible"
     return
   }
-  Log "Iniciando backend (cluster mode)..."
+
+  $envFile = Join-Path $Proj '.env'
+  if (-not (Import-DotEnv $envFile)) {
+    Log "ERROR: falta archivo .env en el proyecto — backend NO arrancado. Copia .env.example a .env y rellena secretos."
+    return
+  }
+  if (-not $env:JWT_SECRET -or -not $env:DATABASE_URL) {
+    Log "ERROR: .env incompleto (JWT_SECRET y DATABASE_URL son obligatorios) — backend NO arrancado."
+    return
+  }
+
+  Log "Iniciando backend (cluster mode, secretos desde .env)..."
   ("`n===== Backend iniciado {0} =====" -f (Get-Date)) | Out-File -FilePath $BackLog -Append -Encoding utf8
-  $envVars  = 'set GOOGLE_CLIENT_ID=1096324357690-vuhqbq7vphbm54da9lbhbffv8ane18d9.apps.googleusercontent.com'
-  $envVars += '&& set USE_POSTGRES=1'
-  $envVars += '&& set DATABASE_URL=postgresql://velocity:VelocityDB2026!@localhost:5432/velocity_music'
-  $envVars += '&& set PGSSL=0'
-  $envVars += '&& set PG_MAX_POOL_SIZE=3'
-  $envVars += '&& set PG_IDLE_TIMEOUT_MS=30000'
-  $envVars += '&& set PG_CONN_TIMEOUT_MS=10000'
-  $envVars += '&& set JWT_SECRET=42861e47db4b0dcbd80a0ccdfd9690f307531ed3deed7a81a858fa4692607be8fd09f434e3e37067ddec0370fa0aa2b315c9a51e564e2bfb13d9a61aa323e555'
-  $envVars += '&& set ADMIN_KEY=2RzFDO9pI68zqIaYBMhmRaaSwU3NH6ME'
-  $envVars += '&& set CLUSTER=1'
-  $envVars += '&& set NODE_ENV=production'
-  $envVars += '&& set ALLOWED_ORIGIN=https://velocitymusic.uk'
-  $cmd = '{0}&& npm run start:cluster >> "{1}" 2>&1' -f $envVars, $BackLog
+  # El hijo hereda $env:* del guardián (sin secretos en cmdline).
+  $cmd = 'npm run start:cluster >> "{0}" 2>&1' -f $BackLog
   Start-Process -FilePath $env:ComSpec `
     -ArgumentList '/c', $cmd `
     -WorkingDirectory $Proj -WindowStyle Hidden | Out-Null

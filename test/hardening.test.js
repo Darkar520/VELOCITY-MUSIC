@@ -72,3 +72,49 @@ test('Hardening: ADMIN_KEY fuerte rechaza clave incorrecta con 401', async () =>
     if (prev !== undefined) process.env.ADMIN_KEY = prev; else delete process.env.ADMIN_KEY;
   }
 });
+
+// P0: en production, install del extractor exige ADMIN_KEY.
+test('Hardening: POST /api/setup/extractor/install en production sin key → 503/401', async () => {
+  const prevEnv = process.env.NODE_ENV;
+  const prevKey = process.env.ADMIN_KEY;
+  process.env.NODE_ENV = 'production';
+  delete process.env.ADMIN_KEY;
+  try {
+    const app = buildApp({
+      installExtractorImpl: async () => ({ installed: true }),
+    });
+    const res = await request(app).post('/api/setup/extractor/install');
+    assert.ok(res.status === 503 || res.status === 401);
+    assert.notEqual(res.status, 200);
+  } finally {
+    process.env.NODE_ENV = prevEnv;
+    if (prevKey !== undefined) process.env.ADMIN_KEY = prevKey; else delete process.env.ADMIN_KEY;
+  }
+});
+
+test('Hardening: POST /api/setup/extractor/install en production con ADMIN_KEY → 200', async () => {
+  const prevEnv = process.env.NODE_ENV;
+  const prevKey = process.env.ADMIN_KEY;
+  process.env.NODE_ENV = 'production';
+  process.env.ADMIN_KEY = 'clave-admin-test-ok';
+  try {
+    const app = buildApp({
+      installExtractorImpl: async () => ({ installed: true, path: '/tmp/yt-dlp' }),
+      setActiveMode: async () => {},
+    });
+    await request(app)
+      .post('/api/setup/extractor/install')
+      .set('X-Admin-Key', 'clave-admin-test-ok')
+      .expect(200);
+  } finally {
+    process.env.NODE_ENV = prevEnv;
+    if (prevKey !== undefined) process.env.ADMIN_KEY = prevKey; else delete process.env.ADMIN_KEY;
+  }
+});
+
+// P0: stream-proxy y resolve no son anónimos.
+test('Hardening: stream-proxy sin firma y resolve sin JWT → 401', async () => {
+  const app = buildApp();
+  await request(app).get('/api/stream-proxy').query({ artist: 'A', title: 'B' }).expect(401);
+  await request(app).get('/api/resolve').query({ artist: 'A', title: 'B' }).expect(401);
+});
