@@ -999,24 +999,150 @@ function AddToPlaylistModal({ trackId, onClose, playlists, createPlaylist, addTo
 // ═══════════════════════════════════════════════════════════════
 // IMPORT PLAYLIST MODAL
 // ═══════════════════════════════════════════════════════════════
-function ImportPlaylistModal({ onClose, onImport, T }) {
+function parseCSVLine(line) {
+  const result = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === ',' && !inQuotes) {
+      result.push(current.trim().replace(/^"|"$/g, ''));
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  result.push(current.trim().replace(/^"|"$/g, ''));
+  return result;
+}
+
+function parseTextPlaylist(text) {
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  const tracks = [];
+  let isCSV = false;
+  let titleCol = -1;
+  let artistCol = -1;
+  if (lines.length > 0) {
+    const firstLine = lines[0].toLowerCase();
+    if (firstLine.includes('track name') || firstLine.includes('artist name') || firstLine.includes('track list') || firstLine.includes('title')) {
+      isCSV = true;
+      const headers = parseCSVLine(lines[0]);
+      titleCol = headers.findIndex(h => h.includes('track name') || h.includes('title') || h.includes('nombre'));
+      artistCol = headers.findIndex(h => h.includes('artist') || h.includes('artista'));
+    }
+  }
+  const startIndex = isCSV ? 1 : 0;
+  for (let i = startIndex; i < lines.length; i++) {
+    const line = lines[i];
+    if (isCSV && titleCol !== -1 && artistCol !== -1) {
+      const cols = parseCSVLine(line);
+      const title = cols[titleCol];
+      const artist = cols[artistCol];
+      if (title) {
+        tracks.push({ title, artist: artist || 'Desconocido' });
+      }
+    } else {
+      let title = '';
+      let artist = '';
+      if (line.includes(' - ')) {
+        const parts = line.split(' - ');
+        title = parts[0].trim();
+        artist = parts.slice(1).join(' - ').trim();
+      } else if (line.includes(' by ')) {
+        const parts = line.split(' by ');
+        title = parts[0].trim();
+        artist = parts.slice(1).join(' by ').trim();
+      } else {
+        title = line;
+        artist = '';
+      }
+      if (title) {
+        tracks.push({ title, artist: artist || '' });
+      }
+    }
+  }
+  return tracks;
+}
+
+function ImportPlaylistModal({ onClose, onImport, onImportText, T }) {
+  const [tab, setTab] = useState('yt');
   const [url, setUrl] = useState('');
+  const [playlistName, setPlaylistName] = useState('');
+  const [trackList, setTrackList] = useState('');
+  
+  const bookmarkletCode = `javascript:(function(){const rows=document.querySelectorAll('[data-testid="trackrow"]');const tracks=[];rows.forEach(row=>{const titleEl=row.querySelector('[data-testid="tracklist-row-title"] div, a[href^="/track/"]');const artistEls=row.querySelectorAll('a[href^="/artist/"]');if(titleEl){const title=titleEl.textContent.trim();const artists=Array.from(artistEls).map(a=>a.textContent.trim()).join(", ");tracks.push(title+" - "+artists)}});if(tracks.length===0){alert("No se encontraron canciones. Asegúrate de estar en una playlist de Spotify en el navegador.")}else{const txt=tracks.join("\\n");const el=document.createElement("textarea");el.value=txt;document.body.appendChild(el);el.select();document.execCommand("copy");document.body.removeChild(el);alert("¡Copiadas "+tracks.length+" canciones al portapapeles! Ahora pégalas en Velocity Music.")}})();`;
+
+  const copyBookmarklet = () => {
+    navigator.clipboard.writeText(bookmarkletCode);
+    alert('Bookmarklet copiado. Arrástralo a la barra de marcadores o guárdalo como marcador.');
+  };
+
+  const handleFileChange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      setTrackList(evt.target.result);
+      if (!playlistName) {
+        setPlaylistName(file.name.replace(/\.[^/.]+$/, ''));
+      }
+    };
+    reader.readAsText(file);
+  };
+
   return (
     <>
       <div onClick={onClose} style={{ position:'fixed', inset:0, background:'#04060acc', backdropFilter:'blur(10px)', WebkitBackdropFilter:'blur(10px)', zIndex:120 }} />
       <div className="fade-up" style={{ position:'fixed', left:0, right:0, bottom:0, margin:'0 auto', width:'100%', maxWidth:460, maxHeight:'85dvh', overflowY:'auto', background:'linear-gradient(180deg, var(--surf-1), var(--surf-0))', border:'1px solid var(--line)', borderRadius:'26px 26px 0 0', padding:'10px 18px calc(env(safe-area-inset-bottom, 16px) + 18px)', zIndex:121, boxShadow:'0 -30px 80px #000d' }}>
         <div style={{ width:40, height:4, borderRadius:99, background:'var(--surf-2)', margin:'6px auto 14px' }} />
+        
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
           <div style={{ fontSize:16, fontWeight:900, color:'var(--txt-0)' }}>Importar playlist</div>
           <button aria-label="Cerrar" onClick={onClose} className="press" style={{ background:'none', border:'none', cursor:'pointer' }}><Icon.X c="var(--txt-1)" sz={20} /></button>
         </div>
-        <div style={{ fontSize:11.5, color:'var(--txt-2)', marginBottom:16 }}>Introduce una URL de playlist pública de YouTube o YouTube Music para importarla a tu biblioteca de Velocity.</div>
-        <form onSubmit={e => { e.preventDefault(); if (url.trim()) { onImport(url.trim()); } }} style={{ display:'flex', flexDirection:'column', gap:12 }}>
-          <input autoFocus type="text" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://music.youtube.com/playlist?list=..." style={{ width:'100%', background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:12, padding:'12px 14px', fontSize:13, color:'var(--txt-0)', outline:'none', fontFamily:'Inter,sans-serif' }} />
-          <button type="submit" className="btn-tap" style={{ background:grad(T), border:'none', borderRadius:14, padding:'13px 0', cursor:'pointer', color:'#04060a', fontSize:13, fontWeight:800, textAlign:'center', display:'flex', alignItems:'center', justifyContent:'center', gap:8 }}>
-            <Icon.Down c="#04060a" sz={18} /> Empezar importación
-          </button>
-        </form>
+
+        <div style={{ display:'flex', gap:6, background:'var(--surf-2)', padding:3, borderRadius:12, marginBottom:16 }}>
+          <button onClick={() => setTab('yt')} style={{ flex:1, padding:'7px 0', border:'none', borderRadius:10, background: tab === 'yt' ? 'var(--surf-0)' : 'none', color: tab === 'yt' ? 'var(--txt-0)' : 'var(--txt-2)', fontSize:11.5, fontWeight:800, cursor:'pointer' }}>YouTube URL</button>
+          <button onClick={() => setTab('text')} style={{ flex:1, padding:'7px 0', border:'none', borderRadius:10, background: tab === 'text' ? 'var(--surf-0)' : 'none', color: tab === 'text' ? 'var(--txt-0)' : 'var(--txt-2)', fontSize:11.5, fontWeight:800, cursor:'pointer' }}>Texto / Spotify / CSV</button>
+        </div>
+
+        {tab === 'yt' ? (
+          <>
+            <div style={{ fontSize:11.5, color:'var(--txt-2)', marginBottom:16 }}>Introduce una URL de playlist pública de YouTube o YouTube Music para importarla a tu biblioteca de Velocity.</div>
+            <form onSubmit={e => { e.preventDefault(); if (url.trim()) { onImport(url.trim()); } }} style={{ display:'flex', flexDirection:'column', gap:12 }}>
+              <input autoFocus type="text" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://music.youtube.com/playlist?list=..." style={{ width:'100%', background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:12, padding:'12px 14px', fontSize:13, color:'var(--txt-0)', outline:'none', fontFamily:'Inter,sans-serif' }} />
+              <button type="submit" className="btn-tap" style={{ background:grad(T), border:'none', borderRadius:14, padding:'13px 0', cursor:'pointer', color:'#04060a', fontSize:13, fontWeight:800, textAlign:'center', display:'flex', alignItems:'center', justifyContent:'center', gap:8 }}>
+                <Icon.Down c="#04060a" sz={18} /> Empezar importación
+              </button>
+            </form>
+          </>
+        ) : (
+          <>
+            <div style={{ fontSize:11.5, color:'var(--txt-2)', marginBottom:14, lineHeight:1.5 }}>
+              Para playlists de Spotify (públicas o privadas), puedes usar <b>Exportify</b> (exportify.net) para bajar un CSV, arrastrar el archivo o usar el bookmarklet para copiar los temas.
+            </div>
+            
+            <div style={{ display:'flex', gap:8, marginBottom:16 }}>
+              <button onClick={copyBookmarklet} className="press" style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', gap:6, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:10, padding:'8px 0', cursor:'pointer', color:T.accent, fontSize:11, fontWeight:700 }}>
+                <Icon.List c={T.accent} sz={14} /> Bookmarklet Spotify
+              </button>
+              <label className="press" style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', gap:6, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:10, padding:'8px 0', cursor:'pointer', color:'var(--txt-1)', fontSize:11, fontWeight:700 }}>
+                <Icon.Down c="var(--txt-1)" sz={14} /> Cargar .csv
+                <input type="file" accept=".csv" onChange={handleFileChange} style={{ display:'none' }} />
+              </label>
+            </div>
+
+            <form onSubmit={e => { e.preventDefault(); if (playlistName.trim() && trackList.trim()) { onImportText(playlistName.trim(), trackList.trim()); } }} style={{ display:'flex', flexDirection:'column', gap:12 }}>
+              <input type="text" value={playlistName} onChange={e => setPlaylistName(e.target.value)} placeholder="Nombre de la nueva playlist" style={{ width:'100%', background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:12, padding:'11px 14px', fontSize:13, color:'var(--txt-0)', outline:'none', fontFamily:'Inter,sans-serif' }} required />
+              <textarea value={trackList} onChange={e => setTrackList(e.target.value)} placeholder="Pega el CSV de Exportify o una lista de canciones en formato:&#10;Canción 1 - Artista&#10;Canción 2 - Artista" style={{ width:'100%', height:120, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:12, padding:'11px 14px', fontSize:12, color:'var(--txt-0)', outline:'none', resize:'none', fontFamily:'monospace' }} required />
+              <button type="submit" className="btn-tap" style={{ background:grad(T), border:'none', borderRadius:14, padding:'13px 0', cursor:'pointer', color:'#04060a', fontSize:13, fontWeight:800, textAlign:'center', display:'flex', alignItems:'center', justifyContent:'center', gap:8 }}>
+                <Icon.Down c="#04060a" sz={18} /> Reconstruir e importar
+              </button>
+            </form>
+          </>
+        )}
       </div>
     </>
   );
@@ -2037,6 +2163,82 @@ export default function App() {
       }
 
       setImportJob(prev => ({ ...prev, busy: false }));
+      showToast('Playlist importada con éxito');
+    } catch (e) {
+      console.error(e);
+      setImportJob({ busy: false, error: e.message || 'Error al conectar' });
+      showToast('Error al importar la playlist');
+    }
+  };
+
+  const startImportText = async (playlistName, trackList) => {
+    if (importJob && importJob.busy) return;
+    const parsedTracks = parseTextPlaylist(trackList);
+    if (!parsedTracks.length) {
+      showToast('No se encontraron canciones para importar.');
+      return;
+    }
+    setImportJob({ busy: true, current: 0, total: parsedTracks.length, progress: 0, name: playlistName || 'Playlist importada', playlistId: null, error: null });
+    setShowImport(false);
+    try {
+      const name = playlistName.trim() || 'Playlist importada';
+      const playlistId = await api.createPlaylist(name);
+      if (!playlistId) {
+        throw new Error('No se pudo crear la playlist.');
+      }
+      setImportJob(prev => ({ ...prev, playlistId }));
+
+      for (let i = 0; i < parsedTracks.length; i++) {
+        const item = parsedTracks[i];
+        setImportJob(prev => {
+          if (!prev) return null;
+          const current = i;
+          const progress = Math.round((current / parsedTracks.length) * 100);
+          return { 
+            ...prev, 
+            current, 
+            progress,
+            statusText: `Buscando "${item.title} - ${item.artist}"...`
+          };
+        });
+
+        try {
+          const searchQuery = `${item.title} ${item.artist}`.trim();
+          const results = await api.search(searchQuery);
+          if (results && results.length > 0) {
+            const matchedRaw = results[0];
+            const normalized = normalizeTrack(matchedRaw);
+            saveMeta();
+            await api.saveTracks([normalized]);
+            await api.addToPlaylist(playlistId, normalized.id);
+          }
+        } catch (e) {
+          console.error('Error buscando/agregando canción:', item, e);
+        }
+
+        setImportJob(prev => {
+          if (!prev) return null;
+          const current = i + 1;
+          const progress = Math.round((current / parsedTracks.length) * 100);
+          return { 
+            ...prev, 
+            current, 
+            progress,
+            statusText: `Completado ${current}/${parsedTracks.length}`
+          };
+        });
+      }
+
+      const pls = await api.playlists().catch(() => null);
+      if (pls) {
+        const withTracks = await Promise.all(pls.map(async p => {
+          const ids = await api.playlistTracks(p.id).catch(() => []);
+          return { id: p.id, name: p.name, trackIds: ids };
+        }));
+        setPlaylists(withTracks);
+      }
+
+      setImportJob(prev => ({ ...prev, busy: false, statusText: null }));
       showToast('Playlist importada con éxito');
     } catch (e) {
       console.error(e);
@@ -3515,7 +3717,7 @@ export default function App() {
     onboardPrefs, setOnboardPrefs, GENRES: ONBOARDING_GENRES,
     backendDown,
     playingFrom, goToPlayingPlaylist,
-    showImport, setShowImport, importJob, setImportJob, startImport,
+    showImport, setShowImport, importJob, setImportJob, startImport, startImportText,
   };
 
   const playerProps = { track, playing, togglePlay, next, prev, time, dur, seek, vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved: track ? favs.includes(track.id) : false, toggleFav, T, loadingAudio, nextCover, prevCover };
@@ -3667,7 +3869,7 @@ export default function App() {
       <button aria-label="Después" onClick={() => setUpdateReady(false)} className="press" style={{ flexShrink:0, background:'#04060a22', border:'none', borderRadius:'50%', width:28, height:28, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}><Icon.X c="#04060a" sz={14} /></button>
     </div>
   ) : null;
-  const importModal = showImport ? <ImportPlaylistModal onClose={() => setShowImport(false)} onImport={startImport} T={T} /> : null;
+  const importModal = showImport ? <ImportPlaylistModal onClose={() => setShowImport(false)} onImport={startImport} onImportText={startImportText} T={T} /> : null;
   const importBanner = <ImportBanner job={importJob} T={T} />;
   const importResultModal = importJob && !importJob.busy ? <ImportResultModal job={importJob} onClose={() => setImportJob(null)} onGoToPlaylist={openImportedPlaylist} T={T} /> : null;
 
