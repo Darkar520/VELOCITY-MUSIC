@@ -1239,7 +1239,7 @@ function ImportPlaylistModal({ onClose, onImport, onImportText, T }) {
               <input type="text" value={spotifyClientId} onChange={e => setSpotifyClientId(e.target.value)} placeholder="Pega aquí tu Spotify Client ID" style={{ width:'100%', background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:12, padding:'11px 14px', fontSize:13, color:'var(--txt-0)', outline:'none', fontFamily:'Inter,sans-serif' }} />
               
               <button onClick={connectSpotify} className="btn-tap" style={{ background:grad(T), border:'none', borderRadius:14, padding:'13px 0', cursor:'pointer', color:'#04060a', fontSize:13, fontWeight:800, textAlign:'center', display:'flex', alignItems:'center', justifyContent:'center', gap:8, opacity: spotifyClientId.trim()?1:.6 }} disabled={!spotifyClientId.trim()}>
-                <Icon.Wifi c="#04060a" sz={18} /> Guardar y Conectar
+                <Icon.Check c="#04060a" sz={18} /> Guardar y Conectar
               </button>
             </div>
           ) : (
