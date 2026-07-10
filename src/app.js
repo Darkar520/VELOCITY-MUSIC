@@ -619,7 +619,12 @@ export function createApp(deps = {}) {
 
   // ---- Configuración pública de auth (la consume el frontend) ----
   app.get('/api/auth/config', (req, res) => {
-    res.json({ googleClientId: process.env.GOOGLE_CLIENT_ID || '' });
+    res.json({
+      googleClientId: process.env.GOOGLE_CLIENT_ID || '',
+      // Client ID de Spotify (público en apps OAuth Implicit/PKCE). Sin secret.
+      // El operador lo configura UNA vez en .env; el usuario final solo pega el enlace.
+      spotifyClientId: process.env.SPOTIFY_CLIENT_ID || '',
+    });
   });
 
   // ---- Autenticación ----
