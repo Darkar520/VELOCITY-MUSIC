@@ -18,6 +18,7 @@ import { api } from '../api.js';
 import { dedupeByTitle, capPerArtist, slimTrack } from '../helpers.js';
 import { SEED_ROWS, DISCOVERY, GENRES, MOODS } from '../constants.js';
 import { trackById, normalizeTrack } from '../catalog.js';
+import { shouldSkipFeedRegen } from '../feed/feedSig.js';
 import { useLibraryStore } from '../store/libraryStore.js';
 import { usePlayerStore } from '../store/playerStore.js';
 
@@ -47,7 +48,8 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
   // Suscripción a favs y recent (lecturas finas para no re-renderizar App)
   const favs = useLibraryStore((s) => s.favs);
   const recent = useLibraryStore((s) => s.recent);
-  const homeRows = useLibraryStore((s) => s.homeRows);
+  // NO suscribir homeRows en deps del efecto: cada pushSection cambia length y
+  // re-disparaba el efecto → cancelaba tras "Hecho para ti" y congelaba el feed.
 
   useEffect(() => {
     if (!authed) return;
@@ -68,8 +70,8 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
     const prefsSig = Array.isArray(onboardPrefs) ? onboardPrefs.map(p => p.q).join(',') : '';
     const timeSlot = Math.floor(Date.now() / (6 * 3600 * 1000));
     const sig = seeds.map(s => s.id).join('|') + '::' + topSearches.join('|') + '::' + prefsSig + '#' + feedNonce + '@' + timeSlot;
-    if (feedSigRef.current && sig === feedSigRef.current && homeRows.length) return;
-    feedSigRef.current = sig;
+    // Solo saltar si ESTA firma ya terminó completa (no al empezar).
+    if (shouldSkipFeedRegen({ completedSig: feedSigRef.current, nextSig: sig })) return;
     const myToken = ++feedTokenRef.current;
     const alive = () => myToken === feedTokenRef.current;
     setHomeLoading(true);
@@ -165,30 +167,34 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
           } catch {}
         }
         { const disc = await buildDiscovery(seeds.length ? seeds : freshSeeds, 'Descubrimiento para ti'); if (disc) pushSection('Descubrimiento para ti', [disc]); }
+        if (prefs.length) pushSection('Tus géneros', clean(await Promise.all(prefs.slice(0, 10).map(p => mixFromSearch(p.label, p.q)))));
+        for (const p of pick(prefs, 3)) { if (!alive()) break; pushSection('Lo mejor de ' + p.label, await genreCards(p.q, 4)); }
+        pushSection('Estados de ánimo', clean(await Promise.all(pick(MOODS, 8).map(m => mixFromSearch('Mix ' + m.label, m.q)))));
         pushSection('Tendencias ahora', clean(await Promise.all(pick(SEED_ROWS, 6).map(s => mixFromSearch(s.label, s.q)))));
-      } else {
+      } else if (prefs.length) {
         const baseTracks = [];
-        if (prefs.length) {
-          try {
-            const resolved = await Promise.all(prefs.map(async (p) => { try { const raw = await api.search(p.q); return raw.map(normalizeTrack).find(t => t.id) || null; } catch { return null; } }));
-            baseTracks.push(...resolved.filter(Boolean));
-          } catch {}
-        }
+        try {
+          const resolved = await Promise.all(prefs.map(async (p) => { try { const raw = await api.search(p.q); return raw.map(normalizeTrack).find(t => t.id) || null; } catch { return null; } }));
+          baseTracks.push(...resolved.filter(Boolean));
+        } catch {}
         pushSection('Basado en tus gustos', clean(await Promise.all(prefs.map(p => mixFromSearch(p.label, p.q)))));
         for (const p of pick(prefs, 6)) { if (!alive()) break; pushSection('Lo mejor de ' + p.label, await genreCards(p.q, 4)); }
         { const disc = await buildDiscovery(baseTracks, 'Descubre para ti'); if (disc) pushSection('Descubre para ti', [disc]); }
         pushSection('Estados de ánimo', clean(await Promise.all(pick(MOODS, 8).map(m => mixFromSearch('Mix ' + m.label, m.q)))));
         pushSection('Tendencias ahora', clean(await Promise.all(pick(SEED_ROWS, 6).map(s => mixFromSearch(s.label, s.q)))));
-      }
-      if (!hasHistory && !prefs.length) {
+      } else {
         pushSection('Éxitos del momento', clean(await Promise.all(pick(SEED_ROWS, 6).map(s => mixFromSearch(s.label, s.q)))));
         pushSection('Explora géneros', clean(await Promise.all(pick(GENRES, 8).map(g => mixFromSearch(g.label, g.q)))));
         pushSection('Estados de ánimo', clean(await Promise.all(pick(MOODS, 8).map(m => mixFromSearch('Mix ' + m.label, m.q)))));
         pushSection('Para descubrir', clean(await Promise.all(pick(DISCOVERY, 6).map(d => mixFromSearch(d.label, d.q)))));
       }
-      if (alive()) setHomeLoading(false);
+      // Firma solo al completar: un feed a medias no bloquea la regeneración.
+      if (alive()) {
+        feedSigRef.current = sig;
+        setHomeLoading(false);
+      }
     })();
-  }, [authed, libReady, recent, favs, recentSearches, onboardPrefs, feedNonce, homeRows.length, setHomeRows, setHomeLoading, setFeedNonce]);
+  }, [authed, libReady, recent, favs, recentSearches, onboardPrefs, feedNonce, setHomeRows, setHomeLoading, setFeedNonce]);
 
   // Refresco dinámico del feed al volver tras un rato.
   useEffect(() => {

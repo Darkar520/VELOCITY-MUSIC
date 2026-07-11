@@ -69,7 +69,8 @@ export function saveMeta() {
 
 // Invalidación de caché: si subimos la versión, descartamos metadata/feed viejos
 // (p.ej. pistas de radio cacheadas sin carátula por un bug previo) una sola vez.
-const CACHE_VERSION = '8';
+// v9: invalida homeRows parciales (solo "Hecho para ti") del bug de firma del feed.
+const CACHE_VERSION = '9';
 try {
   if (localStorage.getItem('velocity.cacheVer') !== CACHE_VERSION) {
     localStorage.removeItem('velocity.meta');

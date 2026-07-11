@@ -770,6 +770,7 @@ export default function App() {
   // (antes había un useEffect acá que llamaba persistLibCache — eliminado por duplicación)
 
   // ── Feed personalizado: extraído a useHomeFeed (reduce ~190 líneas) ──
+  // libReadyRef se pasa como booleano en cada render (App re-renderiza al hidratar lib).
   useHomeFeed({ authed, libReady: libReadyRef.current, downloaded, recentSearches, onboardPrefs });
 
   // ── Reanudar descargas pendientes al volver a la app ──
