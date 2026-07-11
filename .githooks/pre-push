@@ -4,7 +4,7 @@
 #
 # Corre los tests (rápidos, sin red). El build completo se valida en CI.
 echo "[pre-push] Corriendo tests antes de pushear..."
-node --test
+node --test test/*.test.js
 if [ $? -ne 0 ]; then
   echo ""
   echo "X Tests fallaron. Push cancelado. Corrige antes de promocionar."
