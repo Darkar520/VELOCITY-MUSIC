@@ -132,6 +132,12 @@ test('extracted UI modules import runtime symbols they reference', () => {
     ['tabs/DetailView.jsx', [
       [/FALLBACK_COVER/, /import\s*\{[^}]*FALLBACK_COVER[^}]*\}\s*from\s*['"]\.\.\/constants\.js['"]/],
     ]],
+    ['tabs/HomeTab.jsx', [
+      [/<Avatar\b/, /import\s*\{[^}]*\bAvatar\b[^}]*\}\s*from\s*['"]\.\.\/avatars\.jsx['"]/],
+    ]],
+    ['modals/Toast.jsx', [
+      [/<Icon\./, /import\s*\{[^}]*\bIcon\b[^}]*\}\s*from\s*['"]\.\.\/Icons\.jsx['"]/],
+    ]],
   ];
   for (const [rel, pairs] of required) {
     const body = readFileSync(src(...rel.split('/')), 'utf8');

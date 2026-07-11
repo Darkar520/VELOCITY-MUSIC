@@ -4,6 +4,7 @@ import { fmt, hex2rgba, grad, hiResCover, dedupeByTitle, capPerArtist, slimTrack
 import { Icon } from '../Icons.jsx';
 import { EQViz, Spinner, ProgressRing, DownloadAllButton, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider, SettingCard, ToggleRow, ColorField } from '../components.jsx';
 import { cacheTrack, cacheTracks, trackById, allCached, loadMeta, loadPlayerState, saveMeta, normalizeTrack } from '../catalog.js';
+import { Avatar } from '../avatars.jsx';
 
 export function HomeTab({ ctx }) {
   const { track, playing, play, T, favs, toggleFav, recent, playlists, downloaded, onMenu, goMix, homeRows, homeLoading, displayName, avatar, email, setTab, startAiDj, onboardPrefs, setOnboardPrefs, backendDown, GENRES: GENRES_LIST } = ctx;
