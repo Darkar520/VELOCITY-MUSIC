@@ -1,13 +1,27 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { CSS, THEMES, SEED_ROWS, LATIN_ROWS, DISCOVERY, GENRES, ONBOARDING_GENRES, MOODS, ERAS, FALLBACK_COVER, BASE_VARS } from '../constants.js';
-import { fmt, hex2rgba, grad, hiResCover, dedupeByTitle, capPerArtist, slimTrack, parseLRC, lyricsOverlapRatio, plainFromSyncedLines, tintedVars } from '../helpers.js';
+import React, { useState } from 'react';
+import { SEED_ROWS, LATIN_ROWS, DISCOVERY, GENRES, ONBOARDING_GENRES, MOODS, ERAS, FALLBACK_COVER } from '../constants.js';
+import { hex2rgba, grad, hiResCover, dedupeByTitle } from '../helpers.js';
 import { Icon } from '../Icons.jsx';
-import { EQViz, Spinner, ProgressRing, DownloadAllButton, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider, SettingCard, ToggleRow, ColorField } from '../components.jsx';
-import { cacheTrack, cacheTracks, trackById, allCached, loadMeta, loadPlayerState, saveMeta, normalizeTrack } from '../catalog.js';
+import { EQViz, Spinner, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider } from '../components.jsx';
+import { trackById } from '../catalog.js';
 import { Avatar } from '../avatars.jsx';
+import { useLibraryStore } from '../store/libraryStore.js';
+import { usePlayerStore } from '../store/playerStore.js';
 
-export function HomeTab({ ctx }) {
-  const { track, playing, play, T, favs, toggleFav, recent, playlists, downloaded, onMenu, goMix, homeRows, homeLoading, displayName, avatar, email, setTab, startAiDj, onboardPrefs, setOnboardPrefs, backendDown, GENRES: GENRES_LIST } = ctx;
+export function HomeTab({ T, play, onMenu, goMix, displayName, avatar, email, setTab, startAiDj, onboardPrefs, setOnboardPrefs, backendDown }) {
+  // Library store
+  const favs = useLibraryStore((s) => s.favs);
+  const toggleFavInStore = useLibraryStore((s) => s.toggleFav);
+  const recent = useLibraryStore((s) => s.recent);
+  const playlists = useLibraryStore((s) => s.playlists);
+  const homeRows = useLibraryStore((s) => s.homeRows);
+  const homeLoading = useLibraryStore((s) => s.homeLoading);
+  // Player store
+  const track = usePlayerStore((s) => s.track);
+  const playing = usePlayerStore((s) => s.playing);
+  const downloaded = usePlayerStore((s) => s.downloaded);
+  // Wrapper para toggleFav (App.jsx escuchara para llamar api)
+  const toggleFav = (id) => toggleFavInStore(id);
   const [djBusy, setDjBusy] = useState(false);
   const [onboardSel, setOnboardSel] = useState([]);
   const recentTracks = dedupeByTitle(recent.map(trackById).filter(Boolean));
@@ -22,7 +36,7 @@ export function HomeTab({ ctx }) {
           <div style={{ fontSize:22, fontWeight:900, color:'var(--txt-0)', marginBottom:6 }}>¿Qué te gusta escuchar?</div>
           <div style={{ fontSize:12.5, color:'var(--txt-2)', marginBottom:20 }}>Elige al menos 3 para personalizar tu feed</div>
           <div style={{ display:'flex', flexWrap:'wrap', gap:10, justifyContent:'center', marginBottom:22 }}>
-            {(GENRES_LIST || GENRES).map(g => {
+            {(GENRES || []).map(g => {
               const active = onboardSel.some(s => s.q === g.q);
               return (
                 <button key={g.q} onClick={() => setOnboardSel(prev => active ? prev.filter(s => s.q !== g.q) : [...prev, { label: g.label, q: g.q }])} className="btn-tap" style={{ padding:'8px 16px', borderRadius:99, border: active ? `2px solid ${T.accent}` : '1.5px solid var(--line)', background: active ? hex2rgba(T.accent, .18) : 'var(--surf-1)', color: active ? T.accent : 'var(--txt-1)', fontSize:13, fontWeight:700, cursor:'pointer', transition:'all .15s ease' }}>
