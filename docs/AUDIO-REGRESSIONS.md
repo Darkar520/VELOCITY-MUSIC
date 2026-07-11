@@ -33,7 +33,9 @@ actualiza la tabla si introduces un cambio.
 
 ## Política actual (código)
 
-Archivo: `frontend/src/audioContinuity.js` + `App.jsx`.
+Archivos: `frontend/src/audioContinuity.js` (predicados) +  
+`frontend/src/audio/audioMachine.js` (`reduce` / `dispatch` — Fase 1) +  
+`App.jsx` (adapter; migración a machine = Fase 2 del plan).
 
 1. **Hide + sigue `!paused`** → no tocar (mejor caso pantalla off / Media Session).
 2. **Hide + `pause` externo** → **`yieldAudioFocus`** (ancla + trackId). Sin soft-recover.

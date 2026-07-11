@@ -164,12 +164,12 @@ Estas filas van a `test/audioMachine.test.js` (+ seguir cubriendo matriz pura).
 2. Congelar checklist manual actual.  
 3. Branch: `feat/audio-machine` (o trabajo en `main` si preferís commits atómicos cortos).
 
-### Fase 1 — Machine pura + tests (sin tocar App)
+### Fase 1 — Machine pura + tests (sin tocar App) ✅ 2026-07-11
 
-1. Crear `audioMachine.js` con `initialState` + `reduce` cubriendo tabla 2.4.  
-2. Tests: cada fila de la tabla = 1 test o 1 caso de matriz.  
-3. Reutilizar `playSyncStrategy` / `canRestoreInterruptPosition` / `shouldApplySessionResume` / `isStreamUrlFresh` **dentro** de selectores o del reduce (no copiar umbrales mágicos).  
-4. **DoD Fase 1:** `node --test test/audioMachine.test.js test/audioPolicyMatrix.test.js` verde; App **sin cambios**.
+1. ✅ `frontend/src/audio/audioMachine.js` — `initialState`, `reduce`, `selectPlaySync`
+2. ✅ `test/audioMachine.test.js` — TDD red→green (A7, A10–A13, hydrate, seek, MS)
+3. ✅ Reutiliza predicados de `audioContinuity.js`
+4. ✅ DoD: machine + matriz verdes; **App.jsx aún no migrado** (Fase 2)
 
 ### Fase 2 — Adapter mínimo en App (un camino a la vez)
 
