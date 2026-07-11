@@ -1,9 +1,15 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { fmt, hex2rgba, grad, hiResCover, dedupeByTitle, capPerArtist, slimTrack, parseLRC, lyricsOverlapRatio, plainFromSyncedLines, tintedVars } from '../helpers.js';
+import React, { useState } from 'react';
+import { hex2rgba } from '../helpers.js';
 import { Icon } from '../Icons.jsx';
-import { EQViz, Spinner, ProgressRing, DownloadAllButton, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider, SettingCard, ToggleRow, ColorField } from '../components.jsx';
+import { Spinner } from '../components.jsx';
+import { usePlayerStore } from '../store/playerStore.js';
 
-export function DeviceChip({ outputs, sinkId, setOutput, T }) {
+export function DeviceChip({ T }) {
+  // Selectores del store
+  const outputs = usePlayerStore((s) => s.outputs);
+  const sinkId = usePlayerStore((s) => s.sinkId);
+  const setOutput = usePlayerStore((s) => s.setSinkId);
+
   const [open, setOpen] = useState(false);
   const [requesting, setRequesting] = useState(false);
   const list = (outputs || []).filter(o => o.deviceId);
