@@ -26,18 +26,19 @@ actualiza la tabla si introduces un cambio.
 | A7 | **Superposición** música + vídeo IG/FB; vídeo muere ~2s | `play()` en background (recover 0/200ms) reclama el foco en Chrome | **Cero** `play()` si `document.hidden`; yield al primer pause externo oculto | Soft-recover / re-pause window / bucles de play ocultos |
 | A8 | Lock screen solo muestra pause (sin prev/next) al inicio | Media Session incompleta / handlers tardíos | Re-bind handlers + `setPositionState` al `playing` | No registrar next/prev hasta pause |
 | A9 | Chrome background “a veces sí a veces no” | Política inconsistente + pelea de foco | Política de `audioContinuity.js` + tests | Parches ad-hoc por browser |
+| A10 | Seek vuelve al min 2; pistas nuevas arrancan a mitad; next en lock no suena | Ancla de yield se guardaba en play normal y se restauraba siempre; `playSync` bloqueaba todo play oculto | Ancla **solo al yield**, scoped a trackId; restore solo si `yieldedFocus`; soft-play oculto si **no** yielded (next lock) | `restore` en cada `onPlay`; `savePlaybackAnchor` continuo; noop en todo hide |
+| A11 | Next en notificación/lock no cambia de canción | `playSyncStrategy` hacía `noop` si hidden aunque el usuario pidiera next | soft-play si `playing && !yieldedFocus` aunque hidden; handlers MS vía refs | Bloquear todo `play()` con `document.hidden` |
 
 ## Política actual (código)
 
 Archivo: `frontend/src/audioContinuity.js` + `App.jsx`.
 
 1. **Hide + sigue `!paused`** → no tocar (mejor caso pantalla off / Media Session).
-2. **Hide + `pause` externo** → **`yieldAudioFocus` inmediato** (pause firme, MS `paused`, ancla guardada).  
-   **Sin** soft-play, **sin** timers de recover.
-3. **`playSyncStrategy`**: si `visible !== true` → `noop` (nunca `play()` oculto).
-4. **Visible + intención play** → `tryResume` / soft-play desde ancla.
-5. **`shouldRestoreInterruptPosition`**: solo si `currentTime < saved - 1.25s`.
-6. **Foreground** pause externo residual → un `softKickPlayback` (nunca si hidden).
+2. **Hide + `pause` externo** → **`yieldAudioFocus`** (ancla + trackId). Sin soft-recover.
+3. **`playSyncStrategy`**: `noop` oculto **solo si** `yieldedFocus`. Si no yielded (next/autoplay) → `soft-play` aunque hidden.
+4. **Ancla (A10)**: guardar solo al yield; limpiar en `play()` / `seek` / next / prev; restore solo con `canRestoreInterruptPosition({ yieldedFocus: true, ... })`.
+5. **Visible + intención play** → `tryResume` si hace falta.
+6. **Foreground** pause residual → `softKickPlayback` sin tocar ancla de yield.
 
 ### Por qué Brave “iba bien” y Chrome no
 

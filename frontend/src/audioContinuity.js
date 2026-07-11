@@ -1,22 +1,13 @@
 /**
- * Continuidad de audio — política Chrome-first (sin pelear el foco).
+ * Continuidad de audio — política Chrome-first.
  *
  * ═══════════════════════════════════════════════════════════════
- * SUPERPOSICIÓN (A7) — causa raíz y fix definitivo:
+ * A7 SUPERPOSICIÓN: no llamar play() en background SOLO si ya
+ * cedimos el foco (yieldedFocus). Si el usuario pide next/prev
+ * desde el lock (intención play, no yielded), SÍ hay que play().
  *
- * En Chrome, llamar play() mientras document.hidden (soft-recover
- * tras pause) RECLAMA el foco de audio. Resultado típico:
- *   1) un momento suenan música + vídeo Instagram/Facebook
- *   2) ~1–2 s después el vídeo se corta y queda solo Velocity
- *
- * Brave suele pausar/ceder mejor; Chrome no. Por eso NUNCA soft-play
- * en background.
- *
- * Política:
- *  1) Oculto + audio SIGUE (!paused) → no tocar (pantalla off / lock).
- *  2) Pause externo mientras oculto → CEDER YA (pause firme, MS paused).
- *  3) Visible + intención play → reanudar desde ancla (tryResume / soft-play).
- *  4) NUNCA play() / kick / recover con document.hidden.
+ * A10 ANCLA: restoreInterruptPosition SOLO tras yield real.
+ * Nunca clavar posición en seek ni en pistas nuevas.
  * ═══════════════════════════════════════════════════════════════
  */
 
@@ -27,21 +18,23 @@ export function isDocumentVisible(doc = typeof document !== 'undefined' ? docume
 
 /**
  * Qué debe hacer el efecto de sincronización del <audio>.
- * visible debe ser boolean estricto: solo soft-play si visible === true.
+ *
+ * - pause si el usuario no quiere play
+ * - noop si cedimos el altavoz y seguimos ocultos (no pelear a IG/FB)
+ * - soft-play en cualquier otro caso con intención play
+ *   (incluye next desde lock screen con document.hidden)
  */
 export function playSyncStrategy({ playing, hasSrc, yieldedFocus, visible }) {
   if (!hasSrc) return 'noop';
   if (!playing) return 'pause';
-  // Nunca play() en background: roba Instagram/FB en Chrome.
-  if (visible !== true) return 'noop';
-  // yieldedFocus en visible: soft-play para reanudar al volver a la app.
-  void yieldedFocus;
+  // Solo bloquear play oculto cuando YA cedimos a otra app.
+  if (yieldedFocus && visible !== true) return 'noop';
   return 'soft-play';
 }
 
 /**
  * ¿Ceder el foco ante un pause externo?
- * Solo en background. En foreground puede ser ducking momentáneo → softKick.
+ * Solo en background. En foreground puede ser ducking → softKick.
  */
 export function shouldYieldOnExternalPause({
   hidden,
@@ -63,11 +56,47 @@ export function mediaSessionPlaybackState({ userWantsPlay, yieldedFocus }) {
   return 'playing';
 }
 
-/** Solo restaurar si rebobinó por detrás del ancla. */
-export function shouldRestoreInterruptPosition(currentTime, savedPosition, thresholdSec = 1.25) {
+/**
+ * ¿Restaurar posición guardada tras interrupción?
+ * active=true SOLO cuando hay yield real (systemPaused / mediaInterrupted).
+ * Sin active → nunca (evita clavar el seek y pistas nuevas en el min 2).
+ */
+export function shouldRestoreInterruptPosition(
+  currentTime,
+  savedPosition,
+  thresholdSecOrOpts = 1.25,
+) {
+  // Compat: (ct, saved, threshold) o (ct, saved, { active, thresholdSec })
+  let active = true;
+  let thresholdSec = 1.25;
+  if (typeof thresholdSecOrOpts === 'object' && thresholdSecOrOpts != null) {
+    active = thresholdSecOrOpts.active !== false;
+    if (typeof thresholdSecOrOpts.thresholdSec === 'number') {
+      thresholdSec = thresholdSecOrOpts.thresholdSec;
+    }
+  } else if (typeof thresholdSecOrOpts === 'number') {
+    thresholdSec = thresholdSecOrOpts;
+  }
+  // API nueva: si se pasa { active: false }, no restaurar.
+  // App.jsx debe pasar active: systemPaused || mediaInterrupted.
+  if (typeof thresholdSecOrOpts === 'object' && thresholdSecOrOpts != null && 'active' in thresholdSecOrOpts) {
+    if (!thresholdSecOrOpts.active) return false;
+  }
+  void active;
   if (savedPosition == null || !Number.isFinite(savedPosition) || savedPosition < 0) return false;
   if (!Number.isFinite(currentTime)) return true;
   return currentTime < savedPosition - thresholdSec;
+}
+
+/** Helper explícito preferido por App.jsx y tests. */
+export function canRestoreInterruptPosition({
+  yieldedFocus,
+  currentTime,
+  savedPosition,
+  thresholdSec = 1.25,
+}) {
+  if (!yieldedFocus) return false;
+  return shouldRestoreInterruptPosition(currentTime, savedPosition, thresholdSec);
 }
 
 export function shouldResumeOnForeground({
@@ -84,7 +113,6 @@ export function shouldResumeOnForeground({
   if (typeof volume === 'number' && typeof targetVolume === 'number' && targetVolume > 0 && volume < targetVolume * 0.5) {
     return true;
   }
-  // Visible + intención play + ya sonando: no forzar play() extra.
   return false;
 }
 
@@ -111,16 +139,13 @@ export function shouldPreExtendQueue(currentIndex, queueLength) {
   return currentIndex >= queueLength - 2;
 }
 
-// --- Legacy exports: comportamiento seguro (no soft-play en hide) ---
-/** @deprecated Siempre [] — no hay soft-recover en background. */
+// --- Legacy exports seguros ---
 export function hideRecoverDelays() {
   return [];
 }
-/** @deprecated Prefer shouldYieldOnExternalPause. */
 export function shouldYieldAudioFocus() {
   return true;
 }
-/** @deprecated Prefer shouldYieldOnExternalPause (ceder al primer pause oculto). */
 export function shouldYieldOnRePause() {
   return true;
 }

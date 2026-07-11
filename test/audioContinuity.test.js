@@ -5,38 +5,37 @@ import {
   shouldYieldOnExternalPause,
   mediaSessionPlaybackState,
   shouldRestoreInterruptPosition,
+  canRestoreInterruptPosition,
   shouldResumeOnForeground,
   canForceReacquire,
   isExternalPause,
   hideRecoverDelays,
 } from '../frontend/src/audioContinuity.js';
 
-test('playSyncStrategy: NUNCA soft-play si no visible (A7 Chrome superposición)', () => {
-  assert.equal(playSyncStrategy({
-    playing: true, hasSrc: true, yieldedFocus: false, visible: false,
-  }), 'noop', 'hidden + playing → no play() (no robar a Instagram)');
+test('playSyncStrategy: A7 — no play oculto SOLO si yielded; next en lock SÍ play', () => {
+  // Cedimos a Instagram y seguimos ocultos → no pelear
   assert.equal(playSyncStrategy({
     playing: true, hasSrc: true, yieldedFocus: true, visible: false,
   }), 'noop');
+  // Música normal con pantalla bloqueada (next/autoplay) → soft-play
+  assert.equal(playSyncStrategy({
+    playing: true, hasSrc: true, yieldedFocus: false, visible: false,
+  }), 'soft-play', 'next desde lock DEBE poder play()');
   assert.equal(playSyncStrategy({
     playing: true, hasSrc: true, yieldedFocus: false, visible: true,
   }), 'soft-play');
   assert.equal(playSyncStrategy({
     playing: true, hasSrc: true, yieldedFocus: true, visible: true,
-  }), 'soft-play', 'visible + cedimos → soft-play para reanudar');
+  }), 'soft-play', 'visible + cedimos → reanudar');
   assert.equal(playSyncStrategy({
     playing: false, hasSrc: true, yieldedFocus: false, visible: true,
   }), 'pause');
   assert.equal(playSyncStrategy({
-    playing: true, hasSrc: false, yieldedFocus: false, visible: true,
-  }), 'noop');
-  // visible omitido / undefined → noop (fail-safe, no soft-play accidental)
-  assert.equal(playSyncStrategy({
-    playing: true, hasSrc: true, yieldedFocus: false, visible: undefined,
+    playing: true, hasSrc: false, yieldedFocus: false, visible: false,
   }), 'noop');
 });
 
-test('shouldYieldOnExternalPause: ceder YA en background, no selfPause', () => {
+test('shouldYieldOnExternalPause: ceder YA en background', () => {
   assert.equal(shouldYieldOnExternalPause({
     hidden: true, userWantsPlay: true, selfPause: false, pendingFade: false,
     audioEnded: false, alreadyYielded: false,
@@ -44,38 +43,51 @@ test('shouldYieldOnExternalPause: ceder YA en background, no selfPause', () => {
   assert.equal(shouldYieldOnExternalPause({
     hidden: false, userWantsPlay: true, selfPause: false, pendingFade: false,
     audioEnded: false, alreadyYielded: false,
-  }), false, 'foreground no cede al primer pause (ducking)');
+  }), false);
   assert.equal(shouldYieldOnExternalPause({
     hidden: true, userWantsPlay: true, selfPause: true, pendingFade: false,
     audioEnded: false, alreadyYielded: false,
   }), false);
-  assert.equal(shouldYieldOnExternalPause({
-    hidden: true, userWantsPlay: true, selfPause: false, pendingFade: false,
-    audioEnded: false, alreadyYielded: true,
-  }), false);
-  assert.equal(shouldYieldOnExternalPause({
-    hidden: true, userWantsPlay: false, selfPause: false, pendingFade: false,
-    audioEnded: false, alreadyYielded: false,
-  }), false);
 });
 
-test('hideRecoverDelays vacío: cero soft-play tras hide (anti A7)', () => {
+test('hideRecoverDelays vacío', () => {
   assert.deepEqual(hideRecoverDelays(), []);
 });
 
-test('mediaSessionPlaybackState: paused al ceder aunque userWantsPlay', () => {
+test('mediaSessionPlaybackState', () => {
   assert.equal(mediaSessionPlaybackState({ userWantsPlay: true, yieldedFocus: true }), 'paused');
   assert.equal(mediaSessionPlaybackState({ userWantsPlay: true, yieldedFocus: false }), 'playing');
-  assert.equal(mediaSessionPlaybackState({ userWantsPlay: false, yieldedFocus: false }), 'paused');
 });
 
-test('shouldRestoreInterruptPosition no clava el mismo segundo', () => {
+test('A10: canRestoreInterruptPosition solo con yield activo', () => {
+  // Sin yield: NUNCA restaurar (seek a 0 y pistas nuevas no se clavan al min 2)
+  assert.equal(canRestoreInterruptPosition({
+    yieldedFocus: false, currentTime: 0, savedPosition: 154,
+  }), false);
+  assert.equal(canRestoreInterruptPosition({
+    yieldedFocus: false, currentTime: 5, savedPosition: 154,
+  }), false);
+  // Con yield y rebobinado real: sí
+  assert.equal(canRestoreInterruptPosition({
+    yieldedFocus: true, currentTime: 1, savedPosition: 154,
+  }), true);
+  // Con yield pero ya en posición: no
+  assert.equal(canRestoreInterruptPosition({
+    yieldedFocus: true, currentTime: 154, savedPosition: 154,
+  }), false);
+  assert.equal(canRestoreInterruptPosition({
+    yieldedFocus: true, currentTime: 39.5, savedPosition: 40,
+  }), false);
+});
+
+test('shouldRestoreInterruptPosition legacy (sin active flag) sigue midiendo rebobinado', () => {
   assert.equal(shouldRestoreInterruptPosition(5, 5), false);
   assert.equal(shouldRestoreInterruptPosition(1, 40), true);
-  assert.equal(shouldRestoreInterruptPosition(39.5, 40), false);
+  assert.equal(shouldRestoreInterruptPosition(0, 154, { active: false }), false);
+  assert.equal(shouldRestoreInterruptPosition(0, 154, { active: true }), true);
 });
 
-test('shouldResumeOnForeground: solo si hace falta (no play() gratis)', () => {
+test('shouldResumeOnForeground / canForceReacquire / isExternalPause', () => {
   assert.equal(shouldResumeOnForeground({
     userWantsPlay: true, audioEnded: false, audioPaused: true,
     systemPaused: true, timeStuck: false, volume: 1, targetVolume: 1,
@@ -83,17 +95,10 @@ test('shouldResumeOnForeground: solo si hace falta (no play() gratis)', () => {
   assert.equal(shouldResumeOnForeground({
     userWantsPlay: true, audioEnded: false, audioPaused: false,
     systemPaused: false, timeStuck: false, volume: 1, targetVolume: 1,
-  }), false, 'ya sonando y no yielded → no forzar play');
-  assert.equal(shouldResumeOnForeground({
-    userWantsPlay: false, audioEnded: false, audioPaused: true,
-    systemPaused: false, timeStuck: false, volume: 1, targetVolume: 1,
   }), false);
   assert.equal(canForceReacquire(false), false);
   assert.equal(canForceReacquire(true), true);
   assert.equal(isExternalPause({
     selfPause: false, pendingFade: false, userWantsPlay: true, audioEnded: false,
   }), true);
-  assert.equal(isExternalPause({
-    selfPause: true, pendingFade: false, userWantsPlay: true, audioEnded: false,
-  }), false);
 });

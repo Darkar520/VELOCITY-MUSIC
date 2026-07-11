@@ -48,18 +48,20 @@ La reproducción NUNCA debe cortarse. Invariantes:
 - **Lógica pura en `frontend/src/audioContinuity.js`** + tests en
   `test/audioContinuity.test.js`. No reintroducir comportamientos que fallen
   esos tests.
-- **En background (`document.hidden`): NUNCA `audio.play()`.** Tampoco
-  `forceReacquire` / `pause+load+play` / `load()` al cambiar de pista oculta.
-  En Chrome, un `play()` oculto **roba el foco** a Instagram/Facebook (~2 s el
-  vídeo muere y queda solo Velocity). Brave cede mejor; el fix es no pelear.
+- **Background + yielded (cedimos a IG/FB): NUNCA `audio.play()`.**  
+  Background **sin** yield (next desde lock / autoplay): **sí** `play()`.  
+  Nunca `forceReacquire` / `load()` al cambiar de pista oculta.
+- **Ancla de posición (A10):** solo al **yield**. Limpiar en seek / next / play
+  de pista nueva. Restore solo si `yieldedFocus` y misma pista.  
+  **Prohibido** reaplicar ancla en cada `onPlay` (clavaba el seek al min 2).
 - **Salir de la app / apagar pantalla (Chrome prioritario):**
   - Si el audio **sigue** (`!paused`) → no tocar (pantalla off / lock).
-  - Si llega **pause externo** → **`yieldAudioFocus` inmediato** (MS `paused`,
-    ancla guardada). **Cero** soft-recover / timers de `play()` en hide.
-  - Al **volver visible** → `tryResume` desde el ancla si la intención es play.
+  - Si llega **pause externo** → **`yieldAudioFocus`** (MS `paused`, ancla).
+  - Next/prev en notificación → deben cambiar de pista y sonar.
+  - Al **volver visible** tras yield → `tryResume` desde el ancla.
 - **Vídeo Instagram/Facebook/YouTube:**
-  - Al ceder: no pelear. El vídeo debe oírse **solo**, sin superposición.
-  - Al **volver a Velocity**: `tryResume` desde el segundo guardado.
+  - Al ceder: no pelear. El vídeo debe oírse **solo**.
+  - Al **volver a Velocity**: reanuda desde el segundo guardado.
 - Restaurar posición **solo si rebobinó**, nunca clavar el mismo segundo.
 - **Fade-in (`volume=0`) SOLO con página visible.** Si rAF se congela en
   background, el volume se queda en 0 → “suena en silencio”. En bg: `volume=vol`.

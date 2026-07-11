@@ -16,7 +16,7 @@ import {
   shouldSuspendPreloads,
   shouldPreExtendQueue,
   mediaSessionPlaybackState,
-  shouldRestoreInterruptPosition,
+  canRestoreInterruptPosition,
   shouldYieldOnExternalPause,
 } from './audioContinuity.js';
 import { usePersisted, useViewport, useDominantColor, useHSwipe } from './hooks.js';
@@ -2482,13 +2482,24 @@ export default function App() {
   // Reintento por pista ante error de reproducción (URL de audio expirada, etc.).
   const playErrorRef = useRef({ id: null, n: 0 });
   const playingRef = useRef(false);
-  // Foco de audio: ceder YA a vídeo FB/IG/YT (sin soft-play en background).
+  // Refs de cola/pista al día (next/prev/onEnded/Media Session sin closures stale).
+  const queueRef = useRef(queue);
+  const trackRef = useRef(track);
+  const settingsRef = useRef(settings);
+  useEffect(() => { queueRef.current = queue; }, [queue]);
+  useEffect(() => { trackRef.current = track; }, [track]);
+  useEffect(() => { settingsRef.current = settings; }, [settings]);
+  // Foco de audio: yield a FB/IG/YT. Ancla SOLO al ceder (A10: no clavar seek).
   const systemPausedRef = useRef(false);       // cedimos foco (yielded)
-  const interruptPositionRef = useRef(null);   // segundo al ceder / al hide
+  const interruptPositionRef = useRef(null);   // segundo SOLO al ceder (yield)
+  const interruptTrackIdRef = useRef(null);    // pista a la que pertenece el ancla
   const reacquireInFlight = useRef(false);
   const lastTimeRef = useRef(0);
   const stuckCheckRef = useRef(null);
   const [mediaInterrupted, setMediaInterrupted] = useState(false); // yieldedFocus UI
+  // Handlers Media Session estables (next/prev desde lock no deben quedar stale).
+  const nextTrackActionRef = useRef(() => {});
+  const prevTrackActionRef = useRef(() => {});
 
   const setMediaSessionState = (state, positionHint) => {
     if (!('mediaSession' in navigator)) return;
@@ -2508,14 +2519,14 @@ export default function App() {
     }
   };
 
-  /** Ceder el altavoz a FB/IG/YT: pause firme; no reintentar hasta volver visibles. */
+  /** Ceder el altavoz a FB/IG/YT: pause firme; ancla solo para ESA pista. */
   const yieldAudioFocus = (a) => {
     const el = a || audioRef.current;
     const pos = el && Number.isFinite(el.currentTime)
       ? el.currentTime
       : (interruptPositionRef.current || 0);
     interruptPositionRef.current = pos;
-    // Pause firme sin reentrar en onPause como "externo" (selfPause).
+    interruptTrackIdRef.current = trackRef.current?.id || track?.id || null;
     if (el) {
       selfPauseRef.current = true;
       try { el.pause(); } catch {}
@@ -2530,35 +2541,55 @@ export default function App() {
     systemPausedRef.current = false;
     setMediaInterrupted(false);
   };
+  /** Limpia ancla al cambiar de pista / seek del usuario (A10). */
+  const clearPlaybackAnchor = () => {
+    interruptPositionRef.current = null;
+    interruptTrackIdRef.current = null;
+  };
+  /**
+   * Restaurar posición SOLO si hay yield activo y el ancla es de la misma pista.
+   * Sin esto: seek a 0 se clava al min 2 y la siguiente canción arranca a mitad.
+   */
   const restoreInterruptPosition = (a) => {
     if (!a) return;
+    const yielded = systemPausedRef.current || mediaInterrupted;
     const saved = interruptPositionRef.current;
-    if (!shouldRestoreInterruptPosition(a.currentTime || 0, saved)) return;
+    const anchorTrack = interruptTrackIdRef.current;
+    const curId = trackRef.current?.id || track?.id || null;
+    if (anchorTrack && curId && anchorTrack !== curId) {
+      clearPlaybackAnchor();
+      return;
+    }
+    if (!canRestoreInterruptPosition({
+      yieldedFocus: yielded,
+      currentTime: a.currentTime || 0,
+      savedPosition: saved,
+    })) return;
     try { a.currentTime = saved; setTime(saved); } catch {}
   };
+  /** Guardar ancla solo en yield / hide con pause externo — no en play normal. */
   const savePlaybackAnchor = (a) => {
     if (!a) return;
     const pos = Number.isFinite(a.currentTime) ? a.currentTime : 0;
-    if (interruptPositionRef.current == null || pos >= (interruptPositionRef.current || 0) - 0.25) {
-      interruptPositionRef.current = pos;
-    }
+    interruptPositionRef.current = pos;
+    interruptTrackIdRef.current = trackRef.current?.id || track?.id || null;
   };
 
-  /** Soft kick SOLO en foreground. Nunca play() si document.hidden (A7). */
+  /** Soft kick SOLO en foreground y sin tocar el ancla de yield. */
   const softKickPlayback = () => {
     const a = audioRef.current;
     if (!a || !playingRef.current || a.ended || selfPauseRef.current) return;
     if (!isDocumentVisible()) return;
     if (a.volume < 0.05) a.volume = Math.max(vol, 0.35);
-    const anchor = Number.isFinite(a.currentTime) ? a.currentTime : (interruptPositionRef.current || 0);
-    if (anchor > 0) interruptPositionRef.current = Math.max(interruptPositionRef.current || 0, anchor);
+    const ct = Number.isFinite(a.currentTime) ? a.currentTime : 0;
     selfPauseRef.current = true;
     try { a.pause(); } catch {}
     selfPauseRef.current = false;
-    restoreInterruptPosition(a);
+    // No restoreInterrupt aquí: el soft-kick no es un yield.
+    try { if (ct > 0) a.currentTime = ct; } catch {}
     a.play().then(() => {
       clearYieldedFocus();
-      setMediaSessionState('playing', a.currentTime || anchor);
+      setMediaSessionState('playing', a.currentTime || ct);
     }).catch(() => {});
   };
 
@@ -3001,19 +3032,28 @@ export default function App() {
         clearTimeout(fadeSafetyRef.current);
         a.volume = vol;
       }
+      // Restore solo si yielded (canRestore). Tras next/pista nueva no hay ancla.
       restoreInterruptPosition(a);
       const p = a.play();
       if (p && p.then) {
         p.then(() => {
+          // Una sola restore al arrancar si había yield; luego limpiar ancla consumida.
           restoreInterruptPosition(a);
           clearYieldedFocus();
+          // Si reanudamos tras yield, consumir ancla para no reclavar en seeks.
+          if (!systemPausedRef.current) {
+            // keep anchor only while still yielded; after clear, drop it
+          }
           setMediaSessionState('playing', a.currentTime);
         }).catch((err) => {
           if (err?.name === 'AbortError') return;
+          if (!isDocumentVisible() && (systemPausedRef.current || mediaInterrupted)) {
+            // Ya habíamos cedido / seguimos ocultos → no pelear (A7).
+            return;
+          }
           if (!isDocumentVisible()) {
-            // Perdimos el play y seguimos ocultos → ceder, no reintentar en bg.
-            savePlaybackAnchor(a);
-            if (playingRef.current) yieldAudioFocus(a);
+            // Fallo de play en hide SIN yield (p.ej. next en lock): no ceder a ciegas;
+            // el SO puede reintentar; Media Session play sigue disponible.
             return;
           }
           if (err?.name === 'NotAllowedError') return;
@@ -3096,6 +3136,7 @@ export default function App() {
   useEffect(() => { playingRef.current = playing; }, [playing]);
 
   // ── Reanudación tras interrupción por vídeo / zombie silencioso ──
+  // Solo en visible. No escribe ancla de yield (A10: no clavar posición).
   const forceReacquire = () => {
     if (!canForceReacquire(isDocumentVisible())) return;
     if (reacquireInFlight.current) return;
@@ -3103,16 +3144,18 @@ export default function App() {
     if (!a || !playingRef.current || a.ended) return;
     reacquireInFlight.current = true;
     if (a.volume < vol * 0.5) a.volume = vol;
-    // Guardar posición antes de pause+play (algunos browsers rebobinan).
-    const saved = interruptPositionRef.current != null
-      ? interruptPositionRef.current
-      : (a.currentTime || 0);
-    interruptPositionRef.current = saved;
+    const pin = Number.isFinite(a.currentTime) ? a.currentTime : 0;
 
     const p1 = a.play();
     if (p1 && p1.then) {
       p1.then(() => {
-        restoreInterruptPosition(a);
+        // Si el browser rebobinó al re-play, reponer SOLO este pin local (no ancla global).
+        try {
+          if (pin > 1.25 && (a.currentTime || 0) < pin - 1.25) {
+            a.currentTime = pin;
+            setTime(pin);
+          }
+        } catch {}
         reacquireInFlight.current = false;
         clearSystemInterrupted();
       }).catch(() => {
@@ -3127,11 +3170,10 @@ export default function App() {
           const a2 = audioRef.current;
           if (!a2 || a2.ended) { reacquireInFlight.current = false; return; }
           if (a2.volume < vol * 0.5) a2.volume = vol;
-          restoreInterruptPosition(a2);
+          try { if (pin > 0) a2.currentTime = pin; } catch {}
           const p2 = a2.play();
           if (p2 && p2.then) {
             p2.then(() => {
-              restoreInterruptPosition(a2);
               reacquireInFlight.current = false;
               clearSystemInterrupted();
             }).catch(() => { reacquireInFlight.current = false; });
@@ -3186,11 +3228,9 @@ export default function App() {
         setTimeout(tryResume, 350);
         setTimeout(tryResume, 1000);
       } else {
-        // Salir: guardar ancla. NO play() aquí (A7: roba audio a IG/FB en Chrome).
+        // Salir: NO play() aquí (A7). NO guardar ancla en hide normal (A10:
+        // ancla solo al yield en onPause; si no, se clava el seek / pistas nuevas).
         // Si el SO deja el audio corriendo (pantalla off), sigue solo.
-        // Si llega pause externo (vídeo), onPause → yieldAudioFocus.
-        const a = audioRef.current;
-        if (playingRef.current && a && !a.ended) savePlaybackAnchor(a);
         if (shouldSuspendPreloads(false)) {
           for (const r of [preloadAudioRef, preloadAudio2Ref]) {
             const el = r.current;
@@ -3471,7 +3511,10 @@ export default function App() {
     else { if (a) a.volume = vol; pendingFadeRef.current = false; }
     stopBackgroundWatch();
     clearSystemInterrupted();
-    interruptPositionRef.current = null;
+    // A10: pista nueva siempre desde 0 (salvo resume de sesión de la MISMA pista).
+    clearPlaybackAnchor();
+    resumeRef.current = null;
+    setTime(0);
     const initialQueue = list && list.length ? list : [t.id];
     setQueue(initialQueue);
     const qualityMap = { high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' };
@@ -3544,20 +3587,57 @@ export default function App() {
   };
   const orderIds = queue.length ? queue : (track ? [track.id] : []);
   const next = () => {
-    if (!track || !orderIds.length) return;
-    if (shuffle && orderIds.length > 1) {
-      let id; do { id = orderIds[Math.floor(Math.random()*orderIds.length)]; } while (id === track.id && orderIds.length > 1);
-      const t = trackById(id); if (t) play(t, orderIds, { keepMix: true }); return;
+    const cur = trackRef.current || track;
+    const ids = (queueRef.current && queueRef.current.length)
+      ? queueRef.current
+      : (orderIds.length ? orderIds : (cur ? [cur.id] : []));
+    if (!cur || !ids.length) return;
+    // next = cambio de pista: soltar yield/ancla para que playSync pueda soft-play en lock.
+    clearSystemInterrupted();
+    clearPlaybackAnchor();
+    if (shuffle && ids.length > 1) {
+      let id; do { id = ids[Math.floor(Math.random() * ids.length)]; } while (id === cur.id && ids.length > 1);
+      const t = trackById(id); if (t) play(t, ids, { keepMix: true }); return;
     }
-    const i = orderIds.indexOf(track.id);
-    const t = trackById(orderIds[(i+1) % orderIds.length]); if (t) play(t, orderIds, { keepMix: true });
+    const i = ids.indexOf(cur.id);
+    if (i === -1) return;
+    const t = trackById(ids[(i + 1) % ids.length]);
+    if (t) play(t, ids, { keepMix: true });
   };
   const prev = () => {
-    if (!track || !orderIds.length) return;
-    const i = orderIds.indexOf(track.id);
-    const t = trackById(orderIds[(i-1+orderIds.length) % orderIds.length]); if (t) play(t, orderIds, { keepMix: true });
+    const cur = trackRef.current || track;
+    const ids = (queueRef.current && queueRef.current.length)
+      ? queueRef.current
+      : (orderIds.length ? orderIds : (cur ? [cur.id] : []));
+    if (!cur || !ids.length) return;
+    clearSystemInterrupted();
+    clearPlaybackAnchor();
+    // Si llevamos >3s, prev = reiniciar pista actual (comportamiento tipo Spotify).
+    const a = audioRef.current;
+    if (a && (a.currentTime || 0) > 3) {
+      try { a.currentTime = 0; } catch {}
+      setTime(0);
+      if (playingRef.current) a.play().catch(() => {});
+      return;
+    }
+    const i = ids.indexOf(cur.id);
+    if (i === -1) return;
+    const t = trackById(ids[(i - 1 + ids.length) % ids.length]);
+    if (t) play(t, ids, { keepMix: true });
   };
-  const seek = (v) => { if (audioRef.current) { audioRef.current.currentTime = v; if (audioRef.current.volume < vol && !pendingFadeRef.current) audioRef.current.volume = vol; } setTime(v); };
+  // Seek del usuario: NUNCA dejar ancla vieja que lo devuelva al min 2 (A10).
+  const seek = (v) => {
+    const pos = Math.max(0, Number(v) || 0);
+    clearPlaybackAnchor();
+    if (audioRef.current) {
+      try { audioRef.current.currentTime = pos; } catch {}
+      if (audioRef.current.volume < vol && !pendingFadeRef.current) audioRef.current.volume = vol;
+    }
+    setTime(pos);
+  };
+  // Mantener refs de Media Session al día (lock screen next/prev).
+  nextTrackActionRef.current = next;
+  prevTrackActionRef.current = prev;
   // Carátulas vecinas (para el carrusel tipo Spotify en el reproductor).
   const _curIdx = orderIds.indexOf(track?.id);
   const nextCover = orderIds.length > 1 ? (trackById(orderIds[(_curIdx + 1) % orderIds.length]) || {}).cover : null;
@@ -3663,13 +3743,6 @@ export default function App() {
     showToast(`${ok}/${todo.length} descargadas`);
   };
 
-  // Refs para que onEnded lea siempre el estado actual (evita stale closure).
-  const queueRef = useRef(queue);
-  const trackRef = useRef(track);
-  const settingsRef = useRef(settings);
-  useEffect(() => { queueRef.current = queue; }, [queue]);
-  useEffect(() => { trackRef.current = track; }, [track]);
-  useEffect(() => { settingsRef.current = settings; }, [settings]);
   useEffect(() => { homeRowsRef.current = homeRows; }, [homeRows]);
 
   // Construye la continuación de la cola al llegar al final: si venimos de una
@@ -4139,14 +4212,15 @@ export default function App() {
     const doPlay = () => {
       const el = a();
       if (!el) return;
-      // Lock screen / notificación: reanudar y re-registrar controles (prev/next).
+      // Lock screen / notificación: reanudar (restore solo si hubo yield real).
       if (el.volume < vol * 0.5) el.volume = vol;
       restoreInterruptPosition(el);
       clearSystemInterrupted();
+      // Tras reanudar manualmente, la ancla de yield ya no aplica.
+      clearPlaybackAnchor();
       playingRef.current = true;
       setPlaying(true);
       el.play().then(() => {
-        restoreInterruptPosition(el);
         setMediaSessionState('playing', el.currentTime);
       }).catch(() => {
         if (canForceReacquire(isDocumentVisible())) forceReacquire();
@@ -4160,17 +4234,18 @@ export default function App() {
       selfPauseRef.current = false;
       // Pausa manual del usuario: no es interrupción por vídeo.
       clearSystemInterrupted();
-      interruptPositionRef.current = null;
+      clearPlaybackAnchor();
       playingRef.current = false;
       setPlaying(false);
     };
     navigator.mediaSession.setActionHandler('play', doPlay);
     navigator.mediaSession.setActionHandler('pause', doPause);
-    navigator.mediaSession.setActionHandler('previoustrack', () => prev());
-    navigator.mediaSession.setActionHandler('nexttrack', () => next());
+    // Refs estables: next/prev siempre al día aunque el efecto no se re-bindee.
+    navigator.mediaSession.setActionHandler('previoustrack', () => { try { prevTrackActionRef.current(); } catch {} });
+    navigator.mediaSession.setActionHandler('nexttrack', () => { try { nextTrackActionRef.current(); } catch {} });
     try { navigator.mediaSession.setActionHandler('seekto', (e) => { if (e.seekTime != null) seek(e.seekTime); }); } catch {}
-    try { navigator.mediaSession.setActionHandler('seekforward', () => next()); } catch {}
-    try { navigator.mediaSession.setActionHandler('seekbackward', () => prev()); } catch {}
+    try { navigator.mediaSession.setActionHandler('seekforward', () => { try { nextTrackActionRef.current(); } catch {} }); } catch {}
+    try { navigator.mediaSession.setActionHandler('seekbackward', () => { try { prevTrackActionRef.current(); } catch {} }); } catch {}
     try { navigator.mediaSession.setActionHandler('stop', () => doPause()); } catch {}
     return () => {
       cancelled = true;
@@ -4355,15 +4430,27 @@ export default function App() {
         const ct = a.currentTime || 0; setTime(ct);
         if (ct > 0 && loadingAudio) setLoadingAudio(false);
       }}
-      onLoadedMetadata={() => { setDur(audioRef.current?.duration||0); if (resumeRef.current != null && audioRef.current) { try { audioRef.current.currentTime = resumeRef.current; } catch {} setTime(resumeRef.current); resumeRef.current = null; } }}
+      onLoadedMetadata={() => {
+        setDur(audioRef.current?.duration || 0);
+        // Resume de sesión SOLO una vez y si aún aplica (misma sesión, no pista nueva).
+        if (resumeRef.current != null && audioRef.current) {
+          const r = resumeRef.current;
+          resumeRef.current = null;
+          if (r > 1.5) {
+            try { audioRef.current.currentTime = r; } catch {}
+            setTime(r);
+          }
+        }
+      }}
       onCanPlay={() => setLoadingAudio(false)}
       onPlay={() => {
         selfPauseRef.current = false;
         const el = audioRef.current;
-        // Solo reponer si rebobinó (no clavar el mismo segundo).
+        // Restaurar ancla SOLO si hay yield activo (A10); luego consumirla.
         restoreInterruptPosition(el);
-        if (el && el.volume < vol * 0.5) el.volume = vol;
         clearSystemInterrupted();
+        clearPlaybackAnchor();
+        if (el && el.volume < vol * 0.5) el.volume = vol;
         setMediaSessionState('playing', el?.currentTime);
         setLoadingAudio(false);
         playingRef.current = true;
@@ -4372,15 +4459,13 @@ export default function App() {
       onPlaying={() => {
         selfPauseRef.current = false;
         const el = audioRef.current;
-        restoreInterruptPosition(el);
+        // No restore aquí: ancla ya consumida en onPlay (evita clavar el seek).
         if (el && el.volume < vol * 0.5) el.volume = vol;
         clearSystemInterrupted();
         setMediaSessionState('playing', el?.currentTime);
         setLoadingAudio(false);
         playErrorRef.current = { id: null, n: 0 };
         sustainedPlayRef.current = false;
-        // Si hay progreso real, ir actualizando ancla (no congelar en el segundo de salida).
-        if (el && !el.paused) savePlaybackAnchor(el);
         setTimeout(() => {
           if (audioRef.current && !audioRef.current.paused && audioRef.current.currentTime > 3) {
             consecutiveFailsRef.current = 0;
