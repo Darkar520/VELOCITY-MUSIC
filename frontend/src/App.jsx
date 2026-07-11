@@ -212,9 +212,10 @@ export default function App() {
   const [recent, setRecentState] = useState(() => libStore.getState().recent);
   const [savedAlbums, setSavedAlbumsState] = useState(() => libStore.getState().savedAlbums);
   const [savedPlaylists, setSavedPlaylistsState] = useState(() => libStore.getState().savedPlaylists);
-  const [homeRows, setHomeRows] = usePersisted('velocity.home', []);
-  const [homeLoading, setHomeLoading] = useState(false);
-  const [feedNonce, setFeedNonce] = useState(0);
+  // homeRows / homeLoading / feedNonce viven en libraryStore (useHomeFeed los escribe).
+  // NO usar usePersisted local que pise el store con un snapshot viejo a medias.
+  const homeRows = useLibraryStore((s) => s.homeRows);
+  const homeLoading = useLibraryStore((s) => s.homeLoading);
 
   // Wrappers que escriben store + state local
   const setFavs = (v) => { const arr = Array.isArray(v) ? v : []; libStore.getState().setFavs(arr); setFavsState(arr); };
@@ -239,10 +240,20 @@ export default function App() {
   // Hook de sincronización con backend (reemplaza los 3 useEffect de biblio)
   useLibrarySync({ authed });
 
-  // Sync homeRows/homeLoading/feedNonce con el store (efectos del feed los usan)
-  useEffect(() => { libStore.getState().setHomeRows(homeRows); }, [homeRows]);
-  useEffect(() => { libStore.getState().setHomeLoading(homeLoading); }, [homeLoading]);
-  useEffect(() => { libStore.getState().setFeedNonce(feedNonce); }, [feedNonce]);
+  // Hidratar feed cacheado → store una sola vez; persistir store → localStorage.
+  useEffect(() => {
+    try {
+      const cached = JSON.parse(localStorage.getItem('velocity.home') || 'null');
+      if (Array.isArray(cached) && cached.length && !libStore.getState().homeRows.length) {
+        libStore.getState().setHomeRows(cached);
+      }
+    } catch {}
+    return libStore.subscribe((s, prev) => {
+      if (s.homeRows !== prev?.homeRows) {
+        try { localStorage.setItem('velocity.home', JSON.stringify(s.homeRows || [])); } catch {}
+      }
+    });
+  }, []);
 
   // UI transitoria
   const [openPlaylist, setOpenPlaylist] = useState(null);
@@ -1730,8 +1741,8 @@ export default function App() {
     // Registrar inicio de sesión en PG para trazabilidad de tiempo de sesión activa.
     api.sessionStart();
     // Forzar regeneración del feed al hacer login (borra el feed del usuario anterior).
-    setHomeRows([]);
-    setFeedNonce(n => n + 1);
+    libStore.getState().setHomeRows([]);
+    libStore.getState().bumpFeedNonce();
     setAuthed(true);
   };
   const deleteAccount = async () => { try { await api.deleteAccount(); } catch {} onLogout(); };
