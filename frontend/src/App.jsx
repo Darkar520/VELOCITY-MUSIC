@@ -20,6 +20,9 @@ import {
 import { initialState as audioInitialState, reduce as audioReduce, selectPlaySync } from './audio/audioMachine.js';
 import { runAudioEffects, flushPendingSeek } from './audio/runAudioEffects.js';
 import { usePersisted, useViewport, useDominantColor, useHSwipe } from './hooks.js';
+import { useLibrarySync } from './hooks/useLibrarySync.js';
+import { useLibraryStore } from './store/libraryStore.js';
+import { usePlayerStore } from './store/playerStore.js';
 import { Icon } from './Icons.jsx';
 import { EQViz, Spinner, ProgressRing, DownloadAllButton, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider, SettingCard, ToggleRow, ColorField } from './components.jsx';
 import { Avatar, PixelAvatar, AVATARS } from './avatars.jsx';
@@ -184,15 +187,47 @@ export default function App() {
   // arrancar con un feed 100% personalizado desde el día 1.
   const [onboardPrefs, setOnboardPrefs] = usePersisted('velocity.onboard', null);
 
-  // datos del backend
-  const [favs, setFavs] = useState([]);
-  const [playlists, setPlaylists] = useState([]);
-  const [recent, setRecent] = useState([]);
-  const [savedAlbums, setSavedAlbums] = useState([]);
-  const [savedPlaylists, setSavedPlaylists] = useState([]);
+  // datos del backend — fuente de verdad: libraryStore.
+  // Los useState locales son mirrors para los efectos internos de App.jsx que
+  // aún los referencian (feed, persistencia). Se sincronizan bidireccionalmente.
+  // Cuando el último efecto que los usa se migre, estos useState desaparecen.
+  const libStore = useLibraryStore;
+  const [favs, setFavsState] = useState(() => libStore.getState().favs);
+  const [playlists, setPlaylistsState] = useState(() => libStore.getState().playlists);
+  const [recent, setRecentState] = useState(() => libStore.getState().recent);
+  const [savedAlbums, setSavedAlbumsState] = useState(() => libStore.getState().savedAlbums);
+  const [savedPlaylists, setSavedPlaylistsState] = useState(() => libStore.getState().savedPlaylists);
   const [homeRows, setHomeRows] = usePersisted('velocity.home', []);
   const [homeLoading, setHomeLoading] = useState(false);
   const [feedNonce, setFeedNonce] = useState(0);
+
+  // Wrappers que escriben store + state local
+  const setFavs = (v) => { const arr = Array.isArray(v) ? v : []; libStore.getState().setFavs(arr); setFavsState(arr); };
+  const setPlaylists = (v) => { const arr = Array.isArray(v) ? v : []; libStore.getState().setPlaylists(arr); setPlaylistsState(arr); };
+  const setRecent = (v) => { const arr = Array.isArray(v) ? v : []; libStore.getState().setRecent(arr); setRecentState(arr); };
+  const setSavedAlbums = (v) => { const arr = Array.isArray(v) ? v : []; libStore.getState().setSavedAlbums(arr); setSavedAlbumsState(arr); };
+  const setSavedPlaylists = (v) => { const arr = Array.isArray(v) ? v : []; libStore.getState().setSavedPlaylists(arr); setSavedPlaylistsState(arr); };
+
+  // Suscripción: si el store cambia desde afuera (ej: useLibrarySync hidrata),
+  // sincronizar los useState locales.
+  useEffect(() => {
+    const unsub = libStore.subscribe((s) => {
+      if (s.favs !== favs) setFavsState(s.favs);
+      if (s.playlists !== playlists) setPlaylistsState(s.playlists);
+      if (s.recent !== recent) setRecentState(s.recent);
+      if (s.savedAlbums !== savedAlbums) setSavedAlbumsState(s.savedAlbums);
+      if (s.savedPlaylists !== savedPlaylists) setSavedPlaylistsState(s.savedPlaylists);
+    });
+    return unsub;
+  }, [favs, playlists, recent, savedAlbums, savedPlaylists]);
+
+  // Hook de sincronización con backend (reemplaza los 3 useEffect de biblio)
+  useLibrarySync({ authed });
+
+  // Sync homeRows/homeLoading/feedNonce con el store (efectos del feed los usan)
+  useEffect(() => { libStore.getState().setHomeRows(homeRows); }, [homeRows]);
+  useEffect(() => { libStore.getState().setHomeLoading(homeLoading); }, [homeLoading]);
+  useEffect(() => { libStore.getState().setFeedNonce(feedNonce); }, [feedNonce]);
 
   // UI transitoria
   const [openPlaylist, setOpenPlaylist] = useState(null);
@@ -2315,38 +2350,17 @@ export default function App() {
     { id:'library', label:'Biblioteca', I: Icon.Lib }, { id:'profile', label:'Perfil', I: Icon.User },
   ];
 
-  const ctx = {
-    track, playing, play, T, favs, toggleFav, playlists, createPlaylist, addToPlaylist, removeFromPlaylist, deletePlaylist,
-    recent, recentSearches, addSearch, removeSearch, homeRows, homeLoading, detailLoading,
-    openPlaylist, setOpenPlaylist, setTab, addToTarget: setAddTarget, onMenu: setMenuTarget,
-    themeKey, setThemeKey, quality, setQuality, glow, setGlow, eq, setEq, settings, setSettings,
-    view, setView, goArtist, goAlbum, goMix, goWrapped, startAiDj, shareTrack, email, onLogout, detailData,
-    installApp, canInstall: !!installEvt, isIOS, isStandalone,
-    addToQueue, removeFromQueue: removeFromQueueToast, download, removeDownload, downloadMany, clearDownloads, getDownloads, downloaded, downloading, openQueue: () => setShowQueue(true),
-    savedAlbums, saveAlbum, unsaveAlbum, isAlbumSaved,
-    savedPlaylists, savePlaylist, unsavePlaylist, isPlaylistSaved,
-    selecting, selection, toggleSelect, startSelection, clearSelection,
-    hydrateTracks, playStats: playStatsRef.current,
-    outputs, sinkId, setOutput: setSinkId,
-    customPalettes, activeCustomId, setActiveCustomId, activePalette, addPalette, updatePalette, deletePalette,
-    displayName, saveProfileName, deleteAccount, avatar, saveAvatar,
-    onboardPrefs, setOnboardPrefs, GENRES: ONBOARDING_GENRES,
-    backendDown,
-    playingFrom, goToPlayingPlaylist,
-    showImport, setShowImport, importJob, setImportJob, startImport, startImportText,
-  };
-
   const playerProps = { track, playing, togglePlay, next, prev, time, dur, seek, vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved: track ? favs.includes(track.id) : false, toggleFav, T, loadingAudio, nextCover, prevCover };
 
   const TabContent = (
     <>
-      {tab === 'home' && <HomeTab ctx={ctx} />}
-      {tab === 'search' && <SearchTab ctx={ctx} />}
-      {tab === 'library' && <LibraryTab ctx={ctx} />}
-      {tab === 'profile' && <ProfileTab ctx={ctx} />}
+      {tab === 'home' && <HomeTab T={T} play={play} onMenu={setMenuTarget} goMix={goMix} displayName={displayName} avatar={avatar} email={email} setTab={setTab} startAiDj={startAiDj} onboardPrefs={onboardPrefs} setOnboardPrefs={setOnboardPrefs} backendDown={backendDown} />}
+      {tab === 'search' && <SearchTab T={T} play={play} addToTarget={setAddTarget} onMenu={setMenuTarget} recentSearches={recentSearches} addSearch={addSearch} removeSearch={removeSearch} goArtist={goArtist} goAlbum={goAlbum} goMix={goMix} selecting={selecting} selection={selection} toggleSelect={toggleSelect} startSelection={startSelection} addToQueue={addToQueue} removeFromQueue={removeFromQueueToast} backendDown={backendDown} setTab={setTab} />}
+      {tab === 'library' && <LibraryTab T={T} play={play} openPlaylist={openPlaylist} setOpenPlaylist={setOpenPlaylist} addToTarget={setAddTarget} onMenu={setMenuTarget} downloadMany={downloadMany} goAlbum={goAlbum} goMix={goMix} selecting={selecting} selection={selection} toggleSelect={toggleSelect} startSelection={startSelection} addToQueue={addToQueue} removeFromQueue={removeFromQueueToast} setShowImport={setShowImport} hydrateTracks={hydrateTracks} createPlaylist={createPlaylist} removeFromPlaylist={removeFromPlaylist} deletePlaylist={deletePlaylist} savePlaylist={savePlaylist} unsavePlaylist={unsavePlaylist} />}
+      {tab === 'profile' && <ProfileTab T={T} themeKey={themeKey} setThemeKey={setThemeKey} quality={quality} setQuality={setQuality} glow={glow} setGlow={setGlow} eq={eq} setEq={setEq} settings={settings} setSettings={setSettings} setOpenPlaylist={setOpenPlaylist} setTab={setTab} email={email} onLogout={onLogout} installApp={installApp} canInstall={!!installEvt} isIOS={isIOS} isStandalone={isStandalone} goWrapped={goWrapped} customPalettes={customPalettes} activeCustomId={activeCustomId} setActiveCustomId={setActiveCustomId} activePalette={activePalette} addPalette={addPalette} updatePalette={updatePalette} deletePalette={deletePalette} displayName={displayName} saveProfileName={saveProfileName} deleteAccount={deleteAccount} avatar={avatar} saveAvatar={saveAvatar} removeDownload={removeDownload} clearDownloads={clearDownloads} getDownloads={getDownloads} />}
     </>
   );
-  const Content = view ? (view.type === 'wrapped' ? <WrappedView ctx={ctx} /> : <DetailView view={view} ctx={ctx} />) : TabContent;
+  const Content = view ? (view.type === 'wrapped' ? <WrappedView T={T} setView={setView} play={play} playStats={playStatsRef.current} /> : <DetailView view={view} T={T} play={play} addToTarget={setAddTarget} onMenu={setMenuTarget} goArtist={goArtist} goAlbum={goAlbum} setView={setView} detailLoading={detailLoading} detailData={detailData} downloadMany={downloadMany} saveAlbum={saveAlbum} unsaveAlbum={unsaveAlbum} savePlaylist={savePlaylist} unsavePlaylist={unsavePlaylist} selecting={selecting} selection={selection} toggleSelect={toggleSelect} startSelection={startSelection} addToQueue={addToQueue} removeFromQueue={removeFromQueueToast} />) : TabContent;
 
   // Manejo resiliente de errores de reproducción: reintenta una vez con URL
   // fresca (evade caché de borde) y, si vuelve a fallar, salta a la siguiente
@@ -2521,7 +2535,7 @@ export default function App() {
       lyricOffset={lyricOffset} setLyricOffset={setLyricOffset} inLibrary={trackInLibrary} />
   );
   const addModal = <AddToPlaylistModal trackId={addTarget} onClose={() => { setAddTarget(null); if (selecting) clearSelection(); }} playlists={playlists} createPlaylist={createPlaylist} addToPlaylist={addToPlaylist} removeFromPlaylist={removeFromPlaylist} T={T} />;
-  const trackMenu = <TrackMenu trackId={menuTarget} onClose={() => setMenuTarget(null)} ctx={ctx} />;
+  const trackMenu = <TrackMenu trackId={menuTarget} onClose={() => setMenuTarget(null)} T={T} addToTarget={setAddTarget} goArtist={goArtist} goAlbum={goAlbum} shareTrack={shareTrack} addToQueue={addToQueue} download={download} removeDownload={removeDownload} playingFrom={playingFrom} goToPlayingPlaylist={goToPlayingPlaylist} />;
   const queuePanel = <QueuePanel open={showQueue} onClose={() => setShowQueue(false)} queue={queue} current={track} play={play} T={T} reorder={reorderQueue} remove={removeFromQueue} />;
   const selectionBar = selecting ? (
     <div className="fade-up glass" style={{ position:'fixed', left:'50%', transform:'translateX(-50%)', bottom:'calc(env(safe-area-inset-bottom, 16px) + 92px)', zIndex:100, display:'flex', alignItems:'center', gap:12, background:'var(--surf-1)', border:`1px solid ${hex2rgba(T.accent,.4)}`, borderRadius:99, padding:'8px 10px 8px 16px', boxShadow:'0 12px 34px #000a' }}>

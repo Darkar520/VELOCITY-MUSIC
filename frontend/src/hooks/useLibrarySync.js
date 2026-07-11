@@ -17,7 +17,8 @@
 import { useEffect, useRef } from 'react';
 import { useLibraryStore } from '../store/libraryStore.js';
 import { api } from '../api.js';
-import { allCached, saveMeta, trackById, normalizeTrack, slimTrack } from '../catalog.js';
+import { allCached, saveMeta, trackById, normalizeTrack } from '../catalog.js';
+import { slimTrack } from '../helpers.js';
 
 const LIB_CACHE_KEY = 'velocity.libcache.v1';
 
