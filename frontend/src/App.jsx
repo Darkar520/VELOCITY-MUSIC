@@ -718,7 +718,9 @@ export default function App() {
         if (!cancel && withTracks !== null) setPlaylists(withTracks);
 
         // Sincronización de metadatos entre dispositivos: subir lo conocido.
-        const local = [..._catalog.values()].map(slimTrack).filter(Boolean);
+        // Bug previo: referenciaba _catalog (privado de catalog.js, no exportado).
+        // Usamos allCached() que es la API pública equivalente.
+        const local = allCached().map(slimTrack).filter(Boolean);
         if (local.length) api.saveTracks(local);
 
         // Si el backend respondió, hidratar metadatos faltantes y persistir la caché.
@@ -2412,7 +2414,7 @@ export default function App() {
 
   const audioEl = (
     <>
-    <audio ref={audioRef} src={playSrc || undefined} preload="none" playsInline
+    <audio ref={audioRef} src={playSrc || undefined} preload="none"
       onTimeUpdate={() => {
         const a = audioRef.current; if (!a) return;
         // Solo congelar reloj si la interrupción por vídeo está CONFIRMADA y sigue pausado.
