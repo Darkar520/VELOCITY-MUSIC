@@ -22,6 +22,7 @@ import { runAudioEffects, flushPendingSeek } from './audio/runAudioEffects.js';
 import { usePersisted, useViewport, useDominantColor, useHSwipe } from './hooks.js';
 import { useLibrarySync } from './hooks/useLibrarySync.js';
 import { useHomeFeed } from './hooks/useHomeFeed.js';
+import { useLibraryActions } from './hooks/useLibraryActions.js';
 import { useLibraryStore } from './store/libraryStore.js';
 import { usePlayerStore } from './store/playerStore.js';
 import { Icon } from './Icons.jsx';
@@ -1602,82 +1603,10 @@ export default function App() {
     api.updateNowPlaying({ trackId: '', title: '', artist: '', cover: '', position: 0, duration: 0, playing: false, deviceName: '', quality: '' });
     setPlaying(false);
   };
-  // Cola de favoritos pendientes: si el backend no está disponible, guardamos
-  // los cambios en localStorage y los sincronizamos al volver la conexión.
-  const pendingFavsRef = useRef(null);
-  if (!pendingFavsRef.current) {
-    pendingFavsRef.current = new Map(); // id → 'add' | 'remove'
-    try {
-      const saved = JSON.parse(localStorage.getItem('velocity.pendingFavs') || '[]');
-      saved.forEach(([id, op]) => pendingFavsRef.current.set(id, op));
-    } catch {}
-  }
-  const savePendingFavs = () => {
-    try { localStorage.setItem('velocity.pendingFavs', JSON.stringify([...pendingFavsRef.current.entries()])); } catch {}
-  };
-  // Sincronizar la cola de favoritos pendientes con el backend.
-  const flushPendingFavs = React.useCallback(async () => {
-    if (!pendingFavsRef.current.size) return;
-    const entries = [...pendingFavsRef.current.entries()];
-    for (const [id, op] of entries) {
-      try {
-        if (op === 'add') await api.addFavorite(id);
-        else await api.removeFavorite(id);
-        pendingFavsRef.current.delete(id);
-      } catch { break; } // si falla, dejar el resto para el siguiente intento
-    }
-    savePendingFavs();
-  }, []);
-  // Sincronizar al recuperar conexión.
-  useEffect(() => {
-    const onOnline = () => { if (authed) flushPendingFavs(); };
-    window.addEventListener('online', onOnline);
-    return () => window.removeEventListener('online', onOnline);
-  }, [authed, flushPendingFavs]);
-  // Sincronizar al iniciar sesión (por si había pendientes de una sesión anterior).
-  useEffect(() => { if (authed) flushPendingFavs(); }, [authed]);
-  const toggleFav = async (id) => {
-    const has = favs.includes(id);
-    // Actualización optimista: el UI responde inmediatamente.
-    setFavs(f => has ? f.filter(x => x !== id) : [id, ...f]);
-    if (!has) { const tk = trackById(id); if (tk) api.saveTracks([slimTrack(tk)]); }
-    try {
-      has ? await api.removeFavorite(id) : await api.addFavorite(id);
-      // Éxito: asegurar que no quede en la cola pendiente.
-      pendingFavsRef.current.delete(id);
-      savePendingFavs();
-    } catch {
-      // Sin internet u otro error: guardar en la cola pendiente en vez de revertir.
-      // El UI ya muestra el estado correcto; se sincronizará al volver la conexión.
-      pendingFavsRef.current.set(id, has ? 'remove' : 'add');
-      savePendingFavs();
-      // Solo mostrar aviso si hay conexión (si no hay, el usuario ya sabe).
-      if (navigator.onLine) {
-        setFavs(f => has ? [id, ...f] : f.filter(x => x !== id)); // revertir solo con red
-        showToast('No se pudo actualizar Me gusta');
-      }
-    }
-  };
+  // ── Acciones de biblioteca (fav, playlist, search): extraídas a useLibraryActions ──
+  const { toggleFav, createPlaylist, addToPlaylist, removeFromPlaylist, deletePlaylist } = useLibraryActions({ authed, showToast });
 
-  // ── Playlists (backend) ──
-  const createPlaylist = async (name) => {
-    try { const id = await api.createPlaylist(name); setPlaylists(p => [...p, { id, name, trackIds: [] }]); return id; }
-    catch { showToast('No se pudo crear la playlist'); return null; }
-  };
-  const addToPlaylist = async (pid, tid) => {
-    setPlaylists(p => p.map(pl => pl.id===pid && !pl.trackIds.includes(tid) ? { ...pl, trackIds:[...pl.trackIds, tid] } : pl));
-    const tk = trackById(tid); if (tk) api.saveTracks([slimTrack(tk)]);
-    try { await api.addToPlaylist(pid, tid); } catch { showToast('No se pudo añadir'); }
-  };
-  const removeFromPlaylist = async (pid, tid) => {
-    setPlaylists(p => p.map(pl => pl.id===pid ? { ...pl, trackIds: pl.trackIds.filter(x => x !== tid) } : pl));
-    try { await api.removeFromPlaylist(pid, tid); } catch { showToast('No se pudo quitar'); }
-  };
-  const deletePlaylist = async (pid) => {
-    setPlaylists(p => p.filter(pl => pl.id !== pid));
-    try { await api.deletePlaylist(pid); } catch { showToast('No se pudo eliminar'); }
-  };
-
+  // Búsquedas recientes (UI local, no libraryStore)
   const addSearch = (term) => setRecentSearches(s => [term, ...s.filter(x => x.toLowerCase() !== term.toLowerCase())].slice(0, 8));
   const removeSearch = (term) => setRecentSearches(s => s.filter(x => x !== term));
 
