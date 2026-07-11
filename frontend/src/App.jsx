@@ -23,6 +23,7 @@ import { usePersisted, useViewport, useDominantColor, useHSwipe } from './hooks.
 import { useLibrarySync } from './hooks/useLibrarySync.js';
 import { useHomeFeed } from './hooks/useHomeFeed.js';
 import { useLibraryActions } from './hooks/useLibraryActions.js';
+import { useDownloads } from './hooks/useDownloads.js';
 import { useLibraryStore } from './store/libraryStore.js';
 import { usePlayerStore } from './store/playerStore.js';
 import { Icon } from './Icons.jsx';
@@ -1461,82 +1462,8 @@ export default function App() {
     showToast(inQueue ? 'Eliminada de la cola' : 'No estaba en la cola');
   };
 
-  // ── Descargas offline (IndexedDB, sin diálogo de guardado) ──
-  // URL firmada con la calidad actual (misma firma/caché que play/prefetch).
-  const streamUrlQ = async (t) => api.ensureStreamUrl({ artist: t.artist, title: t.title, id: t.id, quality: ({ high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' }[quality] || 'high') });
-  const fetchBlobWithTimeout = async (url, ms = 90000) => {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), ms);
-    try {
-      const res = await fetch(url, { signal: ctrl.signal });
-      if (!res.ok) throw new Error('http ' + res.status);
-      return await res.blob();
-    } finally { clearTimeout(t); }
-  };
-  // Descarga resiliente: reintenta una vez con re-resolución fresca (la resolución
-  // en frío de yt-dlp puede tardar/fallar la primera vez).
-  const fetchTrackBlob = async (tk) => {
-    try {
-      const url = await streamUrlQ(tk);
-      return await fetchBlobWithTimeout(url, 90000);
-    } catch (e) {
-      await new Promise(r => setTimeout(r, 1500));
-      // Nueva firma (caché invalidada por reintento con re-sign).
-      api._streamSignCache?.clear?.();
-      const url = await streamUrlQ(tk);
-      return await fetchBlobWithTimeout(url + (url.includes('?') ? '&' : '?') + '_r=' + Date.now(), 90000);
-    }
-  };
-  const download = async (tk) => {
-    if (!tk || downloaded.has(tk.id) || downloading.has(tk.id)) return;
-    setDownloading(d => { const n = new Set(d); n.add(tk.id); return n; });
-    cacheTrack(tk); saveMeta(); pendingRef.current.add(tk.id); savePending();
-    api.saveTracks([slimTrack(tk)]);
-    try {
-      const blob = await fetchTrackBlob(tk);
-      await offline.saveTrack(tk, blob);
-      setDownloaded(d => { const n = new Set(d); n.add(tk.id); return n; });
-      showToast('Descargada · disponible sin conexión');
-    } catch { showToast(`No se pudo descargar: ${tk.title}`); }
-    finally { setDownloading(d => { const n = new Set(d); n.delete(tk.id); return n; }); pendingRef.current.delete(tk.id); savePending(); }
-  };
-  const clearDownloads = async () => {
-    try { await offline.deleteAll(); } catch {}
-    setDownloaded(new Set());
-    showToast('Todas las descargas eliminadas');
-  };
-  const getDownloads = () => offline.downloadsInfo();
-  const removeDownload = async (id) => {
-    try { await offline.deleteTrack(id); } catch {}
-    setDownloaded(d => { const n = new Set(d); n.delete(id); return n; });
-    showToast('Descarga eliminada');
-  };
-  const downloadMany = async (ids) => {
-    const todo = ids.filter(id => !downloaded.has(id) && !downloading.has(id) && trackById(id));
-    if (!todo.length) { showToast('Ya está todo descargado'); return; }
-    setDownloading(d => { const n = new Set(d); todo.forEach(id => n.add(id)); return n; });
-    todo.forEach(id => pendingRef.current.add(id)); savePending(); saveMeta();
-    api.saveTracks(todo.map(trackById).map(slimTrack).filter(Boolean));
-    let ok = 0, done = 0;
-    const worker = async (id) => {
-      const tk = trackById(id);
-      try {
-        const blob = await fetchTrackBlob(tk);
-        await offline.saveTrack(tk, blob);
-        setDownloaded(d => { const n = new Set(d); n.add(id); return n; });
-        ok++;
-      } catch {}
-      finally {
-        setDownloading(d => { const n = new Set(d); n.delete(id); return n; });
-        pendingRef.current.delete(id); savePending();
-        done++; showToast(`Descargando ${done}/${todo.length}…`);
-      }
-    };
-    const queue = [...todo];
-    const CONC = Math.min(4, queue.length);
-    await Promise.all(Array.from({ length: CONC }, async () => { while (queue.length) { await worker(queue.shift()); } }));
-    showToast(`${ok}/${todo.length} descargadas`);
-  };
+  // ── Descargas offline: extraídas a useDownloads ──
+  const { download, downloadMany, removeDownload, clearDownloads, getDownloads } = useDownloads({ quality, showToast, pendingRef, savePending });
 
   useEffect(() => { homeRowsRef.current = homeRows; }, [homeRows]);
 
