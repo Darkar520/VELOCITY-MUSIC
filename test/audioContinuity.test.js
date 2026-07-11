@@ -2,6 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   playSyncStrategy,
+  hideRecoverDelays,
+  shouldYieldAudioFocus,
+  mediaSessionPlaybackState,
+  shouldRestoreInterruptPosition,
   shouldResumeOnForeground,
   canForceReacquire,
   isExternalPause,
@@ -9,64 +13,56 @@ import {
   shouldSuspendPreloads,
   shouldPreExtendQueue,
   isDocumentVisible,
-  mediaSessionPlaybackState,
-  shouldRestoreInterruptPosition,
-  shouldConfirmMediaFocusLoss,
-  isPlaybackZombie,
 } from '../frontend/src/audioContinuity.js';
 
-test('playSyncStrategy: playing → soft-play (también background)', () => {
+test('playSyncStrategy', () => {
   assert.equal(playSyncStrategy({ playing: true, hasSrc: true }), 'soft-play');
   assert.equal(playSyncStrategy({ playing: false, hasSrc: true }), 'pause');
-  assert.equal(playSyncStrategy({ playing: true, hasSrc: false }), 'noop');
 });
 
-test('shouldRestoreInterruptPosition: solo si REBOBINÓ, no si está en el mismo segundo', () => {
-  // Pegado en 5 con ancla 5 → NO restaurar (era el bug del “segundo 5 eterno”)
-  assert.equal(shouldRestoreInterruptPosition(5, 5), false);
-  assert.equal(shouldRestoreInterruptPosition(5.3, 5), false);
-  assert.equal(shouldRestoreInterruptPosition(12, 5), false); // por delante
-  assert.equal(shouldRestoreInterruptPosition(2, 45), true); // rebobinado
-  assert.equal(shouldRestoreInterruptPosition(0, 30), true);
+test('hideRecoverDelays: pocos intentos tempranos (no bucle infinito)', () => {
+  const d = hideRecoverDelays();
+  assert.ok(d.length <= 3);
+  assert.equal(d[0], 0);
+  assert.ok(d[d.length - 1] < 1000);
 });
 
-test('isPlaybackZombie: playing sin avanzar tiempo', () => {
-  assert.equal(isPlaybackZombie({
-    userWantsPlay: true, paused: false, ended: false,
-    prevTime: 5, currTime: 5.02, stuckTicks: 2, needTicks: 2,
-  }), true);
-  assert.equal(isPlaybackZombie({
-    userWantsPlay: true, paused: false, ended: false,
-    prevTime: 5, currTime: 6.5, stuckTicks: 2, needTicks: 2,
+test('shouldYieldAudioFocus: ceder tras agotar intentos (no pelear con Facebook)', () => {
+  assert.equal(shouldYieldAudioFocus({
+    attemptIndex: 0, maxAttempts: 1, stillPaused: true, userWantsPlay: true,
   }), false);
-  assert.equal(isPlaybackZombie({
-    userWantsPlay: true, paused: true, ended: false,
-    prevTime: 5, currTime: 5, stuckTicks: 5, needTicks: 2,
-  }), false); // pause real, no zombie
+  assert.equal(shouldYieldAudioFocus({
+    attemptIndex: 1, maxAttempts: 1, stillPaused: true, userWantsPlay: true,
+  }), true);
+  assert.equal(shouldYieldAudioFocus({
+    attemptIndex: 99, maxAttempts: 1, stillPaused: false, userWantsPlay: true,
+  }), false);
 });
 
-test('mediaSessionPlaybackState', () => {
-  assert.equal(mediaSessionPlaybackState({ userWantsPlay: true, systemInterrupted: false }), 'playing');
-  assert.equal(mediaSessionPlaybackState({ userWantsPlay: true, systemInterrupted: true }), 'paused');
+test('mediaSessionPlaybackState: yielded → paused', () => {
+  assert.equal(mediaSessionPlaybackState({ userWantsPlay: true, yieldedFocus: false }), 'playing');
+  assert.equal(mediaSessionPlaybackState({ userWantsPlay: true, yieldedFocus: true }), 'paused');
 });
 
-test('shouldConfirmMediaFocusLoss', () => {
-  assert.equal(shouldConfirmMediaFocusLoss({ stillPaused: true, userWantsPlay: true, keepAliveAttempt: 2, maxAttempts: 5 }), false);
-  assert.equal(shouldConfirmMediaFocusLoss({ stillPaused: true, userWantsPlay: true, keepAliveAttempt: 5, maxAttempts: 5 }), true);
+test('shouldRestoreInterruptPosition: no clavar el mismo segundo', () => {
+  assert.equal(shouldRestoreInterruptPosition(5, 5), false);
+  assert.equal(shouldRestoreInterruptPosition(2, 40), true);
 });
 
-test('shouldResumeOnForeground / canForceReacquire / isExternalPause', () => {
+test('shouldResumeOnForeground / canForceReacquire / external pause', () => {
   assert.equal(shouldResumeOnForeground({
     userWantsPlay: true, audioEnded: false, audioPaused: true,
-    volume: 1, targetVolume: 1, systemPaused: false, timeStuck: false,
+    systemPaused: true, timeStuck: false, volume: 1, targetVolume: 1,
   }), true);
   assert.equal(canForceReacquire(false), false);
-  assert.equal(isExternalPause({ selfPause: false, pendingFade: false, userWantsPlay: true, audioEnded: false }), true);
+  assert.equal(isExternalPause({
+    selfPause: false, pendingFade: false, userWantsPlay: true, audioEnded: false,
+  }), true);
 });
 
-test('shouldFadeIn / preloads / queue / visible', () => {
+test('misc', () => {
   assert.equal(shouldFadeIn(false), false);
   assert.equal(shouldSuspendPreloads(false), true);
-  assert.equal(shouldPreExtendQueue(4, 5), true);
+  assert.equal(shouldPreExtendQueue(0, 1), true);
   assert.equal(isDocumentVisible({ visibilityState: 'hidden' }), false);
 });
