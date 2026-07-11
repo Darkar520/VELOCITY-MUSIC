@@ -1,50 +1,65 @@
-# Installs:
-# 1) Autostart guardian at logon
-# 2) ensure-running.ps1 every 5 minutes (recovers if guardian dies / OOM)
-# 3) PostgreSQL service recovery (restart on failure)
-#
-# Run once:
+# Installs always-on recovery for Velocity (no long-lived fragile guardian required).
+# Run as current user (admin optional for PG recovery flags):
 #   powershell -ExecutionPolicy Bypass -File .\scripts\install-watchdog.ps1
 
 $ErrorActionPreference = 'Continue'
 $Proj = 'C:\Users\irisp\OneDrive\Escritorio\VELOCITY MUSIC'
+$short = 'C:\velocity-ops'
 
-# --- Autostart (existing) ---
-& (Join-Path $Proj 'scripts\install-autostart.ps1')
+New-Item -ItemType Directory -Force -Path $short | Out-Null
+Copy-Item -Force (Join-Path $Proj 'scripts\ensure-running.ps1') (Join-Path $short 'ensure-running.ps1')
+Copy-Item -Force (Join-Path $Proj 'scripts\start-backend-once.ps1') (Join-Path $short 'start-backend-once.ps1')
+# ensure-running uses absolute paths to Proj - OK
 
-# --- ensure-running every 5 min (wrapper .cmd avoids path-with-spaces bugs) ---
-$taskName = 'VelocityMusicEnsure'
-$cmdPath = Join-Path $Proj 'scripts\run-ensure.cmd'
-try { schtasks /Delete /TN $taskName /F 2>$null | Out-Null } catch {}
-$create = schtasks /Create /TN $taskName /TR "`"$cmdPath`"" /SC MINUTE /MO 5 /RL LIMITED /F 2>&1 | Out-String
-if ($LASTEXITCODE -eq 0) {
-  Write-Host "OK Scheduled task: $taskName (every 5 min)"
-} else {
-  Write-Host ('WARN ensure task: ' + $create)
-}
+@'
+@echo off
+powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\velocity-ops\ensure-running.ps1
+'@ | Set-Content -Path (Join-Path $short 'run-ensure.cmd') -Encoding ASCII
 
-# --- PostgreSQL auto-restart on crash ---
+# Startup VBS still launches a guardian-like first boot
+$Startup = [Environment]::GetFolderPath('Startup')
+$vbs = Join-Path $Proj 'scripts\start-hidden.vbs'
+Copy-Item -Force $vbs (Join-Path $Startup 'VelocityMusic.vbs')
+Write-Host 'OK Startup VBS'
+
+# Task every 2 minutes - PRIMARY recovery
+$task = 'VelocityMusicEnsure'
+cmd /c "schtasks /Delete /TN $task /F >nul 2>&1"
+$tr = 'C:\velocity-ops\run-ensure.cmd'
+$out = cmd /c "schtasks /Create /TN $task /TR $tr /SC MINUTE /MO 2 /RL LIMITED /F" 2>&1
+Write-Host $out
+cmd /c "schtasks /Query /TN $task /FO LIST" 2>&1 | findstr /i "TaskName Status Next"
+
+# Logon task: run ensure immediately at login
+$task2 = 'VelocityMusicOnLogon'
+cmd /c "schtasks /Delete /TN $task2 /F >nul 2>&1"
+$out2 = cmd /c "schtasks /Create /TN $task2 /TR $tr /SC ONLOGON /RL LIMITED /F" 2>&1
+Write-Host $out2
+
+# PG recovery (may need admin)
 try {
-  sc.exe failure postgresql-x64-16 reset= 86400 actions= restart/15000/restart/30000/restart/60000 | Out-Null
-  sc.exe failureflag postgresql-x64-16 1 | Out-Null
-  sc.exe config postgresql-x64-16 start= auto | Out-Null
-  Write-Host 'OK PostgreSQL service recovery: restart on failure'
-} catch {
-  Write-Host ('WARN PG recovery: ' + $_.Exception.Message)
-}
+  cmd /c "sc failure postgresql-x64-16 reset= 86400 actions= restart/10000/restart/20000/restart/60000"
+  cmd /c "sc config postgresql-x64-16 start= auto"
+  Write-Host 'OK PG service recovery flags (if access allowed)'
+} catch {}
 
-# Ensure WEB_CONCURRENCY in .env
+# .env: single process
 $envFile = Join-Path $Proj '.env'
 if (Test-Path $envFile) {
-  $raw = Get-Content $envFile -Raw -Encoding UTF8
-  if ($raw -notmatch '(?m)^WEB_CONCURRENCY=') {
-    Add-Content -LiteralPath $envFile -Value "`nWEB_CONCURRENCY=2`n" -Encoding UTF8
-    Write-Host 'OK Added WEB_CONCURRENCY=2 to .env'
+  $txt = Get-Content $envFile -Raw -Encoding UTF8
+  if ($txt -notmatch '(?m)^WEB_CONCURRENCY=') {
+    Add-Content $envFile "`r`nWEB_CONCURRENCY=1`r`nCLUSTER=0`r`n" -Encoding UTF8
   } else {
-    Write-Host 'OK WEB_CONCURRENCY already in .env'
+    $lines = Get-Content $envFile -Encoding UTF8 | ForEach-Object {
+      if ($_ -match '^\s*WEB_CONCURRENCY\s*=') { 'WEB_CONCURRENCY=1' }
+      elseif ($_ -match '^\s*CLUSTER\s*=') { 'CLUSTER=0' }
+      else { $_ }
+    }
+    if ($txt -notmatch '(?m)^CLUSTER=') { $lines += 'CLUSTER=0' }
+    $lines | Set-Content $envFile -Encoding UTF8
   }
+  Write-Host 'OK .env CLUSTER=0 WEB_CONCURRENCY=1'
 }
 
 Write-Host ''
-Write-Host 'Watchdog installed. Boot stack now with:'
-Write-Host ('  powershell -ExecutionPolicy Bypass -File "' + (Join-Path $Proj 'scripts\restart-velocity.ps1') + '"')
+Write-Host 'Run now: powershell -ExecutionPolicy Bypass -File C:\velocity-ops\ensure-running.ps1'

@@ -1,5 +1,6 @@
-' Lanza el guardián de VELOCITY MUSIC en segundo plano, totalmente oculto
-' (sin ventana de PowerShell). Lo usa la tarea programada al iniciar sesión.
+' Boot Velocity stack hidden at logon (calls ensure-running, not a fragile infinite loop only).
 Set sh = CreateObject("WScript.Shell")
-cmd = "powershell -NoProfile -ExecutionPolicy Bypass -File ""C:\Users\irisp\OneDrive\Escritorio\VELOCITY MUSIC\scripts\velocity-guardian.ps1"""
-sh.Run cmd, 0, False
+' Immediate ensure
+sh.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""C:\Users\irisp\OneDrive\Escritorio\VELOCITY MUSIC\scripts\ensure-running.ps1""", 0, False
+' Also start guardian as secondary (best-effort)
+sh.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""C:\Users\irisp\OneDrive\Escritorio\VELOCITY MUSIC\scripts\velocity-guardian.ps1""", 0, False
