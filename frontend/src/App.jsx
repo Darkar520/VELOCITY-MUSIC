@@ -54,7 +54,19 @@ import { parseTextPlaylist } from './import/parsePlaylist.js';
 class AppErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { error: null }; }
   static getDerivedStateFromError(e) { return { error: e }; }
-  componentDidCatch(e) { console.error('[Velocity] Error capturado:', e); }
+  componentDidCatch(e, info) {
+    console.error('[Velocity] Error capturado:', e);
+    console.error('[Velocity] Stack:', e?.stack);
+    console.error('[Velocity] Component stack:', info?.componentStack);
+    try {
+      localStorage.setItem('velocity.lastError', JSON.stringify({
+        msg: e?.message || String(e),
+        stack: e?.stack,
+        componentStack: info?.componentStack,
+        ts: Date.now(),
+      }));
+    } catch {}
+  }
   render() {
     if (!this.state.error) return this.props.children;
     const msg = this.state.error?.message || String(this.state.error);
@@ -698,86 +710,24 @@ export default function App() {
   }, []);
 
   // ── Carga inicial tras autenticación ──
-  // Clave de caché de biblioteca por usuario (evita mezclar cuentas en un mismo equipo).
-  const libCacheKey = () => 'velocity.lib.' + (localStorage.getItem('velocity.email') || 'u');
-  // Persistir la biblioteca en local: estructura ligera + metadatos SOLO de las
-  // pistas de la biblioteca, sin carátulas pesadas (data:/blob:) para no exceder
-  // la cuota de localStorage (esa era la causa del fallo: setItem lanzaba y se perdía).
-  const persistLibCache = (favIds, pls, albums, savedPls, recentIds) => {
-    try {
-      const libIds = new Set([...(favIds || []), ...(recentIds || [])]);
-      (pls || []).forEach(p => (p.trackIds || []).forEach(id => libIds.add(id)));
-      const tracks = [...libIds].map(trackById).filter(Boolean).map(t =>
-        (typeof t.cover === 'string' && (t.cover.startsWith('data:') || t.cover.startsWith('blob:')))
-          ? { ...t, cover: '' } : t
-      );
-      localStorage.setItem(libCacheKey(), JSON.stringify({ favs: favIds || [], playlists: pls || [], savedAlbums: albums || [], savedPlaylists: savedPls || [], recent: recentIds || [], tracks }));
-    } catch {}
-  };
-  // Restaurar biblioteca desde caché local (disponible aunque el backend esté caído).
-  const restoreLibCache = () => {
-    try {
-      const c = JSON.parse(localStorage.getItem(libCacheKey()) || 'null');
-      if (!c) return;
-      if (Array.isArray(c.tracks))      c.tracks.forEach(cacheTrack);   // poblar catálogo primero
-      if (Array.isArray(c.favs))          setFavs(c.favs);
-      if (Array.isArray(c.playlists))     setPlaylists(c.playlists);
-      if (Array.isArray(c.savedAlbums))   setSavedAlbums(c.savedAlbums);
-      if (Array.isArray(c.savedPlaylists)) setSavedPlaylists(c.savedPlaylists);
-      if (Array.isArray(c.recent))      setRecent(c.recent);
-    } catch {}
-  };
+  // NOTA: La hidratación y fetch de biblioteca los maneja useLibrarySync (hook).
+  // Antes había un useEffect duplicado acá que competía con el hook, generando
+  // race conditions. Se eliminó en el refactor de libraryStore.
+  // Marcamos libReadyRef cuando el store termina de hidratar (para el feed).
   useEffect(() => {
     if (!authed) return;
-    restoreLibCache(); // mostrar datos cacheados de inmediato (offline-first)
-    let cancel = false;
-    (async () => {
-      try {
-        const [fav, pls, hist, albums, savedPls] = await Promise.all([
-          api.favorites().catch(() => null),
-          api.playlists().catch(() => null),
-          api.history().catch(() => null),
-          api.savedAlbums().catch(() => null),
-          api.savedPlaylists().catch(() => null),
-        ]);
-        if (cancel) return;
-        // Solo pisar el estado restaurado si la petición tuvo éxito (backend arriba).
-        if (fav !== null)      setFavs(fav);
-        if (hist !== null)     setRecent(hist.map(h => h.trackId));
-        if (albums !== null)   setSavedAlbums(albums);
-        if (savedPls !== null) setSavedPlaylists(savedPls);
-        const withTracks = pls === null ? null : await Promise.all(pls.map(async p => {
-          const ids = await api.playlistTracks(p.id).catch(() => []);
-          return { id: p.id, name: p.name, trackIds: ids };
-        }));
-        if (!cancel && withTracks !== null) setPlaylists(withTracks);
-
-        // Sincronización de metadatos entre dispositivos: subir lo conocido.
-        // Bug previo: referenciaba _catalog (privado de catalog.js, no exportado).
-        // Usamos allCached() que es la API pública equivalente.
-        const local = allCached().map(slimTrack).filter(Boolean);
-        if (local.length) api.saveTracks(local);
-
-        // Si el backend respondió, hidratar metadatos faltantes y persistir la caché.
-        if (fav !== null) {
-          const recentIds = (hist || []).map(h => h.trackId);
-          const allIds = new Set([...fav, ...recentIds]);
-          (withTracks || []).forEach(p => (p.trackIds || []).forEach(id => allIds.add(id)));
-          const missing = [...allIds].filter(id => id && !trackById(id));
-          for (let i = 0; i < missing.length && !cancel; i += 300) {
-            const metas = await api.getTracks(missing.slice(i, i + 300));
-            if (!cancel && metas.length) metas.forEach(normalizeTrack);
-          }
-          if (!cancel) {
-            saveMeta(); setCatVer(v => v + 1);
-            persistLibCache(fav, withTracks || [], albums || [], savedPls || [], recentIds);
-          }
-        }
-      } catch {}
-      // Marcar la biblioteca como lista para que el feed use datos reales.
-      if (!cancel) libReadyRef.current = true;
-    })();
-    return () => { cancel = true; };
+    let cancelled = false;
+    const unsub = useLibraryStore.subscribe((s) => {
+      if (!cancelled && (s.favs.length || s.playlists.length || s.recent.length)) {
+        libReadyRef.current = true;
+      }
+    });
+    // Si el store ya tenía datos del cache, marcar listo inmediatamente
+    const s = useLibraryStore.getState();
+    if (s.favs.length || s.playlists.length || s.recent.length) {
+      libReadyRef.current = true;
+    }
+    return () => { cancelled = true; unsub(); };
   }, [authed]);
 
   // ── SSE: escuchar "now playing" de otros dispositivos en tiempo real ──
@@ -813,11 +763,8 @@ export default function App() {
     return () => { stopped = true; clearTimeout(reconnectTimer); try { es?.close(); } catch {} };
   }, [authed]);
 
-  // ── Re-persistir la caché al modificar biblioteca (fav/playlist/álbum/recientes) ──
-  useEffect(() => {
-    if (!authed) return;
-    persistLibCache(favs, playlists, savedAlbums, savedPlaylists, recent);
-  }, [favs, playlists, savedAlbums, savedPlaylists, recent]);
+  // ── Re-persistir la caché al modificar biblioteca: lo maneja useLibrarySync ──
+  // (antes había un useEffect acá que llamaba persistLibCache — eliminado por duplicación)
 
   // ── Feed personalizado (mixes según lo que escuchas, guardas y descargas) ──
   const feedSigRef = useRef('');

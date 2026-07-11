@@ -3,6 +3,8 @@
  *
  * Responsabilidades:
  *   1. Hidratar el libraryStore desde localStorage al montar (offline-first).
+ *      Clave: 'velocity.lib.<email>' (per-usuario, evita mezclar cuentas).
+ *      Antes había duplicación con App.jsx — este hook es ahora la ÚNICA fuente.
  *   2. Cuando authed=true, hacer fetch inicial de favs/playlists/recent/saved.
  *   3. Re-persistir cache cuando el store cambia.
  *
@@ -17,14 +19,16 @@
 import { useEffect, useRef } from 'react';
 import { useLibraryStore } from '../store/libraryStore.js';
 import { api } from '../api.js';
-import { allCached, saveMeta, trackById, normalizeTrack } from '../catalog.js';
+import { allCached, saveMeta, trackById, normalizeTrack, cacheTrack } from '../catalog.js';
 import { slimTrack } from '../helpers.js';
 
-const LIB_CACHE_KEY = 'velocity.libcache.v1';
+function libCacheKey() {
+  return 'velocity.lib.' + (localStorage.getItem('velocity.email') || 'u');
+}
 
 function readLibCache() {
   try {
-    const raw = localStorage.getItem(LIB_CACHE_KEY);
+    const raw = localStorage.getItem(libCacheKey());
     if (!raw) return null;
     return JSON.parse(raw);
   } catch { return null; }
@@ -34,8 +38,12 @@ function writeLibCache(favIds, pls, albums, savedPls, recentIds) {
   try {
     const libIds = new Set([...(favIds || []), ...(recentIds || [])]);
     (pls || []).forEach(p => (p.trackIds || []).forEach(id => libIds.add(id)));
-    const tracks = [...libIds].map(trackById).filter(Boolean).map(slimTrack);
-    localStorage.setItem(LIB_CACHE_KEY, JSON.stringify({
+    // Filtrar covers data:/blob: para no exceder quota de localStorage.
+    const tracks = [...libIds].map(trackById).filter(Boolean).map(t =>
+      (typeof t.cover === 'string' && (t.cover.startsWith('data:') || t.cover.startsWith('blob:')))
+        ? { ...t, cover: '' } : t
+    );
+    localStorage.setItem(libCacheKey(), JSON.stringify({
       favs: favIds || [],
       playlists: pls || [],
       savedAlbums: albums || [],
@@ -55,6 +63,8 @@ export function useLibrarySync({ authed } = {}) {
     didInitRef.current = true;
     const c = readLibCache();
     if (!c) return;
+    // Poblar catálogo primero (los tracks cacheados) — restoreLibCache original hacía esto
+    if (Array.isArray(c.tracks)) c.tracks.forEach(cacheTrack);
     const store = useLibraryStore.getState();
     if (Array.isArray(c.favs))          store.setFavs(c.favs);
     if (Array.isArray(c.playlists))     store.setPlaylists(c.playlists);
