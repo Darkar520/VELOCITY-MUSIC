@@ -171,23 +171,14 @@ Estas filas van a `test/audioMachine.test.js` (+ seguir cubriendo matriz pura).
 3. ✅ Reutiliza predicados de `audioContinuity.js`
 4. ✅ DoD: machine + matriz verdes; **App.jsx aún no migrado** (Fase 2)
 
-### Fase 2 — Adapter mínimo en App (un camino a la vez)
+### Fase 2 — Adapter en App ✅ 2026-07-11
 
-Orden de migración (un PR lógico / un commit por camino):
+1. ✅ `runAudioEffects.js` + `dispatchAudio` / `machineRef` en App  
+2. ✅ Boot `HYDRATE`, toggle `USER_PLAY`/`USER_PAUSE`, yield `EXTERNAL_PAUSE`, vis `DOC_*`  
+3. ✅ `TRACK_SET` + `STREAM_READY` en `play()`, seek, MS, error, ENDED  
+4. ✅ Espejos (`playingRef`, `systemPausedRef`, session) derivados de machine  
 
-1. **Boot:** `HYDRATE` sustituye init de `sessionResumeRef` + playSrc stale.  
-2. **USER_PLAY / USER_PAUSE** (`togglePlay`).  
-3. **EXTERNAL_PAUSE + DOC_HIDDEN/VISIBLE** (yield / tryResume).  
-4. **TRACK_SET + NEXT/PREV**.  
-5. **onPlaying / onError / ENDED**.  
-6. **Media Session handlers** → solo `dispatch`.
-
-En cada paso: borrar el if-spaghetti equivalente; no dejar dos dueños de la misma decisión.
-
-**DoD Fase 2:**  
-- `grep` sin `systemPausedRef` / `sessionResumeRef` como fuente de verdad (pueden existir solo como cache de UI si hace falta, pero el dueño es `machineState`).  
-- Suite completa + build verdes.  
-- Checklist A7, A10, A11, A12, A13 manual en Chrome.
+**DoD Fase 2:** suite + build verdes; checklist manual Chrome recomendado.
 
 ### Fase 3 — Limpieza
 
