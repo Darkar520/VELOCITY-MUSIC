@@ -1,0 +1,91 @@
+/**
+ * P1-E structural proof: UI extracted from App.jsx; shell still exports entry.
+ * Real path: reads shipped source + imports plain JS parser (Node can't load JSX).
+ */
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const src = (...p) => join(root, 'frontend', 'src', ...p);
+
+test('main.jsx still mounts App + AppErrorBoundary from App.jsx', () => {
+  const main = readFileSync(src('main.jsx'), 'utf8');
+  assert.match(main, /from ['"]\.\/App\.jsx['"]/);
+  assert.match(main, /AppErrorBoundary/);
+  assert.match(main, /\bApp\b/);
+});
+
+test('App.jsx is slim shell: still default-exports App, no inline HomeTab function', () => {
+  const app = readFileSync(src('App.jsx'), 'utf8');
+  assert.match(app, /export default function App/);
+  assert.match(app, /export \{ AppErrorBoundary \}/);
+  assert.doesNotMatch(app, /^function HomeTab\b/m);
+  assert.doesNotMatch(app, /^function ExpandedPlayer\b/m);
+  assert.doesNotMatch(app, /^function AuthScreen\b/m);
+  assert.doesNotMatch(app, /^function QueuePanel\b/m);
+  assert.match(app, /from ['"]\.\/tabs\/HomeTab\.jsx['"]/);
+  assert.match(app, /from ['"]\.\/player\/ExpandedPlayer\.jsx['"]/);
+  assert.match(app, /from ['"]\.\/screens\/AuthScreen\.jsx['"]/);
+  assert.match(app, /audioMachine\.js/);
+  assert.match(app, /dispatchAudio/);
+  const lineCount = app.split(/\n/).length;
+  assert.ok(lineCount < 3000, `App.jsx should be slim shell, got ${lineCount} lines`);
+});
+
+test('extracted modules exist and export named UI symbols (shipped source)', () => {
+  const checks = [
+    ['tabs/HomeTab.jsx', 'HomeTab'],
+    ['tabs/SearchTab.jsx', 'SearchTab'],
+    ['tabs/LibraryTab.jsx', 'LibraryTab'],
+    ['tabs/ProfileTab.jsx', 'ProfileTab'],
+    ['tabs/DetailView.jsx', 'DetailView'],
+    ['tabs/WrappedView.jsx', 'WrappedView'],
+    ['screens/AuthScreen.jsx', 'AuthScreen'],
+    ['player/ExpandedPlayer.jsx', 'ExpandedPlayer'],
+    ['player/MiniPlayerBar.jsx', 'MiniPlayerBar'],
+    ['player/PlayerBar.jsx', 'PlayerBar'],
+    ['player/QueuePanel.jsx', 'QueuePanel'],
+    ['modals/Toast.jsx', 'Toast'],
+    ['modals/TrackMenu.jsx', 'TrackMenu'],
+    ['layout/Sidebar.jsx', 'Sidebar'],
+    ['import/parsePlaylist.js', 'parseTextPlaylist'],
+  ];
+  for (const [rel, name] of checks) {
+    const p = src(...rel.split('/'));
+    assert.ok(existsSync(p), `missing ${rel}`);
+    const body = readFileSync(p, 'utf8');
+    assert.match(
+      body,
+      new RegExp(`export (function|const) ${name}\\b`),
+      `${rel} must export ${name}`,
+    );
+  }
+});
+
+test('UI modules do not import audioMachine / re-own yield policy', () => {
+  const dirs = ['tabs', 'player', 'modals', 'screens', 'layout'];
+  for (const d of dirs) {
+    const dir = src(d);
+    if (!existsSync(dir)) continue;
+    for (const name of readdirSync(dir)) {
+      if (!/\.(jsx?|js)$/.test(name)) continue;
+      const body = readFileSync(join(dir, name), 'utf8');
+      assert.doesNotMatch(
+        body,
+        /audioMachine|audioReduce|EXTERNAL_PAUSE|yieldAudioFocus/,
+        `${d}/${name} must not own audio policy`,
+      );
+    }
+  }
+});
+
+test('parseTextPlaylist is real shipped parser (not a stub)', async () => {
+  const mod = await import(pathToFileURL(src('import', 'parsePlaylist.js')).href);
+  const tracks = mod.parseTextPlaylist('Artist - Song Title\nAnother - Track');
+  assert.ok(Array.isArray(tracks));
+  assert.ok(tracks.length >= 1, 'parser must return tracks from plain text');
+  assert.ok(tracks[0].title || tracks[0].artist, 'track has title or artist');
+});
