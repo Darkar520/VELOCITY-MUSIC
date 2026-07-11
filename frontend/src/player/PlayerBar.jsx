@@ -1,15 +1,44 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { fmt, hex2rgba, grad, hiResCover, dedupeByTitle, capPerArtist, slimTrack, parseLRC, lyricsOverlapRatio, plainFromSyncedLines, tintedVars } from '../helpers.js';
+/**
+ * PlayerBar — barra de reproductor expandida (desktop / móvil expandido).
+ *
+ * Consume estado del player del store. Props restantes son callbacks de
+ * UI/navigation y el theme T.
+ *
+ * NOTA: `faved` y `toggleFav` son del dominio LIBRARY (no player), así que
+ * se mantienen como props hasta que exista libraryStore.
+ */
+import React from 'react';
+import { fmt, hex2rgba, grad, hiResCover } from '../helpers.js';
 import { FALLBACK_COVER } from '../constants.js';
 import { Icon } from '../Icons.jsx';
-import { EQViz, Spinner, ProgressRing, DownloadAllButton, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider, SettingCard, ToggleRow, ColorField } from '../components.jsx';
+import { Spinner, RangeSlider } from '../components.jsx';
 import { DeviceChip } from './DeviceChip.jsx';
+import { usePlayerStore } from '../store/playerStore.js';
 
-export function PlayerBar({ track, playing, togglePlay, next, prev, time, dur, seek, vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved, toggleFav, T, onExpand, onMenu, loadingAudio, onQueue }) {
+export function PlayerBar({ faved, toggleFav, T, onExpand, onMenu, onQueue, next, prev }) {
+  // Selectores del store — solo re-renderiza cuando cambian estos slices
+  const track = usePlayerStore((s) => s.track);
+  const playing = usePlayerStore((s) => s.playing);
+  const time = usePlayerStore((s) => s.time);
+  const dur = usePlayerStore((s) => s.duration);
+  const vol = usePlayerStore((s) => s.volume);
+  const shuffle = usePlayerStore((s) => s.shuffle);
+  const repeat = usePlayerStore((s) => s.repeat);
+  const loadingAudio = usePlayerStore((s) => s.loadingAudio);
+
+  // Acciones del store
+  const togglePlay = usePlayerStore((s) => s.togglePlay);
+  const seek = usePlayerStore((s) => s.seek);
+  const setVol = usePlayerStore((s) => s.setVolume);
+  const setShuffle = usePlayerStore((s) => s.setShuffle);
+  const setRepeat = usePlayerStore((s) => s.setRepeat);
+
   const pct = dur > 0 ? (time / dur) * 100 : 0;
+
   if (!track) return (
     <div className="glass" style={{ flexShrink:0, height:90, borderTop:'1px solid var(--line-soft)', background:'#06080fcc', display:'flex', alignItems:'center', justifyContent:'center', color:'var(--txt-2)', fontSize:12.5 }}>Selecciona una canción para empezar</div>
   );
+
   return (
     <div className="glass" style={{ flexShrink:0, height:90, borderTop:'1px solid var(--line-soft)', background:'#06080fcc', display:'grid', gridTemplateColumns:'minmax(180px,1fr) 2fr minmax(140px,1fr)', alignItems:'center', gap:18, padding:'0 22px' }}>
       <div style={{ display:'flex', alignItems:'center', gap:12, minWidth:0 }}>
@@ -23,11 +52,11 @@ export function PlayerBar({ track, playing, togglePlay, next, prev, time, dur, s
       </div>
       <div style={{ display:'flex', flexDirection:'column', gap:7, justifyContent:'center' }}>
         <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:22 }}>
-          <button aria-label="Aleatorio" onClick={() => setShuffle(s=>!s)} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer', opacity: shuffle?1:.32 }}><Icon.Shuf c={shuffle?T.accent:'var(--txt-1)'} sz={16} /></button>
+          <button aria-label="Aleatorio" onClick={() => setShuffle(!shuffle)} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer', opacity: shuffle?1:.32 }}><Icon.Shuf c={shuffle?T.accent:'var(--txt-1)'} sz={16} /></button>
           <button aria-label="Anterior" onClick={prev} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer' }}><Icon.Prev c="var(--txt-0)" sz={20} /></button>
           <button aria-label={playing?'Pausar':'Reproducir'} onClick={togglePlay} className="btn-tap" style={{ width:42, height:42, borderRadius:'50%', background:grad(T), border:'none', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', boxShadow:`0 0 16px ${hex2rgba(T.accent,.5)}` }}>{loadingAudio ? <Spinner c="#04060a" sz={18} /> : (playing ? <Icon.Pause c="#04060a" sz={20} /> : <Icon.Play c="#04060a" sz={20} />)}</button>
           <button aria-label="Siguiente" onClick={next} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer' }}><Icon.Next c="var(--txt-0)" sz={20} /></button>
-          <button aria-label="Repetir" onClick={() => setRepeat(r=>!r)} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer', opacity: repeat?1:.32 }}><Icon.Rep c={repeat?T.accent:'var(--txt-1)'} sz={16} /></button>
+          <button aria-label="Repetir" onClick={() => setRepeat(!repeat)} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer', opacity: repeat?1:.32 }}><Icon.Rep c={repeat?T.accent:'var(--txt-1)'} sz={16} /></button>
         </div>
         <div style={{ display:'flex', alignItems:'center', gap:10 }}>
           <span style={{ fontSize:9.5, color:'var(--txt-2)', fontFamily:'monospace', fontWeight:700, width:30, textAlign:'right' }}>{fmt(time)}</span>
@@ -48,6 +77,4 @@ export function PlayerBar({ track, playing, togglePlay, next, prev, time, dur, s
   );
 }
 
-// ═══════════════════════════════════════════════════════════════
-// TRACK MENU + TOAST
-
+export default PlayerBar;
