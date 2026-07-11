@@ -1,24 +1,28 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { api, isAuthed, setOnUnauthorized } from '../api.js';
+import { api } from '../api.js';
 import * as offline from '../offline.js';
-import { CSS, THEMES, SEED_ROWS, LATIN_ROWS, DISCOVERY, GENRES, ONBOARDING_GENRES, MOODS, ERAS, FALLBACK_COVER, BASE_VARS } from '../constants.js';
-import { fmt, hex2rgba, grad, hiResCover, dedupeByTitle, capPerArtist, slimTrack, parseLRC, lyricsOverlapRatio, plainFromSyncedLines, tintedVars } from '../helpers.js';
-import { cacheTrack, cacheTracks, trackById, allCached, loadMeta, loadPlayerState, saveMeta, normalizeTrack } from '../catalog.js';
+import { THEMES, GENRES, FALLBACK_COVER } from '../constants.js';
+import { hex2rgba, grad, hiResCover } from '../helpers.js';
 import { usePersisted, useViewport, useDominantColor, useHSwipe } from '../hooks.js';
 import { Icon } from '../Icons.jsx';
-import { EQViz, Spinner, ProgressRing, DownloadAllButton, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider, SettingCard, ToggleRow, ColorField } from '../components.jsx';
+import { Spinner, CoverImg, SectionHeader, RangeSlider, SettingCard, ToggleRow, ColorField } from '../components.jsx';
 import { Avatar, PixelAvatar, AVATARS } from '../avatars.jsx';
-import { SearchBar } from './SearchBar.jsx';
-import { useListSearch } from './useListSearch.js';
+import { useLibraryStore } from '../store/libraryStore.js';
+import { usePlayerStore } from '../store/playerStore.js';
 
-export function ProfileTab({ ctx }) {
-  const { T, themeKey, setThemeKey, quality, setQuality, glow, setGlow, eq, setEq,
-          settings, setSettings, favs, setOpenPlaylist, setTab, email, onLogout,
-          installApp, canInstall, isIOS, isStandalone, goWrapped,
-          customPalettes, activeCustomId, setActiveCustomId, activePalette, addPalette, updatePalette, deletePalette,
-          displayName, saveProfileName, deleteAccount, avatar, saveAvatar,
-          removeDownload, clearDownloads, getDownloads } = ctx;
+export function ProfileTab({
+  T, themeKey, setThemeKey, quality, setQuality, glow, setGlow, eq, setEq,
+  settings, setSettings, setOpenPlaylist, setTab, email, onLogout,
+  installApp, canInstall, isIOS, isStandalone, goWrapped,
+  customPalettes, activeCustomId, setActiveCustomId, activePalette, addPalette, updatePalette, deletePalette,
+  displayName, saveProfileName, deleteAccount, avatar, saveAvatar,
+  removeDownload, clearDownloads, getDownloads
+}) {
+  // Library store (solo favs para conteo)
+  const favs = useLibraryStore((s) => s.favs);
+  // Player store (descargas)
+  const downloaded = usePlayerStore((s) => s.downloaded);
   const set = (k, v) => setSettings(s => ({ ...s, [k]: v }));
   const [avatarPicker, setAvatarPicker] = useState(false);
   // ── Administrador de descargas ──
