@@ -2,7 +2,12 @@
 
 **Status:** approved 2026-07-10  
 **Scope this PR:** Workstreams **A** (audio continuity) + **B** (offline covers)  
-**Deferred:** C guest spam · D httpOnly cookies · E App.jsx split
+**Deferred:** C guest spam · D httpOnly cookies · E App.jsx split  
+
+**Update 2026-07-11:** Antes de **E**, ejecutar  
+`docs/superpowers/plans/2026-07-11-audio-state-machine.md`  
+(máquina de estados de audio / `dispatch` único). Partir App sin FSM solo  
+reparte regresiones A7–A13.
 
 ## Goals
 
