@@ -58,7 +58,7 @@ export function HomeTab({ T, play, onMenu, goMix, displayName, avatar, email, se
         </div>
         <div style={{ display:'flex', alignItems:'center', gap:9, flexShrink:0 }}>
           <button aria-label="AI DJ" onClick={async () => { if (djBusy) return; setDjBusy(true); try { await startAiDj?.(); } finally { setDjBusy(false); } }} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:6, background:'var(--surf-1)', border:`1px solid ${hex2rgba(T.accent,.35)}`, borderRadius:99, padding:'7px 13px', cursor:'pointer', color:T.accent, fontSize:11, fontWeight:800 }}>{djBusy ? <Spinner c={T.accent} sz={13} /> : <Icon.Play c={T.accent} sz={13} />} AI DJ</button>
-          <button onClick={() => ctx.setTab('profile')} className="press" aria-label="Perfil" style={{ background:'none', border:'none', padding:0, cursor:'pointer' }}><Avatar avatar={ctx.avatar} name={ctx.displayName} email={ctx.email} T={T} size={40} /></button>
+          <button onClick={() => setTab('profile')} className="press" aria-label="Perfil" style={{ background:'none', border:'none', padding:0, cursor:'pointer' }}><Avatar avatar={avatar} name={displayName} email={email} T={T} size={40} /></button>
         </div>
       </div>
 
