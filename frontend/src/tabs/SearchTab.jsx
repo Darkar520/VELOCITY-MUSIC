@@ -1,15 +1,26 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { api, isAuthed, setOnUnauthorized } from '../api.js';
-import { fmt, hex2rgba, grad, hiResCover, dedupeByTitle, capPerArtist, slimTrack, parseLRC, lyricsOverlapRatio, plainFromSyncedLines, tintedVars } from '../helpers.js';
-import { CSS, THEMES, SEED_ROWS, LATIN_ROWS, DISCOVERY, GENRES, ONBOARDING_GENRES, MOODS, ERAS, FALLBACK_COVER, BASE_VARS } from '../constants.js';
-import { cacheTrack, cacheTracks, trackById, allCached, loadMeta, loadPlayerState, saveMeta, normalizeTrack } from '../catalog.js';
+import React, { useState, useEffect } from 'react';
+import { api } from '../api.js';
+import { hex2rgba, grad, hiResCover, dedupeByTitle, capPerArtist } from '../helpers.js';
+import { GENRES, FALLBACK_COVER } from '../constants.js';
+import { cacheTrack, trackById, normalizeTrack } from '../catalog.js';
 import { Icon } from '../Icons.jsx';
-import { EQViz, Spinner, ProgressRing, DownloadAllButton, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider, SettingCard, ToggleRow, ColorField } from '../components.jsx';
+import { Spinner, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard } from '../components.jsx';
 import { SearchBar } from './SearchBar.jsx';
 import { useListSearch } from './useListSearch.js';
+import { useLibraryStore } from '../store/libraryStore.js';
+import { usePlayerStore } from '../store/playerStore.js';
 
-export function SearchTab({ ctx }) {
-  const { track, playing, play, T, favs, toggleFav, addToTarget, onMenu, recentSearches, addSearch, removeSearch, downloaded, downloading, goArtist, goAlbum, goMix, selecting, selection, toggleSelect, startSelection, addToQueue, removeFromQueue, backendDown } = ctx;
+export function SearchTab({ T, play, addToTarget, onMenu, recentSearches, addSearch, removeSearch, goArtist, goAlbum, goMix, selecting, selection, toggleSelect, startSelection, addToQueue, removeFromQueue, backendDown, setTab }) {
+  // Library store
+  const favs = useLibraryStore((s) => s.favs);
+  const toggleFavInStore = useLibraryStore((s) => s.toggleFav);
+  // Player store
+  const track = usePlayerStore((s) => s.track);
+  const playing = usePlayerStore((s) => s.playing);
+  const downloaded = usePlayerStore((s) => s.downloaded);
+  const downloading = usePlayerStore((s) => s.downloading);
+  // Wrapper
+  const toggleFav = (id) => toggleFavInStore(id);
   const [q, setQ] = useState('');
   const [res, setRes] = useState({ songs: [], albums: [], artists: [] });
   const [relatedMixes, setRelatedMixes] = useState([]);
@@ -107,7 +118,7 @@ export function SearchTab({ ctx }) {
           <Icon.WifiOff c={T.accent} sz={28} />
           <div style={{ fontSize:15, fontWeight:800, color:'var(--txt-0)', marginTop:10, marginBottom:4 }}>Búsqueda no disponible</div>
           <div style={{ fontSize:12, color:'var(--txt-2)', lineHeight:1.5 }}>El servidor está sin conexión. Explora tu biblioteca y reproduce canciones descargadas mientras tanto.</div>
-          <button onClick={() => ctx.setTab('library')} className="btn-tap" style={{ marginTop:14, background:grad(T), border:'none', borderRadius:99, padding:'9px 22px', cursor:'pointer', color:'#04060a', fontSize:12.5, fontWeight:800 }}>Ir a mi biblioteca</button>
+          <button onClick={() => setTab('library')} className="btn-tap" style={{ marginTop:14, background:grad(T), border:'none', borderRadius:99, padding:'9px 22px', cursor:'pointer', color:'#04060a', fontSize:12.5, fontWeight:800 }}>Ir a mi biblioteca</button>
         </div>
       )}
 
