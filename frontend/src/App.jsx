@@ -42,6 +42,7 @@ import { ImportBanner } from './modals/ImportBanner.jsx';
 import { ImportResultModal } from './modals/ImportResultModal.jsx';
 import { TrackMenu } from './modals/TrackMenu.jsx';
 import { Toast } from './modals/Toast.jsx';
+import { parseTextPlaylist } from './import/parsePlaylist.js';
 
 // ── Error Boundary global: evita que un crash de React quede en pantalla negra.
 // Si el componente lanza un error no capturado, muestra un botón de recarga

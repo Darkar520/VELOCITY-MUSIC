@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { fmt, hex2rgba, grad, hiResCover, dedupeByTitle, capPerArtist, slimTrack, parseLRC, lyricsOverlapRatio, plainFromSyncedLines, tintedVars } from '../helpers.js';
 import { Icon } from '../Icons.jsx';
 import { EQViz, Spinner, ProgressRing, DownloadAllButton, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider, SettingCard, ToggleRow, ColorField } from '../components.jsx';
-import { parseTextPlaylist } from '../import/parsePlaylist.js';
+import { parseTextPlaylist, SPOTIFY_BOOKMARKLET } from '../import/parsePlaylist.js';
 import { isSpotifyUrl } from '../spotifyImport.js';
 
 export function ImportPlaylistModal({ onClose, onImport, onImportText, T }) {

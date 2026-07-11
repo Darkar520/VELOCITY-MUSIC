@@ -88,4 +88,25 @@ test('parseTextPlaylist is real shipped parser (not a stub)', async () => {
   assert.ok(Array.isArray(tracks));
   assert.ok(tracks.length >= 1, 'parser must return tracks from plain text');
   assert.ok(tracks[0].title || tracks[0].artist, 'track has title or artist');
+  assert.equal(typeof mod.SPOTIFY_BOOKMARKLET, 'string');
+  assert.match(mod.SPOTIFY_BOOKMARKLET, /^javascript:/);
+});
+
+test('App.jsx import graph: parseTextPlaylist for startImportText', () => {
+  const app = readFileSync(src('App.jsx'), 'utf8');
+  assert.match(app, /import\s*\{\s*parseTextPlaylist\s*\}\s*from\s*['"]\.\/import\/parsePlaylist\.js['"]/);
+  assert.match(app, /parseTextPlaylist\s*\(/);
+  assert.match(app, /startImportText/);
+});
+
+test('ImportPlaylistModal imports exported SPOTIFY_BOOKMARKLET', () => {
+  const modal = readFileSync(src('modals', 'ImportPlaylistModal.jsx'), 'utf8');
+  assert.match(
+    modal,
+    /import\s*\{[^}]*SPOTIFY_BOOKMARKLET[^}]*\}\s*from\s*['"]\.\.\/import\/parsePlaylist\.js['"]/,
+  );
+  assert.match(modal, /SPOTIFY_BOOKMARKLET/);
+  // Must not be a bare undeclared identifier only — import line required above
+  const parseSrc = readFileSync(src('import', 'parsePlaylist.js'), 'utf8');
+  assert.match(parseSrc, /export\s+const\s+SPOTIFY_BOOKMARKLET\s*=/);
 });
