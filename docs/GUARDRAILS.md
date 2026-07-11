@@ -46,14 +46,18 @@ La reproducción NUNCA debe cortarse. Invariantes:
 - **Un solo `<audio>` principal** reproduce; pre-buffers son auxiliares y se
   **vacían al ir a background** (Chrome confunde Media Session con 3 audios).
 - **Lógica pura en `frontend/src/audioContinuity.js`** + tests en
-  `test/audioContinuity.test.js`. No reintroducir comportamientos que fallen
-  esos tests.
+  `test/audioContinuity.test.js` y **matriz cruzada**
+  `test/audioPolicyMatrix.test.js` (A7–A13). No merge si la matriz falla.
+  Ver `docs/AUDIO-REGRESSIONS.md` antes de tocar play/yield/seek/resume.
 - **Background + yielded (cedimos a IG/FB): NUNCA `audio.play()`.**  
   Background **sin** yield (next desde lock / autoplay): **sí** `play()`.  
   Nunca `forceReacquire` / `load()` al cambiar de pista oculta.
 - **Ancla de posición (A10):** solo al **yield**. Limpiar en seek / next / play
   de pista nueva. Restore solo si `yieldedFocus` y misma pista.  
   **Prohibido** reaplicar ancla en cada `onPlay` (clavaba el seek al min 2).
+- **Sesión al reabrir (A12/A13):** posición en `velocity.player` + trackId;
+  no montar URL firmada caducada; no auto-`play()` en error si el usuario no
+  pidió play; al play del usuario re-firmar y seek al segundo guardado.
 - **Salir de la app / apagar pantalla (Chrome prioritario):**
   - Si el audio **sigue** (`!paused`) → no tocar (pantalla off / lock).
   - Si llega **pause externo** → **`yieldAudioFocus`** (MS `paused`, ancla).

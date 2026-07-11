@@ -23,7 +23,7 @@ actualiza la tabla si introduces un cambio.
 | A4 | Tras vídeo, notificación cuenta segundos y al entrar rebobina | `playing=true` + no guardar posición | `yieldedFocus` + `interruptPosition` | Mantener playing sin ceder |
 | A5 | Al salir de la app se queda **pausado** y hay que despausar a mano | Tratar todo pause-on-hide como yield y no reanudar al volver | Yield en hide + **tryResume al visible** | Soft-play en hide “por si acaso” |
 | A6 | Pegado en el segundo N (playing sin avanzar) | Keep-alive creía `!paused` = OK; `restore` clavaba el ancla | Zombie check **solo visible** + restore **solo si rebobinó** | `restore` si `current≈saved` |
-| A7 | **Superposición** música + vídeo IG/FB; vídeo muere ~2s | `play()` en background (recover 0/200ms) reclama el foco en Chrome | **Cero** `play()` si `document.hidden`; yield al primer pause externo oculto | Soft-recover / re-pause window / bucles de play ocultos |
+| A7 | **Superposición** música + vídeo IG/FB; vídeo muere ~2s | `play()` en background **tras ceder / recover** reclama el foco en Chrome | **Cero** `play()` oculto si `yieldedFocus`; yield al primer pause externo oculto. (Next en lock sin yield = A11, sí play) | Soft-recover / bucles de play ocultos **con yield** |
 | A8 | Lock screen solo muestra pause (sin prev/next) al inicio | Media Session incompleta / handlers tardíos | Re-bind handlers + `setPositionState` al `playing` | No registrar next/prev hasta pause |
 | A9 | Chrome background “a veces sí a veces no” | Política inconsistente + pelea de foco | Política de `audioContinuity.js` + tests | Parches ad-hoc por browser |
 | A10 | Seek vuelve al min 2; pistas nuevas arrancan a mitad; next en lock no suena | Ancla de yield se guardaba en play normal y se restauraba siempre; `playSync` bloqueaba todo play oculto | Ancla **solo al yield**, scoped a trackId; restore solo si `yieldedFocus`; soft-play oculto si **no** yielded (next lock) | `restore` en cada `onPlay`; `savePlaybackAnchor` continuo; noop en todo hide |
@@ -54,11 +54,15 @@ el fix es no pelear en Chrome, no detectar el browser.
 ## Tests obligatorios
 
 ```bash
-node --test test/audioContinuity.test.js
+node --test test/audioContinuity.test.js test/audioPolicyMatrix.test.js
 ```
 
-Cubren: noop si hidden, yield al primer pause oculto, media session paused al ceder,
-restore solo si rebobinó, hideRecoverDelays vacío, no force-play si ya suena.
+- `audioContinuity.test.js`: unidades por helper (A7, A10–A13, …).
+- `audioPolicyMatrix.test.js`: **matriz cruzada** — un fix no puede romper otro
+  escenario sin fallar el CI. Actualizar matriz + esta tabla en el mismo commit.
+
+Cubren: play oculto solo sin yield, yield al pause oculto, MS paused al ceder,
+ancla solo con yield, sesión por trackId, URL firmada fresca, sin hide-recover.
 
 ## Checklist manual (Chrome Android primero)
 
@@ -72,6 +76,17 @@ restore solo si rebobinó, hideRecoverDelays vacío, no force-play si ya suena.
 ## Al cambiar código de audio
 
 1. Actualiza esta tabla si aparece un bug nuevo.
-2. Añade un test en `test/audioContinuity.test.js` que falle sin el fix.
-3. **No reintroduzcas** `play()` / timers de recover mientras `document.hidden`.
+2. Añade un test unitario **y** una fila en `audioPolicyMatrix.test.js` que falle sin el fix.
+3. **No reintroduzcas** timers de soft-recover en hide ni `play()` oculto con `yieldedFocus`.
 4. Sube versión del service worker (`velocity-vN`) para invalidar caché del shell.
+5. Antes de merge: `node --test` (suite completa) + checklist manual Chrome.
+
+## Matriz mental (no romper al “arreglar”)
+
+| Quieres… | No toques… | Helper |
+|----------|------------|--------|
+| Parar superposición IG | next en lock, autoplay hide | `playSyncStrategy` + `yieldedFocus` |
+| Next en notificación | yield a IG (no quitar `yieldedFocus` check) | A11 vs A7 |
+| Seek libre / pista desde 0 | ancla de yield aplicada siempre | `canRestoreInterruptPosition` |
+| Resume al reabrir app | ancla de yield / URL caducada | `shouldApplySessionResume` + `isStreamUrlFresh` |
+| UI pausada al reabrir | auto-`play()` en `handleAudioError` | `playingRef` gate (A13) |
