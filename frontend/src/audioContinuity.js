@@ -1,21 +1,23 @@
 /**
- * Continuidad de audio multi-navegador (prioriza Chrome Android).
+ * Continuidad de audio — política estable (Chrome prioritario).
  *
- * Reglas simples (sin pelear el foco de audio):
+ * ─────────────────────────────────────────────────────────────
+ * REGLA DE ORO: NUNCA pelear el foco de audio en bucle en background.
+ * Eso silencia Facebook/YouTube o superpone música + vídeo.
+ * ─────────────────────────────────────────────────────────────
  *
- * 1) Usuario SALE de Velocity / apaga pantalla
- *    → 1–2 soft play inmediatos (Chrome a menudo pause-a al hide).
- *    → Si se recupera, Media Session = playing.
- *    → Si sigue pausado, CEDER (otro app puede tener vídeo). No reintentar en bucle.
+ * A) App oculta y el audio SIGUE (pantalla off típica en Chrome)
+ *    → no tocar. Media Session debe reportar playing + next/prev.
  *
- * 2) Usuario en Facebook/YouTube (vídeo)
- *    → NUNCA reintentar play en background cada segundo (silencia el vídeo).
- *    → Notificación paused + posición guardada.
+ * B) App oculta y llega un pause (Chrome al salir / otra app)
+ *    → un soft play puntual (recuperar hide de Chrome).
+ *    → si nos vuelven a pausar en <1.5s → CEDER (vídeo FB/YT).
+ *    → al ceder: pause firme, Media Session paused, posición guardada.
  *
- * 3) Usuario VUELVE a Velocity
- *    → reanudar desde el segundo guardado.
+ * C) Usuario vuelve a Velocity (visible)
+ *    → reanudar desde posición guardada.
  *
- * 4) NUNCA load() en background. Soft kick (pause+play) solo en foreground o 1 vez al hide.
+ * D) Restaurar posición solo si el browser REBOBINÓ.
  */
 
 export function isDocumentVisible(doc = typeof document !== 'undefined' ? document : null) {
@@ -29,15 +31,27 @@ export function playSyncStrategy({ playing, hasSrc }) {
   return 'soft-play';
 }
 
-/** Soft play al ocultar: solo intentos tempranos (ms). */
+/** Un solo reintento temprano al hide (no una lista larga). */
 export function hideRecoverDelays() {
-  return [0, 180];
+  return [0, 200];
 }
 
 /**
- * Tras estos intentos, si sigue pausado → ceder foco (vídeo u otra app).
- * No seguir atacando play() en background.
+ * Tras un soft-play en background, si llega OTRO pause pronto → ceder foco.
+ * Evita superposición música+vídeo y deja sonar Facebook/YouTube.
  */
+export function shouldYieldOnRePause({
+  hidden,
+  userWantsPlay,
+  alreadyYielded,
+  msSinceLastBackgroundPlay,
+  rePauseWindowMs = 1600,
+}) {
+  if (!hidden || !userWantsPlay || alreadyYielded) return false;
+  if (msSinceLastBackgroundPlay == null || msSinceLastBackgroundPlay < 0) return false;
+  return msSinceLastBackgroundPlay < rePauseWindowMs;
+}
+
 export function shouldYieldAudioFocus({ attemptIndex, maxAttempts, stillPaused, userWantsPlay }) {
   if (!userWantsPlay || !stillPaused) return false;
   return attemptIndex >= maxAttempts;
@@ -49,7 +63,6 @@ export function mediaSessionPlaybackState({ userWantsPlay, yieldedFocus }) {
   return 'playing';
 }
 
-/** Solo restaurar si rebobinó por detrás del ancla. */
 export function shouldRestoreInterruptPosition(currentTime, savedPosition, thresholdSec = 1.25) {
   if (savedPosition == null || !Number.isFinite(savedPosition) || savedPosition < 0) return false;
   if (!Number.isFinite(currentTime)) return true;
