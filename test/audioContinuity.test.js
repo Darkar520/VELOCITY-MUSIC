@@ -13,23 +13,28 @@ import {
   shouldSuspendPreloads,
   shouldPreExtendQueue,
   isDocumentVisible,
+  mediaSessionPlaybackState,
+  shouldRestoreInterruptPosition,
 } from '../frontend/src/audioContinuity.js';
 
 // ── Bug histórico: forceReacquire en background al cambiar de pista (Chrome) ──
-test('playSyncStrategy: background + playing → soft-play (NUNCA force-reacquire)', () => {
+test('playSyncStrategy: background + playing sin interrupción → soft-play', () => {
   assert.equal(
-    playSyncStrategy({ playing: true, visible: false, audioPaused: true, hasSrc: true }),
-    'soft-play'
-  );
-  assert.equal(
-    playSyncStrategy({ playing: true, visible: false, audioPaused: false, hasSrc: true }),
+    playSyncStrategy({ playing: true, visible: false, audioPaused: true, hasSrc: true, systemInterrupted: false }),
     'soft-play'
   );
 });
 
-test('playSyncStrategy: foreground + playing → soft-play', () => {
+test('playSyncStrategy: background + interrupción por vídeo → noop (no pelear con YT)', () => {
   assert.equal(
-    playSyncStrategy({ playing: true, visible: true, audioPaused: true, hasSrc: true }),
+    playSyncStrategy({ playing: true, visible: false, audioPaused: true, hasSrc: true, systemInterrupted: true }),
+    'noop'
+  );
+});
+
+test('playSyncStrategy: visible + interrupción → soft-play (reanudar al volver)', () => {
+  assert.equal(
+    playSyncStrategy({ playing: true, visible: true, audioPaused: true, hasSrc: true, systemInterrupted: true }),
     'soft-play'
   );
 });
@@ -46,6 +51,21 @@ test('playSyncStrategy: sin src → noop', () => {
     playSyncStrategy({ playing: true, visible: true, audioPaused: true, hasSrc: false }),
     'noop'
   );
+});
+
+// ── Notificación: durante vídeo debe verse PAUSADO ──
+test('mediaSessionPlaybackState: interrupción → paused aunque userWantsPlay', () => {
+  assert.equal(mediaSessionPlaybackState({ userWantsPlay: true, systemInterrupted: true }), 'paused');
+  assert.equal(mediaSessionPlaybackState({ userWantsPlay: true, systemInterrupted: false }), 'playing');
+  assert.equal(mediaSessionPlaybackState({ userWantsPlay: false, systemInterrupted: false }), 'paused');
+});
+
+// ── Posición: restaurar si el browser rebobinó ──
+test('shouldRestoreInterruptPosition cuando currentTime se desvió', () => {
+  assert.equal(shouldRestoreInterruptPosition(10, 45), true);
+  assert.equal(shouldRestoreInterruptPosition(45.2, 45), false);
+  assert.equal(shouldRestoreInterruptPosition(0, 30), true);
+  assert.equal(shouldRestoreInterruptPosition(12, null), false);
 });
 
 // ── Bug: tras vídeo queda silencio zombie; al volver hay que reanudar ──

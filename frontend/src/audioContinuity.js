@@ -5,8 +5,9 @@
  * 1. Un solo <audio> principal reproduce. Preloads NO deben tocar Media Session.
  * 2. En background (document hidden): SOLO soft play(). NUNCA pause+load+play
  *    ni forceReacquire (Chrome mata la sesión de media).
- * 3. Tras vídeo/otra app: el OS puede pausar o dejar zombie silencioso.
- *    playingRef se mantiene true; al volver a visible → restaurar volumen + play.
+ * 3. Interrupción por vídeo (YT/FB): intención de play se mantiene, pero
+ *    Media Session muestra PAUSED y se congela la posición. Al recuperar el
+ *    foco (visible / play del OS) se reanuda desde el segundo guardado.
  * 4. No poner volume=0 (fade) si la página no está visible (rAF se congela → silencio).
  * 5. Avance de cola en background debe ser síncrono si hay URL pre-firmada (peek).
  */
@@ -20,20 +21,21 @@ export function isDocumentVisible(doc = typeof document !== 'undefined' ? docume
 /**
  * Estrategia al sincronizar playSrc/playing con el <audio>.
  * @returns {'soft-play'|'force-reacquire'|'pause'|'noop'}
+ *
+ * Si estamos en interrupción por vídeo y la app sigue oculta, NO pelear con
+ * el OS (noop). Al volver a visible, tryResume reanuda desde la posición guardada.
  */
-export function playSyncStrategy({ playing, visible, audioPaused, hasSrc }) {
+export function playSyncStrategy({ playing, visible, audioPaused, hasSrc, systemInterrupted }) {
   if (!hasSrc) return 'noop';
   if (!playing) return 'pause';
-  // Siempre soft-play al arrancar/cambiar src. force-reacquire SOLO se usa
-  // desde tryResume en foreground tras fallo de soft-play o zombie.
-  if (visible) return 'soft-play';
-  // Background: soft-play únicamente (Chrome/Brave/Edge/Opera).
+  // Interrumpidos por vídeo/otra app y aún en background: no forzar play.
+  if (systemInterrupted && !visible) return 'noop';
+  // Soft-play al arrancar/cambiar src. force-reacquire solo en tryResume visible.
   return 'soft-play';
 }
 
 /**
- * ¿Debemos intentar reanudar al volver a primer plano?
- * Cubré: pause del OS, zombie silencioso (playing pero tiempo quieto), volume 0.
+ * ¿Debemos reanudar al recuperar el foco (visible / OS devolvió audio)?
  */
 export function shouldResumeOnForeground({
   userWantsPlay,
@@ -51,8 +53,29 @@ export function shouldResumeOnForeground({
     return true;
   }
   if (timeStuck) return true;
-  // Nudge suave al volver (puede estar "playing" sin audio real tras un vídeo).
+  // Nudge suave al volver (zombie silencioso tras vídeo).
   return true;
+}
+
+/**
+ * Estado de la barra de notificación (Media Session).
+ * Durante interrupción por vídeo debe ser 'paused' aunque la intención sea play,
+ * para que no “cuenten” los segundos mientras el audio está detenido.
+ */
+export function mediaSessionPlaybackState({ userWantsPlay, systemInterrupted }) {
+  if (!userWantsPlay) return 'paused';
+  if (systemInterrupted) return 'paused';
+  return 'playing';
+}
+
+/**
+ * Si el navegador rebobinó/desvió currentTime tras la interrupción,
+ * hay que restaurar la posición guardada (umbral en segundos).
+ */
+export function shouldRestoreInterruptPosition(currentTime, savedPosition, thresholdSec = 1) {
+  if (savedPosition == null || !Number.isFinite(savedPosition) || savedPosition < 0) return false;
+  if (!Number.isFinite(currentTime)) return true;
+  return Math.abs(currentTime - savedPosition) > thresholdSec;
 }
 
 /** ¿Es seguro llamar forceReacquire (pause+play)? Solo foreground. */

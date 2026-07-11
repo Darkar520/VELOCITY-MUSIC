@@ -15,6 +15,8 @@ import {
   shouldFadeIn,
   shouldSuspendPreloads,
   shouldPreExtendQueue,
+  mediaSessionPlaybackState,
+  shouldRestoreInterruptPosition,
 } from './audioContinuity.js';
 import { usePersisted, useViewport, useDominantColor, useHSwipe } from './hooks.js';
 import { Icon } from './Icons.jsx';
@@ -2479,6 +2481,44 @@ export default function App() {
   // Reintento por pista ante error de reproducción (URL de audio expirada, etc.).
   const playErrorRef = useRef({ id: null, n: 0 });
   const playingRef = useRef(false);
+  // Interrupción por vídeo (YT/FB): posición congelada + Media Session en paused.
+  const systemPausedRef = useRef(false);
+  const interruptPositionRef = useRef(null);
+  const reacquireInFlight = useRef(false);
+  const lastTimeRef = useRef(0);
+  const stuckCheckRef = useRef(null);
+  const [mediaInterrupted, setMediaInterrupted] = useState(false);
+  const markSystemInterrupted = (a) => {
+    if (!a) return;
+    const pos = Number.isFinite(a.currentTime) ? a.currentTime : 0;
+    interruptPositionRef.current = pos;
+    systemPausedRef.current = true;
+    setMediaInterrupted(true);
+    setTime(pos);
+    if ('mediaSession' in navigator) {
+      try { navigator.mediaSession.playbackState = 'paused'; } catch {}
+      try {
+        const d = a.duration;
+        if (d > 0 && isFinite(d)) {
+          navigator.mediaSession.setPositionState({
+            duration: d,
+            position: Math.min(pos, d),
+            playbackRate: 1,
+          });
+        }
+      } catch {}
+    }
+  };
+  const clearSystemInterrupted = () => {
+    systemPausedRef.current = false;
+    setMediaInterrupted(false);
+  };
+  const restoreInterruptPosition = (a) => {
+    if (!a) return;
+    const saved = interruptPositionRef.current;
+    if (!shouldRestoreInterruptPosition(a.currentTime || 0, saved)) return;
+    try { a.currentTime = saved; setTime(saved); } catch {}
+  };
   // Web Audio para normalizar volumen (compresor de rango dinámico). Opt-in.
   // ── AudioContext eliminado: era incompatible con background playback en móvil ──
   // createMediaElementSource secuestra el <audio> permanentemente y el AudioContext
@@ -2892,9 +2932,8 @@ export default function App() {
   }, [authed]);
 
   // ── Sincronizar elemento audio (playSrc incluido: reproduce al resolver archivo offline) ──
-  // REGLA ANTI-REGRESIÓN: en background NUNCA forceReacquire. Chrome/Edge matan
-  // la Media Session si se interviene con pause/load al cambiar de pista con
-  // la pantalla apagada. Solo soft play() (audioContinuity.playSyncStrategy).
+  // REGLA ANTI-REGRESIÓN: en background NUNCA forceReacquire. Si hay interrupción
+  // por vídeo y la app sigue oculta → noop (notificación en pausa, posición guardada).
   useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
@@ -2904,7 +2943,9 @@ export default function App() {
       visible,
       audioPaused: a.paused,
       hasSrc: Boolean(playSrc || track?.url || a.src),
+      systemInterrupted: systemPausedRef.current || mediaInterrupted,
     });
+    if (strategy === 'noop') return;
     if (strategy === 'pause') {
       selfPauseRef.current = true;
       try { a.pause(); } catch {}
@@ -2918,18 +2959,19 @@ export default function App() {
         clearTimeout(fadeSafetyRef.current);
         a.volume = vol;
       }
+      // Si venimos de una interrupción, reponer el segundo exacto antes de play.
+      restoreInterruptPosition(a);
       const p = a.play();
       if (p && p.catch) {
         p.catch((err) => {
           if (err?.name === 'AbortError' || err?.name === 'NotAllowedError') return;
-          // Solo escalar a reacquire en primer plano.
           if (canForceReacquire(isDocumentVisible())) {
             setTimeout(() => forceReacquire(), 120);
           }
         });
       }
     }
-  }, [playing, track, playSrc, vol]);
+  }, [playing, track, playSrc, vol, mediaInterrupted]);
 
   // ── Wake Lock API: previene que la CPU/screen se suspenda mientras reproduce ──
   // En algunos dispositivos Android agresivos, el navegador puede suspender
@@ -3003,46 +3045,49 @@ export default function App() {
   // Sincronizar playingRef con la intención.
   useEffect(() => { playingRef.current = playing; }, [playing]);
 
-  // ── Reanudación robusta al volver de vídeo/otra app/pantalla bloqueada ──
-  // - Vídeo YT/FB: el OS pausa o deja zombie silencioso; playingRef sigue true.
-  // - Al volver a visible: restaurar volumen + soft play; forceReacquire solo
-  //   en foreground si hace falta (NUNCA en background).
-  const lastTimeRef = useRef(0);
-  const stuckCheckRef = useRef(null);
-  const systemPausedRef = useRef(false);
-  const reacquireInFlight = useRef(false);
-
+  // ── Reanudación tras interrupción por vídeo / zombie silencioso ──
   const forceReacquire = () => {
-    // Solo primer plano. En background Chrome mata la sesión de media.
     if (!canForceReacquire(isDocumentVisible())) return;
     if (reacquireInFlight.current) return;
     const a = audioRef.current;
     if (!a || !playingRef.current || a.ended) return;
     reacquireInFlight.current = true;
     if (a.volume < vol * 0.5) a.volume = vol;
+    // Guardar posición antes de pause+play (algunos browsers rebobinan).
+    const saved = interruptPositionRef.current != null
+      ? interruptPositionRef.current
+      : (a.currentTime || 0);
+    interruptPositionRef.current = saved;
 
     const p1 = a.play();
     if (p1 && p1.then) {
-      p1.then(() => { reacquireInFlight.current = false; systemPausedRef.current = false; })
-        .catch(() => {
-          selfPauseRef.current = true;
-          try { a.pause(); } catch {}
-          selfPauseRef.current = false;
-          setTimeout(() => {
-            if (!playingRef.current || !canForceReacquire(isDocumentVisible())) {
+      p1.then(() => {
+        restoreInterruptPosition(a);
+        reacquireInFlight.current = false;
+        clearSystemInterrupted();
+      }).catch(() => {
+        selfPauseRef.current = true;
+        try { a.pause(); } catch {}
+        selfPauseRef.current = false;
+        setTimeout(() => {
+          if (!playingRef.current || !canForceReacquire(isDocumentVisible())) {
+            reacquireInFlight.current = false;
+            return;
+          }
+          const a2 = audioRef.current;
+          if (!a2 || a2.ended) { reacquireInFlight.current = false; return; }
+          if (a2.volume < vol * 0.5) a2.volume = vol;
+          restoreInterruptPosition(a2);
+          const p2 = a2.play();
+          if (p2 && p2.then) {
+            p2.then(() => {
+              restoreInterruptPosition(a2);
               reacquireInFlight.current = false;
-              return;
-            }
-            const a2 = audioRef.current;
-            if (!a2 || a2.ended) { reacquireInFlight.current = false; return; }
-            if (a2.volume < vol * 0.5) a2.volume = vol;
-            const p2 = a2.play();
-            if (p2 && p2.then) {
-              p2.then(() => { reacquireInFlight.current = false; systemPausedRef.current = false; })
-                .catch(() => { reacquireInFlight.current = false; });
-            } else { reacquireInFlight.current = false; }
-          }, 100);
-        });
+              clearSystemInterrupted();
+            }).catch(() => { reacquireInFlight.current = false; });
+          } else { reacquireInFlight.current = false; }
+        }, 100);
+      });
     } else { reacquireInFlight.current = false; }
   };
 
@@ -3064,17 +3109,21 @@ export default function App() {
         timeStuck,
       })) return;
 
-      // Siempre restaurar volumen (fade roto / ducking del OS).
       cancelAnimationFrame(fadeRafRef.current);
       clearTimeout(fadeSafetyRef.current);
       if (a.volume < vol * 0.9) a.volume = vol;
 
+      // Clave: reponer el segundo de la interrupción ANTES de play (evita “volver atrás”).
+      restoreInterruptPosition(a);
+
       const p = a.play();
       if (p && p.then) {
-        p.then(() => { systemPausedRef.current = false; })
-          .catch(() => {
-            if (canForceReacquire(isDocumentVisible())) setTimeout(forceReacquire, 120);
-          });
+        p.then(() => {
+          restoreInterruptPosition(a);
+          clearSystemInterrupted();
+        }).catch(() => {
+          if (canForceReacquire(isDocumentVisible())) setTimeout(forceReacquire, 120);
+        });
       } else if (a.paused && canForceReacquire(isDocumentVisible())) {
         setTimeout(forceReacquire, 120);
       }
@@ -3082,12 +3131,11 @@ export default function App() {
 
     const onVis = () => {
       if (document.visibilityState === 'visible') {
-        // Tras YouTube/FB el audio puede quedar "playing" en silencio: nudge siempre.
+        // Al salir del vídeo y volver a Velocity: reanudar desde el segundo guardado.
         setTimeout(tryResume, 60);
-        setTimeout(tryResume, 400);
-        setTimeout(tryResume, 1200);
+        setTimeout(tryResume, 350);
+        setTimeout(tryResume, 1000);
       } else if (shouldSuspendPreloads(false)) {
-        // Liberar pre-buffers para no competir con Media Session en Chrome.
         for (const r of [preloadAudioRef, preloadAudio2Ref]) {
           const el = r.current;
           if (!el) continue;
@@ -3112,7 +3160,6 @@ export default function App() {
       if (a.paused || systemPausedRef.current) {
         tryResume();
       } else if (lastTimeRef.current > 0 && Math.abs(ct - lastTimeRef.current) < 0.05 && ct > 0.5) {
-        // Zombie silencioso en foreground.
         if (a.volume < vol * 0.5) a.volume = vol;
         forceReacquire();
       }
@@ -3200,13 +3247,22 @@ export default function App() {
     })();
   }, [track?.id, queue, settings.autoplay]);
 
-  // ── Media Session: estado de posición (barra de progreso en pantalla bloqueada) ──
+  // ── Media Session: posición en notificación ──
+  // Durante interrupción por vídeo: congelar en interruptPosition (no “contar” segundos).
   useEffect(() => {
     if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return;
-    if (dur > 0 && isFinite(dur)) {
-      try { navigator.mediaSession.setPositionState({ duration: dur, position: Math.min(time, dur), playbackRate: 1 }); } catch {}
-    }
-  }, [time, dur]);
+    if (!(dur > 0 && isFinite(dur))) return;
+    const pos = mediaInterrupted && interruptPositionRef.current != null
+      ? interruptPositionRef.current
+      : time;
+    try {
+      navigator.mediaSession.setPositionState({
+        duration: dur,
+        position: Math.min(Math.max(0, pos), dur),
+        playbackRate: 1,
+      });
+    } catch {}
+  }, [time, dur, mediaInterrupted]);
   // Salir del modo selección al navegar.
   useEffect(() => { if (selecting) { setSelecting(false); setSelection(new Set()); } /* eslint-disable-next-line */ }, [tab, view]);
 
@@ -3353,7 +3409,8 @@ export default function App() {
     // Fade SOLO en visible: si rAF se congela en background, volume queda en 0 = silencio eterno.
     if (a && shouldFadeIn(visible)) { a.volume = 0; pendingFadeRef.current = true; }
     else { if (a) a.volume = vol; pendingFadeRef.current = false; }
-    systemPausedRef.current = false;
+    clearSystemInterrupted();
+    interruptPositionRef.current = null;
     const initialQueue = list && list.length ? list : [t.id];
     setQueue(initialQueue);
     const qualityMap = { high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' };
@@ -4021,12 +4078,13 @@ export default function App() {
     const doPlay = () => {
       const el = a();
       if (!el) return;
-      // Lock screen / notificación: restaurar volumen y reanudar (tras vídeo a menudo volume=0 o paused).
+      // Notificación: reanudar desde el segundo de la interrupción (no desde 0).
       if (el.volume < vol * 0.5) el.volume = vol;
-      systemPausedRef.current = false;
+      restoreInterruptPosition(el);
+      clearSystemInterrupted();
       playingRef.current = true;
       setPlaying(true);
-      el.play().catch(() => {
+      el.play().then(() => restoreInterruptPosition(el)).catch(() => {
         if (canForceReacquire(isDocumentVisible())) forceReacquire();
       });
     };
@@ -4036,7 +4094,9 @@ export default function App() {
       selfPauseRef.current = true;
       try { el.pause(); } catch {}
       selfPauseRef.current = false;
-      systemPausedRef.current = false;
+      // Pausa manual del usuario: no es interrupción por vídeo.
+      clearSystemInterrupted();
+      interruptPositionRef.current = null;
       playingRef.current = false;
       setPlaying(false);
     };
@@ -4056,11 +4116,16 @@ export default function App() {
     };
   }, [track, playing]);
 
-  // Sincronizar estado de reproducción con Media Session
+  // Media Session: en interrupción por vídeo = paused (aunque la intención sea play).
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;
-    navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
-  }, [playing]);
+    try {
+      navigator.mediaSession.playbackState = mediaSessionPlaybackState({
+        userWantsPlay: playing,
+        systemInterrupted: mediaInterrupted,
+      });
+    } catch {}
+  }, [playing, mediaInterrupted]);
 
   // ── Instalación de la PWA (pantalla de inicio) ──
   const [installEvt, setInstallEvt] = useState(null);
@@ -4221,6 +4286,8 @@ export default function App() {
     <audio ref={audioRef} src={playSrc || (track ? track.url : undefined)} preload="auto" playsInline
       onTimeUpdate={() => {
         const a = audioRef.current; if (!a) return;
+        // No avanzar el reloj de UI/notificación si estamos interrumpidos por vídeo.
+        if (systemPausedRef.current || mediaInterrupted) return;
         const ct = a.currentTime || 0; setTime(ct);
         if (ct > 0 && loadingAudio) setLoadingAudio(false);
       }}
@@ -4228,17 +4295,23 @@ export default function App() {
       onCanPlay={() => setLoadingAudio(false)}
       onPlay={() => {
         selfPauseRef.current = false;
-        systemPausedRef.current = false;
+        const el = audioRef.current;
+        // Si el OS nos devuelve el foco tras un vídeo: reponer segundo exacto.
+        if (el && (systemPausedRef.current || mediaInterrupted || interruptPositionRef.current != null)) {
+          restoreInterruptPosition(el);
+        }
+        if (el && el.volume < vol * 0.5) el.volume = vol;
+        clearSystemInterrupted();
         setLoadingAudio(false);
         playingRef.current = true;
         if (!playing) setPlaying(true);
-        // Asegurar volumen real (evita "suena en silencio" post-vídeo/fade).
-        const el = audioRef.current;
-        if (el && el.volume < vol * 0.5) el.volume = vol;
       }}
       onPlaying={() => {
         selfPauseRef.current = false;
-        systemPausedRef.current = false;
+        const el = audioRef.current;
+        if (el && interruptPositionRef.current != null) restoreInterruptPosition(el);
+        if (el && el.volume < vol * 0.5) el.volume = vol;
+        clearSystemInterrupted();
         setLoadingAudio(false);
         playErrorRef.current = { id: null, n: 0 };
         sustainedPlayRef.current = false;
@@ -4246,6 +4319,8 @@ export default function App() {
           if (audioRef.current && !audioRef.current.paused && audioRef.current.currentTime > 3) {
             consecutiveFailsRef.current = 0;
             sustainedPlayRef.current = true;
+            // Posición estable: ya no hace falta el ancla de interrupción.
+            interruptPositionRef.current = null;
           }
         }, 5000);
         if (pendingFadeRef.current) {
@@ -4259,24 +4334,17 @@ export default function App() {
       onPause={() => {
         const a = audioRef.current;
         if (!a) return;
-        // ¿Pause externo (vídeo YT/FB, otra app, OS)? Mantener intención de play.
+        // Pause externo (vídeo YT/FB / otra app): notificación → PAUSED, guardar segundo.
         if (isExternalPause({
           selfPause: selfPauseRef.current,
           pendingFade: pendingFadeRef.current,
           userWantsPlay: playingRef.current,
           audioEnded: a.ended,
         })) {
-          systemPausedRef.current = true;
-          // Background: no intervenir (Chrome reanuda solo o al volver a la app).
-          if (!isDocumentVisible()) return;
-          // Foreground: reintentar en breve (notificación, ducking momentáneo).
-          setTimeout(() => {
-            if (!playingRef.current || !audioRef.current || audioRef.current.ended) return;
-            if (!audioRef.current.paused && audioRef.current.volume >= vol * 0.5) return;
-            if (audioRef.current.volume < vol * 0.5) audioRef.current.volume = vol;
-            const p = audioRef.current.play();
-            if (p && p.catch) p.catch(() => { if (canForceReacquire(isDocumentVisible())) forceReacquire(); });
-          }, 350);
+          markSystemInterrupted(a);
+          // NO reintentar play mientras el vídeo tiene el foco (rompe la notificación
+          // y pelea con el OS). Reanudamos al volver a Velocity / al recuperar foco.
+          return;
         }
       }}
       onError={handleAudioError}

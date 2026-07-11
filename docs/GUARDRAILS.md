@@ -52,12 +52,13 @@ La reproducción NUNCA debe cortarse. Invariantes:
   `forceReacquire` / `pause+load+play` / `load()` al cambiar de pista con la
   pantalla apagada o la app oculta. Eso **mata la sesión de media en Chrome**
   (Brave a veces aguanta; no es razón para volver al reacquire en bg).
-- **Tras vídeo YouTube/Facebook/otra app:** el OS puede pausar o dejar
-  zombie silencioso (`playing=true`, `volume=0` o tiempo congelado).
-  - `playingRef` permanece `true` (el usuario no pausó).
-  - `systemPausedRef` marca pause externo.
-  - Al `visibilitychange`→visible / `focus` / `pageshow`: restaurar `volume`
-    y soft `play()`; reacquire solo en foreground si falla.
+- **Tras vídeo YouTube/Facebook/otra app:**
+  - `playingRef` permanece `true` (intención: seguir escuchando).
+  - Se guarda `interruptPosition` y Media Session pasa a **`paused`**
+    (la notificación NO debe “contar” segundos ni mostrar play activo).
+  - Al salir del vídeo / volver a Velocity / play en notificación:
+    restaurar `currentTime` al segundo guardado y `play()` (sin rebobinar).
+  - Nunca pelear con el OS reintentando `play()` mientras el vídeo tiene el foco.
 - **Fade-in (`volume=0`) SOLO con página visible.** Si rAF se congela en
   background, el volume se queda en 0 → “suena en silencio”. En bg: `volume=vol`.
 - **Auto-avance en segundo plano:** la cola se **pre-extiende** en última o
