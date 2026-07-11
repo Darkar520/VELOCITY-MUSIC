@@ -17,9 +17,7 @@ import {
   shouldPreExtendQueue,
   mediaSessionPlaybackState,
   shouldRestoreInterruptPosition,
-  hideRecoverDelays,
-  shouldYieldAudioFocus,
-  shouldYieldOnRePause,
+  shouldYieldOnExternalPause,
 } from './audioContinuity.js';
 import { usePersisted, useViewport, useDominantColor, useHSwipe } from './hooks.js';
 import { Icon } from './Icons.jsx';
@@ -2484,15 +2482,12 @@ export default function App() {
   // Reintento por pista ante error de reproducción (URL de audio expirada, etc.).
   const playErrorRef = useRef({ id: null, n: 0 });
   const playingRef = useRef(false);
-  // Foco de audio: yield cuando un vídeo (FB/YT) se lo queda; resume al volver.
+  // Foco de audio: ceder YA a vídeo FB/IG/YT (sin soft-play en background).
   const systemPausedRef = useRef(false);       // cedimos foco (yielded)
   const interruptPositionRef = useRef(null);   // segundo al ceder / al hide
   const reacquireInFlight = useRef(false);
   const lastTimeRef = useRef(0);
   const stuckCheckRef = useRef(null);
-  const hideRecoverGenRef = useRef(0);
-  const hideRecoverTimersRef = useRef([]);
-  const lastBgPlayAtRef = useRef(0); // marca temporal del último soft-play en bg
   const [mediaInterrupted, setMediaInterrupted] = useState(false); // yieldedFocus UI
 
   const setMediaSessionState = (state, positionHint) => {
@@ -2513,15 +2508,14 @@ export default function App() {
     }
   };
 
-  /** Ceder el altavoz a FB/YT: pause firme y no reintentar hasta volver a la app. */
+  /** Ceder el altavoz a FB/IG/YT: pause firme; no reintentar hasta volver visibles. */
   const yieldAudioFocus = (a) => {
-    cancelHideRecover();
     const el = a || audioRef.current;
     const pos = el && Number.isFinite(el.currentTime)
       ? el.currentTime
       : (interruptPositionRef.current || 0);
     interruptPositionRef.current = pos;
-    // Pause firme sin disparar recover (selfPause).
+    // Pause firme sin reentrar en onPause como "externo" (selfPause).
     if (el) {
       selfPauseRef.current = true;
       try { el.pause(); } catch {}
@@ -2550,87 +2544,11 @@ export default function App() {
     }
   };
 
-  const cancelHideRecover = () => {
-    hideRecoverGenRef.current += 1;
-    (hideRecoverTimersRef.current || []).forEach((id) => clearTimeout(id));
-    hideRecoverTimersRef.current = [];
-  };
-
-  /**
-   * Hide recover (Chrome): máximo 2 soft-play.
-   * Si el OS nos re-pausa enseguida (vídeo FB/YT) → yield y STOP.
-   * NUNCA bucle infinito de play (A7: superposición / vídeo mudo).
-   */
-  const recoverAfterHide = () => {
-    if (!playingRef.current) return;
-    if (systemPausedRef.current) return; // ya cedimos
-    cancelHideRecover();
-    const gen = hideRecoverGenRef.current;
-    const delays = hideRecoverDelays();
-    const maxAttempts = delays.length - 1;
-
-    delays.forEach((ms, attempt) => {
-      const id = setTimeout(() => {
-        if (gen !== hideRecoverGenRef.current) return;
-        if (!playingRef.current || selfPauseRef.current) return;
-        if (systemPausedRef.current) return;
-        if (isDocumentVisible()) return;
-
-        const a = audioRef.current;
-        if (!a || a.ended) return;
-
-        if (!a.paused) {
-          clearYieldedFocus();
-          setMediaSessionState('playing', a.currentTime);
-          savePlaybackAnchor(a);
-          return;
-        }
-
-        if (a.volume < 0.05) a.volume = Math.max(vol, 0.35);
-        restoreInterruptPosition(a);
-        lastBgPlayAtRef.current = Date.now();
-
-        const p = a.play();
-        if (p && p.then) {
-          p.then(() => {
-            if (gen !== hideRecoverGenRef.current || systemPausedRef.current) return;
-            if (!a.paused) {
-              clearYieldedFocus();
-              setMediaSessionState('playing', a.currentTime);
-              savePlaybackAnchor(a);
-            }
-          }).catch(() => {
-            if (gen !== hideRecoverGenRef.current) return;
-            if (shouldYieldAudioFocus({
-              attemptIndex: attempt,
-              maxAttempts,
-              stillPaused: true,
-              userWantsPlay: playingRef.current,
-            })) {
-              yieldAudioFocus(a);
-            }
-          });
-        } else if (shouldYieldAudioFocus({
-          attemptIndex: attempt,
-          maxAttempts,
-          stillPaused: !!a.paused,
-          userWantsPlay: playingRef.current,
-        })) {
-          yieldAudioFocus(a);
-        }
-      }, ms);
-      hideRecoverTimersRef.current.push(id);
-    });
-  };
-
-  /** Soft kick solo en foreground. */
+  /** Soft kick SOLO en foreground. Nunca play() si document.hidden (A7). */
   const softKickPlayback = () => {
     const a = audioRef.current;
     if (!a || !playingRef.current || a.ended || selfPauseRef.current) return;
-    if (!isDocumentVisible()) {
-      recoverAfterHide();
-      return;
-    }
+    if (!isDocumentVisible()) return;
     if (a.volume < 0.05) a.volume = Math.max(vol, 0.35);
     const anchor = Number.isFinite(a.currentTime) ? a.currentTime : (interruptPositionRef.current || 0);
     if (anchor > 0) interruptPositionRef.current = Math.max(interruptPositionRef.current || 0, anchor);
@@ -2644,10 +2562,8 @@ export default function App() {
     }).catch(() => {});
   };
 
-  const stopBackgroundWatch = () => cancelHideRecover();
-  const startBackgroundWatch = () => recoverAfterHide();
+  const stopBackgroundWatch = () => {};
   const clearSystemInterrupted = () => clearYieldedFocus();
-  const markSystemInterrupted = (a) => yieldAudioFocus(a);
   // Web Audio para normalizar volumen (compresor de rango dinámico). Opt-in.
   // ── AudioContext eliminado: era incompatible con background playback en móvil ──
   // createMediaElementSource secuestra el <audio> permanentemente y el AudioContext
@@ -3061,27 +2977,25 @@ export default function App() {
   }, [authed]);
 
   // ── Sincronizar elemento audio ──
-  // Si cedimos el foco (vídeo FB/YT) y seguimos ocultos → NO play() (no silenciar el vídeo).
-  // Al volver a visible, tryResume reanuda.
+  // NUNCA play() con document.hidden (A7: roba audio a Instagram/FB en Chrome).
+  // Al volver a visible, tryResume reanuda desde el ancla.
   useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
     const strategy = playSyncStrategy({
       playing,
       hasSrc: Boolean(playSrc || track?.url || a.src),
+      yieldedFocus: mediaInterrupted || systemPausedRef.current,
+      visible: isDocumentVisible(),
     });
     if (strategy === 'noop') return;
     if (strategy === 'pause') {
-      cancelHideRecover();
       selfPauseRef.current = true;
       try { a.pause(); } catch {}
       selfPauseRef.current = false;
       return;
     }
     if (strategy === 'soft-play') {
-      // Cedimos audio a otra app y aún no estamos visibles → no pelear.
-      if ((systemPausedRef.current || mediaInterrupted) && !isDocumentVisible()) return;
-
       if (a.volume < vol * 0.5) {
         cancelAnimationFrame(fadeRafRef.current);
         clearTimeout(fadeSafetyRef.current);
@@ -3097,8 +3011,9 @@ export default function App() {
         }).catch((err) => {
           if (err?.name === 'AbortError') return;
           if (!isDocumentVisible()) {
+            // Perdimos el play y seguimos ocultos → ceder, no reintentar en bg.
             savePlaybackAnchor(a);
-            recoverAfterHide();
+            if (playingRef.current) yieldAudioFocus(a);
             return;
           }
           if (err?.name === 'NotAllowedError') return;
@@ -3266,18 +3181,16 @@ export default function App() {
 
     const onVis = () => {
       if (document.visibilityState === 'visible') {
-        cancelHideRecover();
         // Volver a Velocity (o salir del vídeo): reanudar desde el segundo guardado.
         setTimeout(tryResume, 40);
         setTimeout(tryResume, 350);
         setTimeout(tryResume, 1000);
       } else {
-        // Salir de la app: 1–2 soft play; si no, ceder foco (FB/YT pueden sonar).
+        // Salir: guardar ancla. NO play() aquí (A7: roba audio a IG/FB en Chrome).
+        // Si el SO deja el audio corriendo (pantalla off), sigue solo.
+        // Si llega pause externo (vídeo), onPause → yieldAudioFocus.
         const a = audioRef.current;
-        if (playingRef.current && a && !a.ended) {
-          savePlaybackAnchor(a);
-          recoverAfterHide();
-        }
+        if (playingRef.current && a && !a.ended) savePlaybackAnchor(a);
         if (shouldSuspendPreloads(false)) {
           for (const r of [preloadAudioRef, preloadAudio2Ref]) {
             const el = r.current;
@@ -3287,7 +3200,9 @@ export default function App() {
         }
       }
     };
-    const onFocus = () => setTimeout(tryResume, 60);
+    const onFocus = () => {
+      if (isDocumentVisible()) setTimeout(tryResume, 60);
+    };
     const onPageShow = (e) => {
       if (e.persisted || isDocumentVisible()) setTimeout(tryResume, 60);
     };
@@ -3315,7 +3230,6 @@ export default function App() {
       document.removeEventListener('visibilitychange', onVis);
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('pageshow', onPageShow);
-      cancelHideRecover();
       if (stuckCheckRef.current) { clearInterval(stuckCheckRef.current); stuckCheckRef.current = null; }
     };
   }, [vol]);
@@ -4492,27 +4406,24 @@ export default function App() {
         })) return;
 
         savePlaybackAnchor(a);
-        const hidden = !isDocumentVisible();
 
-        // A7: si acabamos de soft-play en bg y nos re-pausan → FB/YT se quedó el audio.
-        // Ceder YA (no pelear → evita superposición y vídeo mudo).
-        if (hidden && shouldYieldOnRePause({
-          hidden: true,
+        // A7 definitivo: pause externo + oculto → ceder YA. Cero soft-play en bg.
+        // (El soft-play en hide era lo que mataba el vídeo de IG/FB a ~2 s en Chrome.)
+        if (shouldYieldOnExternalPause({
+          hidden: !isDocumentVisible(),
           userWantsPlay: playingRef.current,
+          selfPause: selfPauseRef.current,
+          pendingFade: pendingFadeRef.current,
+          audioEnded: a.ended,
           alreadyYielded: systemPausedRef.current,
-          msSinceLastBackgroundPlay: lastBgPlayAtRef.current
-            ? Date.now() - lastBgPlayAtRef.current
-            : null,
-          rePauseWindowMs: 1600,
         })) {
           yieldAudioFocus(a);
           return;
         }
 
-        if (systemPausedRef.current) return; // ya cedimos; no reintentar
-
-        if (hidden) recoverAfterHide();
-        else softKickPlayback();
+        if (systemPausedRef.current) return;
+        // Solo foreground: un soft-kick por ducking momentáneo del SO.
+        softKickPlayback();
       }}
       onError={handleAudioError}
       onEnded={onEnded}

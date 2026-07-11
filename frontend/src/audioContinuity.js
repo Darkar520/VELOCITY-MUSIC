@@ -1,23 +1,23 @@
 /**
- * Continuidad de audio — política estable (Chrome prioritario).
+ * Continuidad de audio — política Chrome-first (sin pelear el foco).
  *
- * ─────────────────────────────────────────────────────────────
- * REGLA DE ORO: NUNCA pelear el foco de audio en bucle en background.
- * Eso silencia Facebook/YouTube o superpone música + vídeo.
- * ─────────────────────────────────────────────────────────────
+ * ═══════════════════════════════════════════════════════════════
+ * SUPERPOSICIÓN (A7) — causa raíz y fix definitivo:
  *
- * A) App oculta y el audio SIGUE (pantalla off típica en Chrome)
- *    → no tocar. Media Session debe reportar playing + next/prev.
+ * En Chrome, llamar play() mientras document.hidden (soft-recover
+ * tras pause) RECLAMA el foco de audio. Resultado típico:
+ *   1) un momento suenan música + vídeo Instagram/Facebook
+ *   2) ~1–2 s después el vídeo se corta y queda solo Velocity
  *
- * B) App oculta y llega un pause (Chrome al salir / otra app)
- *    → un soft play puntual (recuperar hide de Chrome).
- *    → si nos vuelven a pausar en <1.5s → CEDER (vídeo FB/YT).
- *    → al ceder: pause firme, Media Session paused, posición guardada.
+ * Brave suele pausar/ceder mejor; Chrome no. Por eso NUNCA soft-play
+ * en background.
  *
- * C) Usuario vuelve a Velocity (visible)
- *    → reanudar desde posición guardada.
- *
- * D) Restaurar posición solo si el browser REBOBINÓ.
+ * Política:
+ *  1) Oculto + audio SIGUE (!paused) → no tocar (pantalla off / lock).
+ *  2) Pause externo mientras oculto → CEDER YA (pause firme, MS paused).
+ *  3) Visible + intención play → reanudar desde ancla (tryResume / soft-play).
+ *  4) NUNCA play() / kick / recover con document.hidden.
+ * ═══════════════════════════════════════════════════════════════
  */
 
 export function isDocumentVisible(doc = typeof document !== 'undefined' ? document : null) {
@@ -25,36 +25,36 @@ export function isDocumentVisible(doc = typeof document !== 'undefined' ? docume
   return doc.visibilityState === 'visible';
 }
 
-export function playSyncStrategy({ playing, hasSrc }) {
+/**
+ * Qué debe hacer el efecto de sincronización del <audio>.
+ * visible debe ser boolean estricto: solo soft-play si visible === true.
+ */
+export function playSyncStrategy({ playing, hasSrc, yieldedFocus, visible }) {
   if (!hasSrc) return 'noop';
   if (!playing) return 'pause';
+  // Nunca play() en background: roba Instagram/FB en Chrome.
+  if (visible !== true) return 'noop';
+  // yieldedFocus en visible: soft-play para reanudar al volver a la app.
+  void yieldedFocus;
   return 'soft-play';
 }
 
-/** Un solo reintento temprano al hide (no una lista larga). */
-export function hideRecoverDelays() {
-  return [0, 200];
-}
-
 /**
- * Tras un soft-play en background, si llega OTRO pause pronto → ceder foco.
- * Evita superposición música+vídeo y deja sonar Facebook/YouTube.
+ * ¿Ceder el foco ante un pause externo?
+ * Solo en background. En foreground puede ser ducking momentáneo → softKick.
  */
-export function shouldYieldOnRePause({
+export function shouldYieldOnExternalPause({
   hidden,
   userWantsPlay,
+  selfPause,
+  pendingFade,
+  audioEnded,
   alreadyYielded,
-  msSinceLastBackgroundPlay,
-  rePauseWindowMs = 1600,
 }) {
-  if (!hidden || !userWantsPlay || alreadyYielded) return false;
-  if (msSinceLastBackgroundPlay == null || msSinceLastBackgroundPlay < 0) return false;
-  return msSinceLastBackgroundPlay < rePauseWindowMs;
-}
-
-export function shouldYieldAudioFocus({ attemptIndex, maxAttempts, stillPaused, userWantsPlay }) {
-  if (!userWantsPlay || !stillPaused) return false;
-  return attemptIndex >= maxAttempts;
+  if (selfPause || pendingFade || audioEnded) return false;
+  if (!userWantsPlay) return false;
+  if (alreadyYielded) return false;
+  return hidden === true;
 }
 
 export function mediaSessionPlaybackState({ userWantsPlay, yieldedFocus }) {
@@ -63,6 +63,7 @@ export function mediaSessionPlaybackState({ userWantsPlay, yieldedFocus }) {
   return 'playing';
 }
 
+/** Solo restaurar si rebobinó por detrás del ancla. */
 export function shouldRestoreInterruptPosition(currentTime, savedPosition, thresholdSec = 1.25) {
   if (savedPosition == null || !Number.isFinite(savedPosition) || savedPosition < 0) return false;
   if (!Number.isFinite(currentTime)) return true;
@@ -83,7 +84,8 @@ export function shouldResumeOnForeground({
   if (typeof volume === 'number' && typeof targetVolume === 'number' && targetVolume > 0 && volume < targetVolume * 0.5) {
     return true;
   }
-  return true;
+  // Visible + intención play + ya sonando: no forzar play() extra.
+  return false;
 }
 
 export function canForceReacquire(visible) {
@@ -107,4 +109,18 @@ export function shouldSuspendPreloads(visible) {
 export function shouldPreExtendQueue(currentIndex, queueLength) {
   if (queueLength <= 0 || currentIndex < 0 || currentIndex >= queueLength) return false;
   return currentIndex >= queueLength - 2;
+}
+
+// --- Legacy exports: comportamiento seguro (no soft-play en hide) ---
+/** @deprecated Siempre [] — no hay soft-recover en background. */
+export function hideRecoverDelays() {
+  return [];
+}
+/** @deprecated Prefer shouldYieldOnExternalPause. */
+export function shouldYieldAudioFocus() {
+  return true;
+}
+/** @deprecated Prefer shouldYieldOnExternalPause (ceder al primer pause oculto). */
+export function shouldYieldOnRePause() {
+  return true;
 }

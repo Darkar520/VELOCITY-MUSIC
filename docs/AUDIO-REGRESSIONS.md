@@ -7,9 +7,9 @@ actualiza la tabla si introduces un cambio.
 
 | Escenario | Esperado |
 |-----------|----------|
-| Escuchar y **apagar pantalla** (Chrome) | Sigue la música; lock screen con play/pause/**prev/next** |
+| Escuchar y **apagar pantalla** (Chrome) | Sigue la música si el SO no pausa; lock con play/pause/**prev/next** |
 | Escuchar y **salir a inicio** | Idealmente sigue; si el SO corta, al volver reanuda |
-| Abrir **vídeo Facebook/YouTube** | Velocity **para**; el vídeo se oye **solo** (sin superposición) |
+| Abrir **vídeo Instagram/Facebook/YouTube** | Velocity **para**; el vídeo se oye **solo** (sin superposición) |
 | Salir del vídeo / volver a Velocity | Reanuda **desde el segundo guardado** |
 | Pausa manual del usuario | Se queda pausado; no auto-resume al volver |
 
@@ -17,26 +17,34 @@ actualiza la tabla si introduces un cambio.
 
 | ID | Síntoma | Causa raíz | Fix correcto | Anti-patrón |
 |----|---------|------------|--------------|-------------|
-| A1 | Chrome mata la sesión al cambiar de pista con pantalla off | `forceReacquire` / `load()` en background | Solo soft `play()`; reacquire **solo visible** | `load()` o pause+load+play oculto |
+| A1 | Chrome mata la sesión al cambiar de pista con pantalla off | `forceReacquire` / `load()` en background | Solo soft `play()` **si visible**; reacquire **solo visible** | `load()` o pause+load+play oculto |
 | A2 | Notificación “playing” pero otra canción al sincronizar letras | (letras, no audio) lrclib fuzzy | Score artist/title | Tomar `arr[0]` de lrclib |
 | A3 | Letra salta a otra canción al sync | Front reemplazaba plain por LRC ajeno | Overlap check | Blind replace |
 | A4 | Tras vídeo, notificación cuenta segundos y al entrar rebobina | `playing=true` + no guardar posición | `yieldedFocus` + `interruptPosition` | Mantener playing sin ceder |
-| A5 | Al salir de la app se queda **pausado** y hay que despausar a mano | Tratar todo pause-on-hide como yield inmediato | Soft recover 1–2 veces | Yield al primer pause siempre |
-| A6 | Pegado en el segundo N (playing sin avanzar) | Keep-alive creía `!paused` = OK; `restore` clavaba el ancla | Zombie check + restore **solo si rebobinó** | `restore` si `current≈saved` |
-| A7 | **Superposición** música + vídeo FB / vídeo sin sonido | Bucle de `play()` en background cada 1s robaba el foco | **Ceder** si re-pause en <1.6s tras soft-play; sin bucles | Interval/`play()` agresivo en hide |
+| A5 | Al salir de la app se queda **pausado** y hay que despausar a mano | Tratar todo pause-on-hide como yield y no reanudar al volver | Yield en hide + **tryResume al visible** | Soft-play en hide “por si acaso” |
+| A6 | Pegado en el segundo N (playing sin avanzar) | Keep-alive creía `!paused` = OK; `restore` clavaba el ancla | Zombie check **solo visible** + restore **solo si rebobinó** | `restore` si `current≈saved` |
+| A7 | **Superposición** música + vídeo IG/FB; vídeo muere ~2s | `play()` en background (recover 0/200ms) reclama el foco en Chrome | **Cero** `play()` si `document.hidden`; yield al primer pause externo oculto | Soft-recover / re-pause window / bucles de play ocultos |
 | A8 | Lock screen solo muestra pause (sin prev/next) al inicio | Media Session incompleta / handlers tardíos | Re-bind handlers + `setPositionState` al `playing` | No registrar next/prev hasta pause |
-| A9 | Chrome background “a veces sí a veces no” | Política inconsistente + pelea de foco | Política A/B/C de `audioContinuity.js` + tests | Parches ad-hoc por browser |
+| A9 | Chrome background “a veces sí a veces no” | Política inconsistente + pelea de foco | Política de `audioContinuity.js` + tests | Parches ad-hoc por browser |
 
 ## Política actual (código)
 
-Archivo: `frontend/src/audioContinuity.js` + lógica en `App.jsx`.
+Archivo: `frontend/src/audioContinuity.js` + `App.jsx`.
 
-1. **Hide + sigue `!paused`** → no tocar (mejor caso pantalla off).
-2. **Hide + `pause` externo** → `recoverAfterHide` (delays cortos: 0, 200 ms).
-3. **Soft-play OK y luego `pause` otra vez en <1600 ms (oculto)** → **`yieldAudioFocus`** (FB/YT).  
-   No más `play()` hasta `visibility=visible`.
-4. **Visible + intención play** → `tryResume` desde ancla.
+1. **Hide + sigue `!paused`** → no tocar (mejor caso pantalla off / Media Session).
+2. **Hide + `pause` externo** → **`yieldAudioFocus` inmediato** (pause firme, MS `paused`, ancla guardada).  
+   **Sin** soft-play, **sin** timers de recover.
+3. **`playSyncStrategy`**: si `visible !== true` → `noop` (nunca `play()` oculto).
+4. **Visible + intención play** → `tryResume` / soft-play desde ancla.
 5. **`shouldRestoreInterruptPosition`**: solo si `currentTime < saved - 1.25s`.
+6. **Foreground** pause externo residual → un `softKickPlayback` (nunca si hidden).
+
+### Por qué Brave “iba bien” y Chrome no
+
+Chrome reclama el audio focus al siguiente `HTMLMediaElement.play()` aunque la pestaña
+esté en background. Un recover “suave” a 0–200 ms tras el pause del SO es suficiente
+para matar el vídeo de Instagram y dejar solo Velocity. Brave cede mejor el foco;
+el fix es no pelear en Chrome, no detectar el browser.
 
 ## Tests obligatorios
 
@@ -44,19 +52,20 @@ Archivo: `frontend/src/audioContinuity.js` + lógica en `App.jsx`.
 node --test test/audioContinuity.test.js
 ```
 
-Cubren: soft-play strategy, yield on re-pause, media session paused al ceder,
-restore solo si rebobinó, no pelear tras ceder.
+Cubren: noop si hidden, yield al primer pause oculto, media session paused al ceder,
+restore solo si rebobinó, hideRecoverDelays vacío, no force-play si ya suena.
 
 ## Checklist manual (Chrome Android primero)
 
-- [ ] Play → apagar pantalla 30s → sigue + lock con prev/next
+- [ ] Play → apagar pantalla 30s → sigue (si el SO no corta) + lock con prev/next
 - [ ] Play → ir a inicio 20s → audio o reanuda al volver
-- [ ] Play → Facebook vídeo con sonido → **solo** el vídeo (sin música encima)
+- [ ] Play → **Instagram/Facebook** vídeo con sonido → **solo** el vídeo (sin música encima, sin cortar el vídeo a los 2s)
 - [ ] Salir del vídeo / volver a Velocity → reanuda en el mismo segundo
-- [ ] Pausa manual → ir a FB → volver → **sigue pausado**
+- [ ] Pausa manual → ir a IG → volver → **sigue pausado**
 
 ## Al cambiar código de audio
 
 1. Actualiza esta tabla si aparece un bug nuevo.
 2. Añade un test en `test/audioContinuity.test.js` que falle sin el fix.
-3. No reintroduzcas intervalos de `play()` en background.
+3. **No reintroduzcas** `play()` / timers de recover mientras `document.hidden`.
+4. Sube versión del service worker (`velocity-vN`) para invalidar caché del shell.

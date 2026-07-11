@@ -48,18 +48,17 @@ La reproducción NUNCA debe cortarse. Invariantes:
 - **Lógica pura en `frontend/src/audioContinuity.js`** + tests en
   `test/audioContinuity.test.js`. No reintroducir comportamientos que fallen
   esos tests.
-- **En background (document hidden): SOLO `audio.play()` suave.** NUNCA
-  `forceReacquire` / `pause+load+play` / `load()` al cambiar de pista con la
-  pantalla apagada o la app oculta. Eso **mata la sesión de media en Chrome**
-  (Brave a veces aguanta; no es razón para volver al reacquire en bg).
+- **En background (`document.hidden`): NUNCA `audio.play()`.** Tampoco
+  `forceReacquire` / `pause+load+play` / `load()` al cambiar de pista oculta.
+  En Chrome, un `play()` oculto **roba el foco** a Instagram/Facebook (~2 s el
+  vídeo muere y queda solo Velocity). Brave cede mejor; el fix es no pelear.
 - **Salir de la app / apagar pantalla (Chrome prioritario):**
-  - `recoverAfterHide`: **solo 1–2** soft `play()` (0 ms / ~180 ms).
-  - Si recupera → Media Session `playing`.
-  - Si sigue pausado → **ceder foco** (`yieldedFocus`): Media Session `paused`,
-    posición guardada. **Prohibido** bucle de `play()` en background
-    (silenciaba vídeos de Facebook/YouTube).
-- **Vídeo Facebook/YouTube:**
-  - Al ceder: no pelear. El vídeo debe oírse con sonido.
+  - Si el audio **sigue** (`!paused`) → no tocar (pantalla off / lock).
+  - Si llega **pause externo** → **`yieldAudioFocus` inmediato** (MS `paused`,
+    ancla guardada). **Cero** soft-recover / timers de `play()` en hide.
+  - Al **volver visible** → `tryResume` desde el ancla si la intención es play.
+- **Vídeo Instagram/Facebook/YouTube:**
+  - Al ceder: no pelear. El vídeo debe oírse **solo**, sin superposición.
   - Al **volver a Velocity**: `tryResume` desde el segundo guardado.
 - Restaurar posición **solo si rebobinó**, nunca clavar el mismo segundo.
 - **Fade-in (`volume=0`) SOLO con página visible.** Si rAF se congela en
