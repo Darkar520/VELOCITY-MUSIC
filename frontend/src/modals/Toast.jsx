@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { fmt, hex2rgba, grad, hiResCover, dedupeByTitle, capPerArtist, slimTrack, parseLRC, lyricsOverlapRatio, plainFromSyncedLines, tintedVars } from '../helpers.js';
+import React from 'react';
+import { hex2rgba } from '../helpers.js';
 import { Icon } from '../Icons.jsx';
 
 export function Toast({ msg, T }) {
