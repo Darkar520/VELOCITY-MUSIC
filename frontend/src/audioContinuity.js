@@ -99,6 +99,44 @@ export function canRestoreInterruptPosition({
   return shouldRestoreInterruptPosition(currentTime, savedPosition, thresholdSec);
 }
 
+/**
+ * Reanudación de sesión (cerrar app y volver): ¿seek al segundo guardado?
+ *
+ * Distinto del ancla de yield (A10): esto es "dejé Aerials al 0:50, cierro,
+ * abro, play → debe seguir en 0:50", no pelear con IG.
+ *
+ * Reglas:
+ * - misma pista
+ * - posición guardada > ~1.5 s
+ * - el <audio> está al inicio o muy por detrás del guardado
+ * - no rebobinar si ya avanzó más allá del guardado
+ */
+export function parseSessionResume(playerState) {
+  if (!playerState || !playerState.track || !playerState.track.id) return null;
+  const position = Number(playerState.t);
+  if (!Number.isFinite(position) || position < 1.5) return null;
+  return { trackId: String(playerState.track.id), position };
+}
+
+export function shouldApplySessionResume({
+  trackId,
+  resumeTrackId,
+  resumePosition,
+  currentTime,
+  minPosition = 1.5,
+  nearStartSec = 1.5,
+  alreadyThereSec = 1.25,
+}) {
+  if (!trackId || !resumeTrackId || String(trackId) !== String(resumeTrackId)) return false;
+  if (resumePosition == null || !Number.isFinite(resumePosition) || resumePosition < minPosition) return false;
+  const ct = Number.isFinite(currentTime) ? currentTime : 0;
+  if (Math.abs(ct - resumePosition) < alreadyThereSec) return false;
+  // Ya escuchando más adelante que el guardado → no rebobinar.
+  if (ct > resumePosition + alreadyThereSec) return false;
+  // Elemento al inicio (o muy atrás) con un guardado a mitad → seek.
+  return ct < nearStartSec || ct < resumePosition - alreadyThereSec;
+}
+
 export function shouldResumeOnForeground({
   userWantsPlay,
   audioEnded,

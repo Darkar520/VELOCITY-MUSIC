@@ -28,6 +28,7 @@ actualiza la tabla si introduces un cambio.
 | A9 | Chrome background “a veces sí a veces no” | Política inconsistente + pelea de foco | Política de `audioContinuity.js` + tests | Parches ad-hoc por browser |
 | A10 | Seek vuelve al min 2; pistas nuevas arrancan a mitad; next en lock no suena | Ancla de yield se guardaba en play normal y se restauraba siempre; `playSync` bloqueaba todo play oculto | Ancla **solo al yield**, scoped a trackId; restore solo si `yieldedFocus`; soft-play oculto si **no** yielded (next lock) | `restore` en cada `onPlay`; `savePlaybackAnchor` continuo; noop en todo hide |
 | A11 | Next en notificación/lock no cambia de canción | `playSyncStrategy` hacía `noop` si hidden aunque el usuario pidiera next | soft-play si `playing && !yieldedFocus` aunque hidden; handlers MS vía refs | Bloquear todo `play()` con `document.hidden` |
+| A12 | Reabro la app: UI en 0:50 pausado, play reinicia a 0:00 | `resumeRef` se aplicaba una vez y se perdía al re-firmar URL; play no seek-eaba | `sessionResumeRef` {trackId,position}; apply en metadata/canplay/play/togglePlay | Borrar resume al primer metadata; no seek al play |
 
 ## Política actual (código)
 
@@ -37,8 +38,9 @@ Archivo: `frontend/src/audioContinuity.js` + `App.jsx`.
 2. **Hide + `pause` externo** → **`yieldAudioFocus`** (ancla + trackId). Sin soft-recover.
 3. **`playSyncStrategy`**: `noop` oculto **solo si** `yieldedFocus`. Si no yielded (next/autoplay) → `soft-play` aunque hidden.
 4. **Ancla (A10)**: guardar solo al yield; limpiar en `play()` / `seek` / next / prev; restore solo con `canRestoreInterruptPosition({ yieldedFocus: true, ... })`.
-5. **Visible + intención play** → `tryResume` si hace falta.
-6. **Foreground** pause residual → `softKickPlayback` sin tocar ancla de yield.
+5. **Sesión (A12)**: `velocity.player.t` + trackId; al reabrir, seek al segundo guardado en la **misma** pista al play/metadata. Limpiar en seek/next/pista nueva.
+6. **Visible + intención play** → `tryResume` si hace falta.
+7. **Foreground** pause residual → `softKickPlayback` sin tocar ancla de yield.
 
 ### Por qué Brave “iba bien” y Chrome no
 
@@ -63,6 +65,7 @@ restore solo si rebobinó, hideRecoverDelays vacío, no force-play si ya suena.
 - [ ] Play → **Instagram/Facebook** vídeo con sonido → **solo** el vídeo (sin música encima, sin cortar el vídeo a los 2s)
 - [ ] Salir del vídeo / volver a Velocity → reanuda en el mismo segundo
 - [ ] Pausa manual → ir a IG → volver → **sigue pausado**
+- [ ] Dejar canción a mitad → cerrar app del todo → reabrir → play → **sigue en el mismo segundo** (no 0:00)
 
 ## Al cambiar código de audio
 

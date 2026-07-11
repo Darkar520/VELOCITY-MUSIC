@@ -18,6 +18,8 @@ import {
   mediaSessionPlaybackState,
   canRestoreInterruptPosition,
   shouldYieldOnExternalPause,
+  parseSessionResume,
+  shouldApplySessionResume,
 } from './audioContinuity.js';
 import { usePersisted, useViewport, useDominantColor, useHSwipe } from './hooks.js';
 import { Icon } from './Icons.jsx';
@@ -2189,7 +2191,9 @@ export default function App() {
   const [remotePlaying, setRemotePlaying] = useState(null);
   const sseRef = useRef(null);
   const objUrlRef = useRef(null);
-  const resumeRef = useRef((() => { const s = loadPlayerState(); return s ? (s.t || 0) : null; })());
+  // Reanudación al reabrir la app: { trackId, position } desde velocity.player.
+  // Distinto del ancla de yield (A10). Se limpia en seek/next/pista nueva.
+  const sessionResumeRef = useRef((() => parseSessionResume(loadPlayerState()))());
   const radioRef = useRef(false);        // ¿sesión de radio (autollenado de relacionadas)?
   const radioSeedRef = useRef(null);      // id de la pista semilla de la radio actual
   // Sesión de mezcla: al terminar una mezcla, saltar a otra mezcla relacionada.
@@ -2541,10 +2545,38 @@ export default function App() {
     systemPausedRef.current = false;
     setMediaInterrupted(false);
   };
-  /** Limpia ancla al cambiar de pista / seek del usuario (A10). */
+  /** Limpia ancla de yield al cambiar de pista / seek del usuario (A10). */
   const clearPlaybackAnchor = () => {
     interruptPositionRef.current = null;
     interruptTrackIdRef.current = null;
+  };
+  const clearSessionResume = () => { sessionResumeRef.current = null; };
+  /**
+   * A12: al reabrir la app, el UI muestra el segundo guardado pero el <audio>
+   * arranca en 0 (URL nueva / metadata). Seek al segundo de sesión si aplica.
+   */
+  const applySessionResume = (a) => {
+    if (!a) return false;
+    const r = sessionResumeRef.current;
+    if (!r) return false;
+    const curId = trackRef.current?.id || track?.id || null;
+    if (r.trackId && curId && String(r.trackId) !== String(curId)) {
+      clearSessionResume();
+      return false;
+    }
+    if (!shouldApplySessionResume({
+      trackId: curId,
+      resumeTrackId: r.trackId,
+      resumePosition: r.position,
+      currentTime: a.currentTime || 0,
+    })) return false;
+    try {
+      a.currentTime = r.position;
+      setTime(r.position);
+      return true;
+    } catch {
+      return false;
+    }
   };
   /**
    * Restaurar posición SOLO si hay yield activo y el ancla es de la misma pista.
@@ -2567,7 +2599,7 @@ export default function App() {
     })) return;
     try { a.currentTime = saved; setTime(saved); } catch {}
   };
-  /** Guardar ancla solo en yield / hide con pause externo — no en play normal. */
+  /** Guardar ancla solo en yield — no en play normal. */
   const savePlaybackAnchor = (a) => {
     if (!a) return;
     const pos = Number.isFinite(a.currentTime) ? a.currentTime : 0;
@@ -3032,18 +3064,15 @@ export default function App() {
         clearTimeout(fadeSafetyRef.current);
         a.volume = vol;
       }
-      // Restore solo si yielded (canRestore). Tras next/pista nueva no hay ancla.
+      // A12: reabrir app en el segundo N. A10: yield solo si cedimos.
+      applySessionResume(a);
       restoreInterruptPosition(a);
       const p = a.play();
       if (p && p.then) {
         p.then(() => {
-          // Una sola restore al arrancar si había yield; luego limpiar ancla consumida.
+          applySessionResume(a);
           restoreInterruptPosition(a);
           clearYieldedFocus();
-          // Si reanudamos tras yield, consumir ancla para no reclavar en seeks.
-          if (!systemPausedRef.current) {
-            // keep anchor only while still yielded; after clear, drop it
-          }
           setMediaSessionState('playing', a.currentTime);
         }).catch((err) => {
           if (err?.name === 'AbortError') return;
@@ -3511,9 +3540,9 @@ export default function App() {
     else { if (a) a.volume = vol; pendingFadeRef.current = false; }
     stopBackgroundWatch();
     clearSystemInterrupted();
-    // A10: pista nueva siempre desde 0 (salvo resume de sesión de la MISMA pista).
+    // A10: pista elegida a propósito → desde 0 (no mezclar con resume de sesión).
     clearPlaybackAnchor();
-    resumeRef.current = null;
+    clearSessionResume();
     setTime(0);
     const initialQueue = list && list.length ? list : [t.id];
     setQueue(initialQueue);
@@ -3575,10 +3604,21 @@ export default function App() {
     if (!track) return;
     setPlaying(p => {
       const np = !p;
-      // Notificar a otros dispositivos el cambio de estado.
+      // Al despausar tras reabrir la app: el reloj UI puede decir 0:50 pero el
+      // <audio> está en 0 → aplicar resume de sesión ANTES del play effect.
+      if (np) {
+        const el = audioRef.current;
+        if (el) {
+          applySessionResume(el);
+          // Fallback: si el estado React tiene posición y el audio está en 0.
+          if ((el.currentTime || 0) < 1.5 && time > 1.5) {
+            try { el.currentTime = time; } catch {}
+          }
+        }
+      }
       api.updateNowPlaying({
         trackId: track.id, title: track.title, artist: track.artist, cover: track.cover,
-        position: audioRef.current?.currentTime || 0, duration: track.durationSeconds || 0,
+        position: audioRef.current?.currentTime || time || 0, duration: track.durationSeconds || 0,
         playing: np, deviceName: navigator.userAgent.includes('Mobile') ? 'Móvil' : 'Web',
         quality: '',
       });
@@ -3592,9 +3632,10 @@ export default function App() {
       ? queueRef.current
       : (orderIds.length ? orderIds : (cur ? [cur.id] : []));
     if (!cur || !ids.length) return;
-    // next = cambio de pista: soltar yield/ancla para que playSync pueda soft-play en lock.
+    // next = cambio de pista: soltar yield/ancla/sesión para soft-play en lock.
     clearSystemInterrupted();
     clearPlaybackAnchor();
+    clearSessionResume();
     if (shuffle && ids.length > 1) {
       let id; do { id = ids[Math.floor(Math.random() * ids.length)]; } while (id === cur.id && ids.length > 1);
       const t = trackById(id); if (t) play(t, ids, { keepMix: true }); return;
@@ -3615,20 +3656,23 @@ export default function App() {
     // Si llevamos >3s, prev = reiniciar pista actual (comportamiento tipo Spotify).
     const a = audioRef.current;
     if (a && (a.currentTime || 0) > 3) {
+      clearSessionResume();
       try { a.currentTime = 0; } catch {}
       setTime(0);
       if (playingRef.current) a.play().catch(() => {});
       return;
     }
+    clearSessionResume();
     const i = ids.indexOf(cur.id);
     if (i === -1) return;
     const t = trackById(ids[(i - 1 + ids.length) % ids.length]);
     if (t) play(t, ids, { keepMix: true });
   };
-  // Seek del usuario: NUNCA dejar ancla vieja que lo devuelva al min 2 (A10).
+  // Seek del usuario: limpia ancla de yield (A10) y resume de sesión (elige nuevo punto).
   const seek = (v) => {
     const pos = Math.max(0, Number(v) || 0);
     clearPlaybackAnchor();
+    clearSessionResume();
     if (audioRef.current) {
       try { audioRef.current.currentTime = pos; } catch {}
       if (audioRef.current.volume < vol && !pendingFadeRef.current) audioRef.current.volume = vol;
@@ -4212,15 +4256,16 @@ export default function App() {
     const doPlay = () => {
       const el = a();
       if (!el) return;
-      // Lock screen / notificación: reanudar (restore solo si hubo yield real).
+      // Lock screen / notificación: reanudar (sesión A12 + yield A10).
       if (el.volume < vol * 0.5) el.volume = vol;
+      applySessionResume(el);
       restoreInterruptPosition(el);
       clearSystemInterrupted();
-      // Tras reanudar manualmente, la ancla de yield ya no aplica.
       clearPlaybackAnchor();
       playingRef.current = true;
       setPlaying(true);
       el.play().then(() => {
+        applySessionResume(el);
         setMediaSessionState('playing', el.currentTime);
       }).catch(() => {
         if (canForceReacquire(isDocumentVisible())) forceReacquire();
@@ -4432,20 +4477,17 @@ export default function App() {
       }}
       onLoadedMetadata={() => {
         setDur(audioRef.current?.duration || 0);
-        // Resume de sesión SOLO una vez y si aún aplica (misma sesión, no pista nueva).
-        if (resumeRef.current != null && audioRef.current) {
-          const r = resumeRef.current;
-          resumeRef.current = null;
-          if (r > 1.5) {
-            try { audioRef.current.currentTime = r; } catch {}
-            setTime(r);
-          }
-        }
+        // A12: al cargar metadata (también tras re-firmar URL), ir al segundo guardado.
+        applySessionResume(audioRef.current);
       }}
-      onCanPlay={() => setLoadingAudio(false)}
+      onCanPlay={() => {
+        setLoadingAudio(false);
+        applySessionResume(audioRef.current);
+      }}
       onPlay={() => {
         selfPauseRef.current = false;
         const el = audioRef.current;
+        applySessionResume(el);
         // Restaurar ancla SOLO si hay yield activo (A10); luego consumirla.
         restoreInterruptPosition(el);
         clearSystemInterrupted();
@@ -4459,7 +4501,8 @@ export default function App() {
       onPlaying={() => {
         selfPauseRef.current = false;
         const el = audioRef.current;
-        // No restore aquí: ancla ya consumida en onPlay (evita clavar el seek).
+        // Si el browser reseteó a 0 al start, reaplicar sesión una vez más.
+        applySessionResume(el);
         if (el && el.volume < vol * 0.5) el.volume = vol;
         clearSystemInterrupted();
         setMediaSessionState('playing', el?.currentTime);

@@ -10,6 +10,8 @@ import {
   canForceReacquire,
   isExternalPause,
   hideRecoverDelays,
+  parseSessionResume,
+  shouldApplySessionResume,
 } from '../frontend/src/audioContinuity.js';
 
 test('playSyncStrategy: A7 — no play oculto SOLO si yielded; next en lock SÍ play', () => {
@@ -101,4 +103,30 @@ test('shouldResumeOnForeground / canForceReacquire / isExternalPause', () => {
   assert.equal(isExternalPause({
     selfPause: false, pendingFade: false, userWantsPlay: true, audioEnded: false,
   }), true);
+});
+
+test('A12: session resume — parse y apply (cerrar app y volver al segundo N)', () => {
+  assert.equal(parseSessionResume(null), null);
+  assert.equal(parseSessionResume({ track: { id: 'x' }, t: 0 }), null);
+  assert.equal(parseSessionResume({ track: { id: 'x' }, t: 1 }), null);
+  assert.deepEqual(parseSessionResume({ track: { id: 'aerials' }, t: 50 }), {
+    trackId: 'aerials', position: 50,
+  });
+
+  // Misma pista, audio en 0, guardado en 50 → seek
+  assert.equal(shouldApplySessionResume({
+    trackId: 'aerials', resumeTrackId: 'aerials', resumePosition: 50, currentTime: 0,
+  }), true);
+  // Ya en ~50 → no tocar
+  assert.equal(shouldApplySessionResume({
+    trackId: 'aerials', resumeTrackId: 'aerials', resumePosition: 50, currentTime: 50.2,
+  }), false);
+  // Ya más adelante → no rebobinar
+  assert.equal(shouldApplySessionResume({
+    trackId: 'aerials', resumeTrackId: 'aerials', resumePosition: 50, currentTime: 80,
+  }), false);
+  // Otra pista → no
+  assert.equal(shouldApplySessionResume({
+    trackId: 'lonely', resumeTrackId: 'aerials', resumePosition: 50, currentTime: 0,
+  }), false);
 });
