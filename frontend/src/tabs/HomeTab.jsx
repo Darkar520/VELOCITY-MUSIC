@@ -8,7 +8,7 @@ import { Avatar } from '../avatars.jsx';
 import { useLibraryStore } from '../store/libraryStore.js';
 import { usePlayerStore } from '../store/playerStore.js';
 
-export function HomeTab({ T, play, onMenu, goMix, displayName, avatar, email, setTab, startAiDj, onboardPrefs, setOnboardPrefs, backendDown }) {
+export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMenu, goMix, displayName, avatar, email, setTab, startAiDj, onboardPrefs, setOnboardPrefs, backendDown }) {
   // Library store
   const favs = useLibraryStore((s) => s.favs);
   const toggleFavInStore = useLibraryStore((s) => s.toggleFav);
@@ -16,15 +16,31 @@ export function HomeTab({ T, play, onMenu, goMix, displayName, avatar, email, se
   const playlists = useLibraryStore((s) => s.playlists);
   const homeRows = useLibraryStore((s) => s.homeRows);
   const homeLoading = useLibraryStore((s) => s.homeLoading);
-  // Player store
-  const track = usePlayerStore((s) => s.track);
-  const playing = usePlayerStore((s) => s.playing);
+  const catVer = useLibraryStore((s) => s.catVer);
+  // Player: props de App tienen prioridad (fuente de verdad del playback)
+  const storeTrack = usePlayerStore((s) => s.track);
+  const storePlaying = usePlayerStore((s) => s.playing);
   const downloaded = usePlayerStore((s) => s.downloaded);
+  const track = trackProp ?? storeTrack;
+  const playing = playingProp ?? storePlaying;
   // Wrapper para toggleFav (App.jsx escuchara para llamar api)
   const toggleFav = (id) => toggleFavInStore(id);
   const [djBusy, setDjBusy] = useState(false);
   const [onboardSel, setOnboardSel] = useState([]);
-  const recentTracks = dedupeByTitle(recent.map(trackById).filter(Boolean));
+  // Recientes: ids de historial → catálogo; si faltan metas, rellenar con pistas del feed.
+  const recentTracks = React.useMemo(() => {
+    const fromHist = dedupeByTitle((recent || []).map(trackById).filter(Boolean));
+    if (fromHist.length >= 3) return fromHist.slice(0, 30);
+    const fromFeed = [];
+    for (const sec of homeRows || []) {
+      for (const mix of sec.mixes || []) {
+        for (const t of mix.tracks || []) {
+          if (t?.id) fromFeed.push(t);
+        }
+      }
+    }
+    return dedupeByTitle([...fromHist, ...fromFeed]).slice(0, 30);
+  }, [recent, homeRows, catVer]);
   const recentIds = recentTracks.map(t => t.id);
   const hour = new Date().getHours();
   const greet = hour < 6 ? 'Buenas noches' : hour < 12 ? 'Buenos días' : hour < 19 ? 'Buenas tardes' : 'Buenas noches';

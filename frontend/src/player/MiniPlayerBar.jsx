@@ -1,9 +1,8 @@
 /**
  * MiniPlayerBar — barra de reproductor colapsada.
  *
- * Consume directamente del playerStore en vez de recibir props del padre.
- * Solo recibe props los callbacks puntuales (setExpanded, setMenuTarget, next, prev)
- * que son de UI/navigation y no corresponden al store del dominio player.
+ * Prioridad de estado: props de App (fuente de verdad actual del playback)
+ * → fallback a playerStore (migración gradual).
  */
 import React from 'react';
 import { hex2rgba, grad, hiResCover } from '../helpers.js';
@@ -13,15 +12,27 @@ import { Icon } from '../Icons.jsx';
 import { Spinner } from '../components.jsx';
 import { usePlayerStore } from '../store/playerStore.js';
 
-export function MiniPlayerBar({ T, pct, setExpanded, setMenuTarget, next, prev }) {
-  // Selectores finos — solo re-renderiza cuando cambian estos slices.
-  const track = usePlayerStore((s) => s.track);
-  const playing = usePlayerStore((s) => s.playing);
-  const loadingAudio = usePlayerStore((s) => s.loadingAudio);
-  const togglePlay = usePlayerStore((s) => s.togglePlay);
+export function MiniPlayerBar({
+  track: trackProp,
+  playing: playingProp,
+  togglePlay: togglePlayProp,
+  loadingAudio: loadingAudioProp,
+  T, pct, setExpanded, setMenuTarget, next, prev,
+}) {
+  const storeTrack = usePlayerStore((s) => s.track);
+  const storePlaying = usePlayerStore((s) => s.playing);
+  const storeLoading = usePlayerStore((s) => s.loadingAudio);
+  const storeToggle = usePlayerStore((s) => s.togglePlay);
+
+  const track = trackProp ?? storeTrack;
+  const playing = playingProp ?? storePlaying;
+  const loadingAudio = loadingAudioProp ?? storeLoading;
+  const togglePlay = typeof togglePlayProp === 'function' ? togglePlayProp : storeToggle;
 
   const { dragX, handlers } = useHSwipe({ onLeft: next, onRight: prev, threshold: 60 });
   const isSliding = Math.abs(dragX) > 0;
+
+  if (!track) return null;
 
   return (
     <div
@@ -30,9 +41,9 @@ export function MiniPlayerBar({ T, pct, setExpanded, setMenuTarget, next, prev }
       className="glass"
       style={{ background:`linear-gradient(135deg, ${hex2rgba(T.accent,.1)}, var(--surf-0))`, border:`1px solid ${hex2rgba(T.accent,.28)}`, borderRadius:20, padding:'10px 12px', display:'flex', alignItems:'center', gap:12, cursor:'pointer', boxShadow:`0 8px 28px ${hex2rgba(T.accent,.16)}, 0 2px 8px #0006`, position:'relative', overflow:'hidden', touchAction:'pan-y', userSelect:'none' }}
     >
-      <div style={{ position:'absolute', bottom:0, left:0, height:2.5, width:`${pct}%`, background:grad(T,90), borderRadius:99, boxShadow:`0 0 8px ${T.accent}`, transition:'width .15s linear' }} />
+      <div style={{ position:'absolute', bottom:0, left:0, height:2.5, width:`${pct || 0}%`, background:grad(T,90), borderRadius:99, boxShadow:`0 0 8px ${T.accent}`, transition:'width .15s linear' }} />
       <img
-        src={track?.cover ? hiResCover(track.cover, 96) : FALLBACK_COVER} alt="" referrerPolicy="no-referrer" onError={e => { e.currentTarget.onerror = null; e.currentTarget.src = FALLBACK_COVER; }}
+        src={track.cover ? hiResCover(track.cover, 96) : FALLBACK_COVER} alt="" referrerPolicy="no-referrer" onError={e => { e.currentTarget.onerror = null; e.currentTarget.src = FALLBACK_COVER; }}
         style={{ width:42, height:42, borderRadius:11, objectFit:'cover', flexShrink:0, boxShadow:'0 4px 12px #0007',
           transform: `translateX(${dragX * 0.6}px)`,
           transition: isSliding ? 'none' : 'transform .35s cubic-bezier(.22,1,.36,1)',
@@ -43,13 +54,11 @@ export function MiniPlayerBar({ T, pct, setExpanded, setMenuTarget, next, prev }
         transform: `translateX(${dragX * 0.25}px)`,
         transition: isSliding ? 'none' : 'transform .35s cubic-bezier(.22,1,.36,1)',
       }}>
-        <div style={{ fontSize:12.5, fontWeight:700, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track?.title || '—'}</div>
-        <div style={{ fontSize:10, color:T.accent, marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track?.artist || ''}</div>
+        <div style={{ fontSize:12.5, fontWeight:700, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title || '—'}</div>
+        <div style={{ fontSize:10, color:T.accent, marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.artist || ''}</div>
       </div>
       <button aria-label={playing?'Pausar':'Reproducir'} onClick={e=>{ e.stopPropagation(); togglePlay(); }} className="btn-tap" style={{ background:grad(T), border:'none', borderRadius:'50%', width:36, height:36, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0, boxShadow:`0 0 14px ${hex2rgba(T.accent,.55)}` }}>{loadingAudio ? <Spinner c="#04060a" sz={18} /> : (playing ? <Icon.Pause c="#04060a" sz={20} /> : <Icon.Play c="#04060a" sz={20} />)}</button>
-      <button aria-label="Más" onClick={e=>{ e.stopPropagation(); setMenuTarget(track?.id); }} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer', padding:4 }}><Icon.Dots c="var(--txt-1)" sz={19} /></button>
+      <button aria-label="Más" onClick={e=>{ e.stopPropagation(); if (track?.id) setMenuTarget(track.id); }} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer', padding:4 }}><Icon.Dots c="var(--txt-1)" sz={19} /></button>
     </div>
   );
 }
-
-export default MiniPlayerBar;

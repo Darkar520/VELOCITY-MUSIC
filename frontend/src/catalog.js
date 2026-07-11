@@ -69,8 +69,8 @@ export function saveMeta() {
 
 // Invalidación de caché: si subimos la versión, descartamos metadata/feed viejos
 // (p.ej. pistas de radio cacheadas sin carátula por un bug previo) una sola vez.
-// v10: feed profundo personalizado (más carruseles; limpia snapshots a medias).
-const CACHE_VERSION = '10';
+// v11: multi-mix por sección + fix miniplayer store mirror.
+const CACHE_VERSION = '11';
 try {
   if (localStorage.getItem('velocity.cacheVer') !== CACHE_VERSION) {
     localStorage.removeItem('velocity.meta');

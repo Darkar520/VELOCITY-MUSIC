@@ -161,6 +161,21 @@ export default function App() {
     const u = s.track.url || null;
     return isStreamUrlFresh(u) ? u : null;
   });
+  // Mirror App playback → playerStore (MiniPlayerBar/PlayerBar leen el store o props).
+  useEffect(() => {
+    usePlayerStore.setState({
+      track: track || null,
+      playing: !!playing,
+      loadingAudio: !!loadingAudio,
+      time: time || 0,
+      duration: dur || 0,
+      volume: vol,
+      shuffle: !!shuffle,
+      repeat: !!repeat,
+      queue: Array.isArray(queue) ? queue : [],
+      playSrc: playSrc || null,
+    });
+  }, [track, playing, loadingAudio, time, dur, vol, shuffle, repeat, queue, playSrc]);
   // ── Dispositivos de salida (altavoz, audífonos, Bluetooth) ──
   const [outputs, setOutputs] = useState([]);
   const [sinkId, setSinkId] = useState('');
@@ -1940,7 +1955,7 @@ export default function App() {
 
   const TabContent = (
     <>
-      {tab === 'home' && <HomeTab T={T} play={play} onMenu={setMenuTarget} goMix={goMix} displayName={displayName} avatar={avatar} email={email} setTab={setTab} startAiDj={startAiDj} onboardPrefs={onboardPrefs} setOnboardPrefs={setOnboardPrefs} backendDown={backendDown} />}
+      {tab === 'home' && <HomeTab T={T} play={play} track={track} playing={playing} onMenu={setMenuTarget} goMix={goMix} displayName={displayName} avatar={avatar} email={email} setTab={setTab} startAiDj={startAiDj} onboardPrefs={onboardPrefs} setOnboardPrefs={setOnboardPrefs} backendDown={backendDown} />}
       {tab === 'search' && <SearchTab T={T} play={play} addToTarget={setAddTarget} onMenu={setMenuTarget} recentSearches={recentSearches} addSearch={addSearch} removeSearch={removeSearch} goArtist={goArtist} goAlbum={goAlbum} goMix={goMix} selecting={selecting} selection={selection} toggleSelect={toggleSelect} startSelection={startSelection} addToQueue={addToQueue} removeFromQueue={removeFromQueueToast} backendDown={backendDown} setTab={setTab} />}
       {tab === 'library' && <LibraryTab T={T} play={play} openPlaylist={openPlaylist} setOpenPlaylist={setOpenPlaylist} addToTarget={setAddTarget} onMenu={setMenuTarget} downloadMany={downloadMany} goAlbum={goAlbum} goMix={goMix} selecting={selecting} selection={selection} toggleSelect={toggleSelect} startSelection={startSelection} addToQueue={addToQueue} removeFromQueue={removeFromQueueToast} setShowImport={setShowImport} hydrateTracks={hydrateTracks} createPlaylist={createPlaylist} removeFromPlaylist={removeFromPlaylist} deletePlaylist={deletePlaylist} savePlaylist={savePlaylist} unsavePlaylist={unsavePlaylist} />}
       {tab === 'profile' && <ProfileTab T={T} themeKey={themeKey} setThemeKey={setThemeKey} quality={quality} setQuality={setQuality} glow={glow} setGlow={setGlow} eq={eq} setEq={setEq} settings={settings} setSettings={setSettings} setOpenPlaylist={setOpenPlaylist} setTab={setTab} email={email} onLogout={onLogout} installApp={installApp} canInstall={!!installEvt} isIOS={isIOS} isStandalone={isStandalone} goWrapped={goWrapped} customPalettes={customPalettes} activeCustomId={activeCustomId} setActiveCustomId={setActiveCustomId} activePalette={activePalette} addPalette={addPalette} updatePalette={updatePalette} deletePalette={deletePalette} displayName={displayName} saveProfileName={saveProfileName} deleteAccount={deleteAccount} avatar={avatar} saveAvatar={saveAvatar} removeDownload={removeDownload} clearDownloads={clearDownloads} getDownloads={getDownloads} />}

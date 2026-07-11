@@ -1,37 +1,48 @@
 /**
- * PlayerBar — barra de reproductor expandida (desktop / móvil expandido).
- *
- * Consume estado del player del store. Props restantes son callbacks de
- * UI/navigation y el theme T.
- *
- * NOTA: `faved` y `toggleFav` son del dominio LIBRARY (no player), así que
- * se mantienen como props hasta que exista libraryStore.
+ * PlayerBar — barra de reproductor desktop.
+ * Props de App tienen prioridad; store es fallback de migración.
  */
 import React from 'react';
 import { fmt, hex2rgba, grad, hiResCover } from '../helpers.js';
 import { FALLBACK_COVER } from '../constants.js';
 import { Icon } from '../Icons.jsx';
 import { Spinner, RangeSlider } from '../components.jsx';
-import { DeviceChip } from './DeviceChip.jsx';
 import { usePlayerStore } from '../store/playerStore.js';
 
-export function PlayerBar({ faved, toggleFav, T, onExpand, onMenu, onQueue, next, prev }) {
-  // Selectores del store — solo re-renderiza cuando cambian estos slices
-  const track = usePlayerStore((s) => s.track);
-  const playing = usePlayerStore((s) => s.playing);
-  const time = usePlayerStore((s) => s.time);
-  const dur = usePlayerStore((s) => s.duration);
-  const vol = usePlayerStore((s) => s.volume);
-  const shuffle = usePlayerStore((s) => s.shuffle);
-  const repeat = usePlayerStore((s) => s.repeat);
-  const loadingAudio = usePlayerStore((s) => s.loadingAudio);
+export function PlayerBar({
+  track: trackProp, playing: playingProp, togglePlay: togglePlayProp,
+  next, prev, time: timeProp, dur: durProp, seek: seekProp,
+  vol: volProp, setVol: setVolProp, shuffle: shuffleProp, setShuffle: setShuffleProp,
+  repeat: repeatProp, setRepeat: setRepeatProp, faved, toggleFav, T,
+  onExpand, onMenu, loadingAudio: loadingAudioProp, onQueue,
+}) {
+  const sTrack = usePlayerStore((s) => s.track);
+  const sPlaying = usePlayerStore((s) => s.playing);
+  const sTime = usePlayerStore((s) => s.time);
+  const sDur = usePlayerStore((s) => s.duration);
+  const sVol = usePlayerStore((s) => s.volume);
+  const sShuffle = usePlayerStore((s) => s.shuffle);
+  const sRepeat = usePlayerStore((s) => s.repeat);
+  const sLoading = usePlayerStore((s) => s.loadingAudio);
+  const sToggle = usePlayerStore((s) => s.togglePlay);
+  const sSeek = usePlayerStore((s) => s.seek);
+  const sSetVol = usePlayerStore((s) => s.setVolume);
+  const sSetShuffle = usePlayerStore((s) => s.setShuffle);
+  const sSetRepeat = usePlayerStore((s) => s.setRepeat);
 
-  // Acciones del store
-  const togglePlay = usePlayerStore((s) => s.togglePlay);
-  const seek = usePlayerStore((s) => s.seek);
-  const setVol = usePlayerStore((s) => s.setVolume);
-  const setShuffle = usePlayerStore((s) => s.setShuffle);
-  const setRepeat = usePlayerStore((s) => s.setRepeat);
+  const track = trackProp ?? sTrack;
+  const playing = playingProp ?? sPlaying;
+  const time = timeProp ?? sTime;
+  const dur = durProp ?? sDur;
+  const vol = volProp ?? sVol;
+  const shuffle = shuffleProp ?? sShuffle;
+  const repeat = repeatProp ?? sRepeat;
+  const loadingAudio = loadingAudioProp ?? sLoading;
+  const togglePlay = typeof togglePlayProp === 'function' ? togglePlayProp : sToggle;
+  const seek = typeof seekProp === 'function' ? seekProp : sSeek;
+  const setVol = typeof setVolProp === 'function' ? setVolProp : sSetVol;
+  const setShuffle = typeof setShuffleProp === 'function' ? setShuffleProp : sSetShuffle;
+  const setRepeat = typeof setRepeatProp === 'function' ? setRepeatProp : sSetRepeat;
 
   const pct = dur > 0 ? (time / dur) * 100 : 0;
 
@@ -47,8 +58,8 @@ export function PlayerBar({ faved, toggleFav, T, onExpand, onMenu, onQueue, next
           <div style={{ fontSize:13, fontWeight:700, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', cursor:'pointer' }} onClick={onExpand}>{track.title}</div>
           <div style={{ fontSize:11, color:T.accent, marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.artist}</div>
         </div>
-        <button aria-label="Me gusta" onClick={() => toggleFav(track.id)} className="press" style={{ background:'none', border:'none', cursor:'pointer', padding:4, flexShrink:0 }}><Icon.Heart c={faved ? T.accent : 'var(--txt-3)'} filled={faved} sz={18} /></button>
-        <button aria-label="Más" onClick={() => onMenu(track.id)} className="press" style={{ background:'none', border:'none', cursor:'pointer', padding:4, flexShrink:0 }}><Icon.Dots c="var(--txt-3)" sz={18} /></button>
+        <button aria-label="Me gusta" onClick={() => toggleFav?.(track.id)} className="press" style={{ background:'none', border:'none', cursor:'pointer', padding:4, flexShrink:0 }}><Icon.Heart c={faved ? T.accent : 'var(--txt-3)'} filled={faved} sz={18} /></button>
+        <button aria-label="Más" onClick={() => onMenu?.(track.id)} className="press" style={{ background:'none', border:'none', cursor:'pointer', padding:4, flexShrink:0 }}><Icon.Dots c="var(--txt-3)" sz={18} /></button>
       </div>
       <div style={{ display:'flex', flexDirection:'column', gap:7, justifyContent:'center' }}>
         <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:22 }}>
