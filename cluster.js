@@ -35,7 +35,13 @@ if (!wantCluster) {
   await runSingle();
 } else if (cluster.isPrimary) {
   const cores = os.cpus().length || 1;
-  const workers = Math.max(1, Math.min(cores, Number(process.env.WEB_CONCURRENCY) || cores));
+  // En PC de escritorio (Photoshop + navegador) no spawnear 1 worker por core:
+  // 8 workers × Node ≈ OOM y Windows mata el backend. Default seguro: 2.
+  // Override: WEB_CONCURRENCY=N en .env
+  const raw = Number(process.env.WEB_CONCURRENCY);
+  const workers = Number.isFinite(raw) && raw >= 1
+    ? Math.min(cores, Math.floor(raw))
+    : Math.min(2, cores);
   const totalResolve = Number(process.env.RESOLVE_CONCURRENCY) || 4;
   const perWorker = Math.max(1, Math.floor(totalResolve / workers));
 
@@ -48,9 +54,15 @@ if (!wantCluster) {
     cluster.fork({ WORKER_RESOLVE_CONCURRENCY: String(perWorker), WORKER_ID: String(i) });
   }
   // Reponer workers caídos para mantener el servicio siempre arriba.
+  // Evitar storm: si un worker muere muy rápido, esperar un poco.
+  let lastFork = 0;
   cluster.on('exit', (worker, code, signal) => {
     console.error(`[cluster] worker ${worker.process.pid} salió (${signal || code}). Reponiendo…`);
-    cluster.fork({ WORKER_RESOLVE_CONCURRENCY: String(perWorker) });
+    const wait = Date.now() - lastFork < 3000 ? 2000 : 200;
+    setTimeout(() => {
+      lastFork = Date.now();
+      cluster.fork({ WORKER_RESOLVE_CONCURRENCY: String(perWorker) });
+    }, wait);
   });
 } else {
   await runSingle();

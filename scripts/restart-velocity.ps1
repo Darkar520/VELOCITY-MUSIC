@@ -28,13 +28,18 @@ Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction Silen
 
 Start-Sleep -Seconds 2
 
-# 3) PostgreSQL
+# 3) PostgreSQL (no bloquear si pg_ctl escribe a stderr)
 $ready = & 'C:\Program Files\PostgreSQL\16\bin\pg_isready.exe' -h localhost -p 5432 2>&1 | Out-String
 if ($ready -notmatch 'accepting|aceptando') {
   Write-Host "  Arrancando PostgreSQL..."
+  try { Start-Service postgresql-x64-16 -ErrorAction SilentlyContinue } catch {}
   try { net start postgresql-x64-16 2>&1 | Out-Null } catch {}
   Start-Sleep -Seconds 3
-  try { & 'C:\Program Files\PostgreSQL\16\bin\pg_ctl.exe' start -D 'C:\Program Files\PostgreSQL\16\data' -w 2>&1 | Out-Null } catch {}
+  $ready2 = & 'C:\Program Files\PostgreSQL\16\bin\pg_isready.exe' -h localhost -p 5432 2>&1 | Out-String
+  if ($ready2 -notmatch 'accepting|aceptando') {
+    $null = & 'C:\Program Files\PostgreSQL\16\bin\pg_ctl.exe' start -D 'C:\Program Files\PostgreSQL\16\data' -w -t 25 2>&1
+  }
+  Start-Sleep -Seconds 2
 }
 
 # 4) Guardian oculto

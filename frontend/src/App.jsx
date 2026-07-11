@@ -48,9 +48,22 @@ function AuthScreen({ onAuthed, T }) {
   const [googleClientId, setGoogleClientId] = useState('');
   const [backendDown, setBackendDown] = useState(false);
   useEffect(() => {
-    api.authConfig().then(cfg => setGoogleClientId((cfg && cfg.googleClientId) || '')).catch(() => {});
-    // Detectar si el backend está caído.
-    api.pingBackend().then(ok => setBackendDown(!ok));
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const cfg = await api.authConfig();
+        if (!cancelled) setGoogleClientId((cfg && cfg.googleClientId) || '');
+      } catch { if (!cancelled) setGoogleClientId(''); }
+      try {
+        const ok = await api.pingBackend();
+        if (!cancelled) setBackendDown(!ok);
+      } catch { if (!cancelled) setBackendDown(true); }
+    };
+    refresh();
+    // Reintentar: si el backend se cae y vuelve, login/Google reaparecen solos.
+    const iv = setInterval(refresh, 8000);
+    window.addEventListener('online', refresh);
+    return () => { cancelled = true; clearInterval(iv); window.removeEventListener('online', refresh); };
   }, []);
   const googleLogin = () => {
     if (!googleClientId) return;

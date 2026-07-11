@@ -1,6 +1,5 @@
-# velocity-guardian.ps1 - VELOCITY MUSIC
-# Keeps PostgreSQL, backend (:3000) and Cloudflare tunnel alive.
-# Independent of IDEs/CLIs (Antigravity, Codex, Kilo, etc.).
+# velocity-guardian.ps1 - keeps PG + backend :3000 + cloudflared alive
+# Independent of IDEs. Safe defaults for low-RAM desktops.
 
 $ErrorActionPreference = 'Continue'
 
@@ -10,7 +9,8 @@ $PgPort    = 5432
 $PgCtl     = 'C:\Program Files\PostgreSQL\16\bin\pg_ctl.exe'
 $PgIsReady = 'C:\Program Files\PostgreSQL\16\bin\pg_isready.exe'
 $PgDataDir = 'C:\Program Files\PostgreSQL\16\data'
-$PgLogFile = 'C:\Program Files\PostgreSQL\16\data\log\pg_guardian.log'
+# NEVER write pg_ctl log inside data\log (sharing violation + slow fsync with AV)
+$PgLogFile = Join-Path $LogDir 'pg_ctl_start.log'
 $CfExe     = 'C:\Program Files (x86)\cloudflared\cloudflared.exe'
 $CfConfig  = 'C:\Users\irisp\.cloudflared\config.yml'
 $PublicUrl = 'https://velocitymusic.uk'
@@ -19,9 +19,10 @@ $BackLog   = Join-Path $LogDir 'backend.log'
 $CfLog     = Join-Path $LogDir 'tunnel.log'
 $GuardLog  = Join-Path $LogDir 'guardian.log'
 $UrlFile   = Join-Path $Proj  'current-url.txt'
+$HeartbeatEvery = 4   # log heartbeat every N loops (~1 min if sleep=15)
 
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
-[System.IO.File]::WriteAllText($UrlFile, $PublicUrl, [System.Text.Encoding]::UTF8)
+try { [System.IO.File]::WriteAllText($UrlFile, $PublicUrl, [System.Text.Encoding]::UTF8) } catch {}
 
 function Log([string]$msg) {
   $line = '[{0:yyyy-MM-dd HH:mm:ss}] {1}' -f (Get-Date), $msg
@@ -30,7 +31,7 @@ function Log([string]$msg) {
 
 $mutex = New-Object System.Threading.Mutex($false, 'Global\VelocityMusicGuardian')
 if (-not $mutex.WaitOne(0)) {
-  Log 'Another guardian instance is already running - exit'
+  # Another guardian claims the mutex - exit quietly
   exit 0
 }
 
@@ -50,21 +51,6 @@ try {
   powercfg /change hibernate-timeout-dc 0 | Out-Null
 } catch {}
 
-try {
-  $code = @'
-using System;using System.Runtime.InteropServices;
-public class SleepBlock {
-  [DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint esFlags);
-  public const uint ES_CONTINUOUS = 0x80000000;
-  public const uint ES_SYSTEM_REQUIRED = 0x00000001;
-  public const uint ES_AWAYMODE = 0x00000040;
-  public static void Prevent() { SetThreadExecutionState(ES_CONTINUOUS|ES_SYSTEM_REQUIRED|ES_AWAYMODE); }
-}
-'@
-  Add-Type -TypeDefinition $code -Language CSharp
-  [SleepBlock]::Prevent()
-} catch {}
-
 function Test-Postgres {
   try {
     $result = & $PgIsReady -h localhost -p $PgPort 2>&1 | Out-String
@@ -72,8 +58,15 @@ function Test-Postgres {
   } catch { return $false }
 }
 
-function Test-Backend {
+function Test-BackendPort {
   return [bool](Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue)
+}
+
+function Test-BackendHttp {
+  try {
+    $r = Invoke-WebRequest -Uri ("http://127.0.0.1:{0}/api/status" -f $Port) -UseBasicParsing -TimeoutSec 4
+    return ($r.StatusCode -ge 200 -and $r.StatusCode -lt 500)
+  } catch { return $false }
 }
 
 function Test-Tunnel {
@@ -103,21 +96,28 @@ function Import-DotEnv([string]$Path) {
 
 function Start-Postgres {
   Log 'PostgreSQL down - starting...'
+  # If postgres.exe already running (recovery), wait - do NOT start a second copy.
+  if (Get-Process postgres -ErrorAction SilentlyContinue) {
+    Log 'postgres.exe present - waiting for recovery (no second start)'
+    return
+  }
   try {
     $svc = Get-Service postgresql-x64-16 -ErrorAction SilentlyContinue
-    if ($svc -and $svc.Status -eq 'Stopped') {
+    if ($svc -and $svc.Status -ne 'Running') {
+      try { Start-Service postgresql-x64-16 -ErrorAction SilentlyContinue } catch {}
+      Start-Sleep -Seconds 4
+      if (Test-Postgres) { Log 'PostgreSQL started via service'; return }
       net start postgresql-x64-16 2>&1 | Out-Null
-      if ($LASTEXITCODE -eq 0) {
-        Log 'PostgreSQL started via Windows service'
-        return
-      }
+      Start-Sleep -Seconds 4
+      if (Test-Postgres) { Log 'PostgreSQL started via net start'; return }
     }
   } catch {}
   try {
-    & $PgCtl start -D $PgDataDir -w -l $PgLogFile 2>&1 | Out-Null
+    # Log OUTSIDE data dir to avoid sharing violation with postgres log collector
+    & $PgCtl start -D $PgDataDir -w -t 60 -l $PgLogFile 2>&1 | Out-Null
     Log 'PostgreSQL started via pg_ctl'
   } catch {
-    Log ('ERROR starting PostgreSQL: ' + $_.Exception.Message)
+    Log ('ERROR PostgreSQL: ' + $_.Exception.Message)
   }
 }
 
@@ -135,33 +135,27 @@ function Start-Backend {
     Log 'Backend skip: PostgreSQL not ready'
     return
   }
-
   $envFile = Join-Path $Proj '.env'
   if (-not (Import-DotEnv $envFile)) {
-    Log 'ERROR: missing .env - backend not started'
+    Log 'ERROR: missing .env'
     return
   }
   if (-not $env:JWT_SECRET -or -not $env:DATABASE_URL) {
-    Log 'ERROR: .env incomplete (JWT_SECRET / DATABASE_URL) - backend not started'
+    Log 'ERROR: .env incomplete (JWT_SECRET / DATABASE_URL)'
     return
   }
   if (-not (Test-Path -LiteralPath $NodeExe)) {
-    Log ('ERROR: node.exe not found: ' + $NodeExe)
+    Log ('ERROR: node not found: ' + $NodeExe)
     return
   }
 
   if (-not $env:USE_POSTGRES) { $env:USE_POSTGRES = '1' }
   if (-not $env:CLUSTER) { $env:CLUSTER = '1' }
   if (-not $env:NODE_ENV) { $env:NODE_ENV = 'production' }
+  # Cap workers on home PCs (memory). Explicit WEB_CONCURRENCY in .env wins via Import-DotEnv.
+  if (-not $env:WEB_CONCURRENCY) { $env:WEB_CONCURRENCY = '2' }
 
-  Log 'Starting backend (node cluster.js) detached...'
-  try {
-    $stamp = '`n===== Backend start {0} =====' -f (Get-Date)
-    Add-Content -LiteralPath $BackLog -Value $stamp -Encoding UTF8
-  } catch {}
-
-  # Detached process: closing IDEs must NOT kill this node tree.
-  # Do not redirect stdout+stderr to the same file (Windows lock issue).
+  Log 'Starting backend node cluster.js detached...'
   try {
     $p = Start-Process -FilePath $NodeExe `
       -ArgumentList 'cluster.js' `
@@ -171,52 +165,79 @@ function Start-Backend {
       -ErrorAction Stop
     Log ('Backend started PID=' + $p.Id)
   } catch {
-    Log ('ERROR Start-Process node: ' + $_.Exception.Message + ' - fallback cmd')
+    Log ('ERROR Start-Process: ' + $_.Exception.Message)
     try {
-      $inner = 'cd /d "{0}" && node cluster.js >> "{1}" 2>&1' -f $Proj, $BackLog
+      $inner = 'cd /d "{0}" && set WEB_CONCURRENCY=2&& node cluster.js >> "{1}" 2>&1' -f $Proj, $BackLog
       Start-Process -FilePath $env:ComSpec -ArgumentList '/c', ('start "VelocityBackend" /MIN cmd /c "{0}"' -f $inner) -WindowStyle Hidden | Out-Null
       Log 'Backend started via cmd fallback'
     } catch {
-      Log ('ERROR fallback backend: ' + $_.Exception.Message)
+      Log ('ERROR fallback: ' + $_.Exception.Message)
     }
   }
 }
 
 function Start-Tunnel {
   if (-not (Test-Path -LiteralPath $CfExe)) {
-    Log ('WARN: cloudflared missing: ' + $CfExe)
+    Log ('WARN: cloudflared missing')
     return
   }
+  if (Test-Tunnel) { return }
   Log 'Starting Cloudflare tunnel...'
   try {
     Start-Process -FilePath $CfExe `
       -ArgumentList @('tunnel', '--config', $CfConfig, 'run') `
-      -WindowStyle Hidden `
-      -RedirectStandardError $CfLog | Out-Null
+      -WindowStyle Hidden | Out-Null
     Log 'Tunnel started'
   } catch {
     Log ('ERROR tunnel: ' + $_.Exception.Message)
   }
 }
 
+$loop = 0
 while ($true) {
+  $loop++
   try {
     if (-not (Test-Postgres)) {
       Start-Postgres
       [void](Wait-Postgres)
-      Start-Sleep -Seconds 3
+      Start-Sleep -Seconds 2
     }
-    if (-not (Test-Backend)) {
-      Log ('Backend not listening on :' + $Port + ' - restarting')
+
+    $portUp = Test-BackendPort
+    $httpUp = $false
+    if ($portUp) { $httpUp = Test-BackendHttp }
+
+    if (-not $portUp -or -not $httpUp) {
+      if ($portUp -and -not $httpUp) {
+        Log 'Backend port open but /api/status dead - killing stale node and restarting'
+        # Kill only Velocity cluster processes
+        Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue | ForEach-Object {
+          if ($_.CommandLine -and ($_.CommandLine -like '*cluster.js*' -or $_.CommandLine -like ("*{0}*" -f $Proj))) {
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+          }
+        }
+        Start-Sleep -Seconds 2
+      } else {
+        Log 'Backend down - restarting'
+      }
       Start-Backend
       Start-Sleep -Seconds 12
     }
+
     if (-not (Test-Tunnel)) {
       Start-Tunnel
-      Start-Sleep -Seconds 5
+      Start-Sleep -Seconds 4
+    }
+
+    if (($loop % $HeartbeatEvery) -eq 0) {
+      $pg = Test-Postgres
+      $be = Test-BackendPort
+      $http = if ($be) { Test-BackendHttp } else { $false }
+      $cf = Test-Tunnel
+      Log ("heartbeat pg={0} port={1} http={2} tunnel={3}" -f $pg, $be, $http, $cf)
     }
   } catch {
-    Log ('ERROR guardian loop: ' + $_.Exception.Message)
+    Log ('ERROR loop: ' + $_.Exception.Message)
   }
   Start-Sleep -Seconds 15
 }
