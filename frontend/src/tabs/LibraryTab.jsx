@@ -1,14 +1,28 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { fmt, hex2rgba, grad, hiResCover, dedupeByTitle, capPerArtist, slimTrack, parseLRC, lyricsOverlapRatio, plainFromSyncedLines, tintedVars } from '../helpers.js';
-import { cacheTrack, cacheTracks, trackById, allCached, loadMeta, loadPlayerState, saveMeta, normalizeTrack } from '../catalog.js';
+import React, { useState, useEffect } from 'react';
+import { hex2rgba, grad, hiResCover, dedupeByTitle } from '../helpers.js';
+import { trackById } from '../catalog.js';
 import { Icon } from '../Icons.jsx';
-import { EQViz, Spinner, ProgressRing, DownloadAllButton, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider, SettingCard, ToggleRow, ColorField } from '../components.jsx';
+import { Spinner, DownloadAllButton, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard } from '../components.jsx';
 import { SearchBar } from './SearchBar.jsx';
 import { useListSearch } from './useListSearch.js';
+import { useLibraryStore } from '../store/libraryStore.js';
+import { usePlayerStore } from '../store/playerStore.js';
 
-export function LibraryTab({ ctx }) {
-  const { track, playing, play, T, favs, toggleFav, playlists, createPlaylist,
-          removeFromPlaylist, deletePlaylist, openPlaylist, setOpenPlaylist, addToTarget, onMenu, downloaded, downloading, downloadMany, savedAlbums, goAlbum, goMix, savedPlaylists, savePlaylist, unsavePlaylist, isPlaylistSaved, selecting, selection, toggleSelect, startSelection, hydrateTracks, addToQueue, removeFromQueue, setShowImport } = ctx;
+export function LibraryTab({ T, play, openPlaylist, setOpenPlaylist, addToTarget, onMenu, downloadMany, goAlbum, goMix, selecting, selection, toggleSelect, startSelection, addToQueue, removeFromQueue, setShowImport, hydrateTracks, createPlaylist, removeFromPlaylist, deletePlaylist, savePlaylist, unsavePlaylist }) {
+  // Library store
+  const favs = useLibraryStore((s) => s.favs);
+  const toggleFavInStore = useLibraryStore((s) => s.toggleFav);
+  const playlists = useLibraryStore((s) => s.playlists);
+  const savedAlbums = useLibraryStore((s) => s.savedAlbums);
+  const savedPlaylists = useLibraryStore((s) => s.savedPlaylists);
+  const isPlaylistSaved = useLibraryStore((s) => s.isPlaylistSaved);
+  // Player store
+  const track = usePlayerStore((s) => s.track);
+  const playing = usePlayerStore((s) => s.playing);
+  const downloaded = usePlayerStore((s) => s.downloaded);
+  const downloading = usePlayerStore((s) => s.downloading);
+  // Wrapper
+  const toggleFav = (id) => toggleFavInStore(id);
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
   // Búsqueda dentro de la playlist abierta. Hook al nivel superior (no dentro
