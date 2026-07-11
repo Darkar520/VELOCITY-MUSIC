@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { fmt, hex2rgba, grad, hiResCover, dedupeByTitle, capPerArtist, slimTrack, parseLRC, lyricsOverlapRatio, plainFromSyncedLines, tintedVars } from '../helpers.js';
+import React from 'react';
+import { hex2rgba, grad } from '../helpers.js';
 import { Icon } from '../Icons.jsx';
-import { EQViz, Spinner, ProgressRing, DownloadAllButton, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider, SettingCard, ToggleRow, ColorField } from '../components.jsx';
-import { cacheTrack, cacheTracks, trackById, allCached, loadMeta, loadPlayerState, saveMeta, normalizeTrack } from '../catalog.js';
+import { CoverImg, SectionHeader } from '../components.jsx';
+import { useLibraryStore } from '../store/libraryStore.js';
 
-export function WrappedView({ ctx }) {
-  const { T, favs, setView, play, playStats } = ctx;
+export function WrappedView({ T, setView, play, playStats }) {
+  const favs = useLibraryStore((s) => s.favs);
   const stats = playStats || {};
   const favSet = new Set(favs || []);
   const entries = Object.entries(stats).map(([id, v]) => ({ id, ...v }));
