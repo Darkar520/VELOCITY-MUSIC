@@ -1,11 +1,20 @@
-# Primary recovery: runs every 2-5 min via Scheduled Task.
-# Does NOT depend on a long-lived guardian PowerShell process.
+# Primary recovery: Scheduled Task (2 min) + watchdog-loop.vbs (60 s).
+# Does NOT depend on a long-lived PowerShell guardian process.
 $ErrorActionPreference = 'Continue'
 $Proj = 'C:\Users\irisp\OneDrive\Escritorio\VELOCITY MUSIC'
 $Port = 3000
 $LogDir = Join-Path $Proj 'logs'
 $Log = Join-Path $LogDir 'ensure.log'
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+
+# Keep C:\velocity-ops copy fresh for schtasks (path without spaces)
+try {
+  $short = 'C:\velocity-ops'
+  if (Test-Path $short) {
+    Copy-Item -Force (Join-Path $Proj 'scripts\ensure-running.ps1') (Join-Path $short 'ensure-running.ps1') -ErrorAction SilentlyContinue
+    Copy-Item -Force (Join-Path $Proj 'scripts\start-backend-once.ps1') (Join-Path $short 'start-backend-once.ps1') -ErrorAction SilentlyContinue
+  }
+} catch {}
 
 function ELog($m) {
   $line = '[{0:yyyy-MM-dd HH:mm:ss}] {1}' -f (Get-Date), $m
@@ -74,6 +83,17 @@ if (-not (TunnelUp)) {
 }
 
 if ((PgReady) -and (HttpOk)) {
-  # quiet success every Nth run would be better; log OK briefly
+  # Keep Velocity node at High priority (Photoshop can steal CPU otherwise)
+  Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue | ForEach-Object {
+    $c = $_.CommandLine
+    if ($c -and ($c -like '*server.js*' -or $c -like '*cluster.js*' -or $c -like "*$Proj*")) {
+      try { (Get-Process -Id $_.ProcessId).PriorityClass = 'High' } catch {}
+    }
+  }
+  foreach ($n in @('postgres', 'cloudflared')) {
+    Get-Process -Name $n -ErrorAction SilentlyContinue | ForEach-Object {
+      try { $_.PriorityClass = 'High' } catch {}
+    }
+  }
   ELog 'OK all up'
 }
