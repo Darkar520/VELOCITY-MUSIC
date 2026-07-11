@@ -1,17 +1,25 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React from 'react';
 import { createPortal } from 'react-dom';
-import { fmt, hex2rgba, grad, hiResCover, dedupeByTitle, capPerArtist, slimTrack, parseLRC, lyricsOverlapRatio, plainFromSyncedLines, tintedVars } from '../helpers.js';
-import { cacheTrack, cacheTracks, trackById, allCached, loadMeta, loadPlayerState, saveMeta, normalizeTrack } from '../catalog.js';
+import { trackById } from '../catalog.js';
 import { Icon } from '../Icons.jsx';
-import { EQViz, Spinner, ProgressRing, DownloadAllButton, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider, SettingCard, ToggleRow, ColorField } from '../components.jsx';
+import { CoverImg } from '../components.jsx';
+import { useLibraryStore } from '../store/libraryStore.js';
+import { usePlayerStore } from '../store/playerStore.js';
 
-export function TrackMenu({ trackId, onClose, ctx }) {
-  const { T, track, favs, toggleFav, addToTarget, goArtist, goAlbum, shareTrack, addToQueue, download, removeDownload, downloaded, playingFrom, goToPlayingPlaylist } = ctx;
+export function TrackMenu({ trackId, onClose, T, addToTarget, goArtist, goAlbum, shareTrack, addToQueue, download, removeDownload, playingFrom, goToPlayingPlaylist }) {
+  // Library store
+  const favs = useLibraryStore((s) => s.favs);
+  const toggleFavInStore = useLibraryStore((s) => s.toggleFav);
+  // Player store
+  const track = usePlayerStore((s) => s.track);
+  const downloaded = usePlayerStore((s) => s.downloaded);
+
   if (!trackId) return null;
   const tk = trackById(trackId);
   if (!tk) return null;
   const faved = favs.includes(trackId);
   const isDl = downloaded.has(trackId);
+  const toggleFav = (id) => { toggleFavInStore(id); /* App.jsx escucha cambios para llamar api */ };
   const items = [
     { icon: Icon.Queue, label:'Añadir a la cola', action: () => { addToQueue(trackId); onClose(); } },
     { icon: Icon.Disc,  label:'Ir al álbum',      action: () => { goAlbum(tk.albumId, tk.album, tk.artist, tk.title, tk.cover); onClose(); } },
