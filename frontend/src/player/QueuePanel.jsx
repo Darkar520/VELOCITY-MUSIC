@@ -1,12 +1,29 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { fmt, hex2rgba, grad, hiResCover, dedupeByTitle, capPerArtist, slimTrack, parseLRC, lyricsOverlapRatio, plainFromSyncedLines, tintedVars } from '../helpers.js';
-import { cacheTrack, cacheTracks, trackById, allCached, loadMeta, loadPlayerState, saveMeta, normalizeTrack } from '../catalog.js';
+/**
+ * QueuePanel — panel lateral de la cola de reproducción.
+ *
+ * Consume queue y track actual del playerStore. Recibe props los callbacks
+ * de UI (onClose, play) y el theme T.
+ *
+ * reordering se hace via store.reorderQueue / removeFromQueue — no callbacks del padre.
+ */
+import React, { useState } from 'react';
+import { hex2rgba } from '../helpers.js';
+import { trackById } from '../catalog.js';
 import { Icon } from '../Icons.jsx';
-import { EQViz, Spinner, ProgressRing, DownloadAllButton, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider, SettingCard, ToggleRow, ColorField } from '../components.jsx';
+import { CoverImg } from '../components.jsx';
+import { usePlayerStore } from '../store/playerStore.js';
 
-export function QueuePanel({ open, onClose, queue, current, play, T, reorder, remove }) {
+export function QueuePanel({ open, onClose, play, T }) {
   const [drag, setDrag] = useState(null);
+
+  // Selectores del store
+  const queue = usePlayerStore((s) => s.queue);
+  const current = usePlayerStore((s) => s.track);
+  const reorder = usePlayerStore((s) => s.reorderQueue);
+  const remove = usePlayerStore((s) => s.removeFromQueue);
+
   if (!open) return null;
+
   const ids = queue && queue.length ? queue : (current ? [current.id] : []);
   const items = ids.map(id => trackById(id)).map((t, i) => ({ t, id: ids[i] })).filter(x => x.t);
   const curIdx = current ? ids.indexOf(current.id) : -1;
@@ -39,7 +56,7 @@ export function QueuePanel({ open, onClose, queue, current, play, T, reorder, re
                 <div style={{ display:'flex', alignItems:'center', gap:2, flexShrink:0 }}>
                   <button aria-label="Subir" disabled={i===0} onClick={() => i>0 && reorder(i, i-1)} className="press" style={{ background:'none', border:'none', cursor: i===0?'default':'pointer', padding:4, opacity: i===0?.3:1, transform:'rotate(180deg)' }}><Icon.ChevD c="var(--txt-2)" sz={16} /></button>
                   <button aria-label="Bajar" disabled={i===items.length-1} onClick={() => i<items.length-1 && reorder(i, i+1)} className="press" style={{ background:'none', border:'none', cursor: i===items.length-1?'default':'pointer', padding:4, opacity: i===items.length-1?.3:1 }}><Icon.ChevD c="var(--txt-2)" sz={16} /></button>
-                  {!isCur && <button aria-label="Quitar" onClick={() => remove(id)} className="press" style={{ background:'none', border:'none', cursor:'pointer', padding:4 }}><Icon.X c="var(--txt-3)" sz={15} /></button>}
+                  {!isCur && <button aria-label="Quitar" onClick={() => remove(i)} className="press" style={{ background:'none', border:'none', cursor:'pointer', padding:4 }}><Icon.X c="var(--txt-3)" sz={15} /></button>}
                 </div>
               </div>
             );
@@ -51,4 +68,4 @@ export function QueuePanel({ open, onClose, queue, current, play, T, reorder, re
   );
 }
 
-
+export default QueuePanel;
