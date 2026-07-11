@@ -18,7 +18,8 @@ import {
   mediaSessionPlaybackState,
   shouldRestoreInterruptPosition,
   shouldConfirmMediaFocusLoss,
-  backgroundKeepAliveDelays,
+  isPlaybackZombie,
+  backgroundWatchIntervalMs,
 } from './audioContinuity.js';
 import { usePersisted, useViewport, useDominantColor, useHSwipe } from './hooks.js';
 import { Icon } from './Icons.jsx';
@@ -2489,8 +2490,8 @@ export default function App() {
   const reacquireInFlight = useRef(false);
   const lastTimeRef = useRef(0);
   const stuckCheckRef = useRef(null);
-  const keepAliveGenRef = useRef(0);
-  const keepAliveTimersRef = useRef([]);
+  const bgWatchRef = useRef(null);       // interval id
+  const bgWatchMetaRef = useRef({ t: 0, stuck: 0, fails: 0 });
   const [mediaInterrupted, setMediaInterrupted] = useState(false);
 
   const setMediaSessionState = (state, positionHint) => {
@@ -2524,6 +2525,7 @@ export default function App() {
     systemPausedRef.current = false;
     setMediaInterrupted(false);
   };
+  /** Solo si el browser rebobinó; NUNCA si estamos en el mismo segundo (evita pegado). */
   const restoreInterruptPosition = (a) => {
     if (!a) return;
     const saved = interruptPositionRef.current;
@@ -2533,71 +2535,146 @@ export default function App() {
   const savePlaybackAnchor = (a) => {
     if (!a) return;
     const pos = Number.isFinite(a.currentTime) ? a.currentTime : 0;
-    if (pos > 0 || interruptPositionRef.current == null) interruptPositionRef.current = pos;
+    // Actualizar ancla al progreso real; no bajarla si el tiempo ya avanzó.
+    if (interruptPositionRef.current == null || pos >= (interruptPositionRef.current || 0) - 0.25) {
+      interruptPositionRef.current = pos;
+    }
   };
-  /** Soft play en background: Chrome pausa al salir; hay que reintentar sin mark interrupted. */
-  const cancelBackgroundKeepAlive = () => {
-    keepAliveGenRef.current += 1;
-    (keepAliveTimersRef.current || []).forEach((id) => clearTimeout(id));
-    keepAliveTimersRef.current = [];
-  };
-  const scheduleBackgroundKeepAlive = () => {
-    if (!playingRef.current) return;
-    cancelBackgroundKeepAlive();
-    const gen = keepAliveGenRef.current;
-    const delays = backgroundKeepAliveDelays();
-    const maxAttempts = delays.length - 1;
-    delays.forEach((ms, attempt) => {
-      const id = setTimeout(() => {
-        if (gen !== keepAliveGenRef.current) return;
-        if (!playingRef.current || selfPauseRef.current) return;
-        const a = audioRef.current;
-        if (!a || a.ended) return;
 
-        // Ya suena → keep-alive OK (salida de app / pantalla off en Chrome).
-        if (!a.paused) {
-          clearSystemInterrupted();
-          setMediaSessionState('playing', a.currentTime);
-          if (a.currentTime > 1) interruptPositionRef.current = a.currentTime;
-          return;
+  /**
+   * Soft kick: pause+play SIN load (seguro en background).
+   * Desbloquea el zombie de Chrome (“playing” pero tiempo congelado).
+   */
+  const softKickPlayback = () => {
+    const a = audioRef.current;
+    if (!a || !playingRef.current || a.ended || selfPauseRef.current) return;
+    if (a.volume < 0.05) a.volume = Math.max(vol, 0.35);
+    const anchor = Number.isFinite(a.currentTime) ? a.currentTime : (interruptPositionRef.current || 0);
+    if (anchor > 0) interruptPositionRef.current = Math.max(interruptPositionRef.current || 0, anchor);
+
+    selfPauseRef.current = true;
+    try { a.pause(); } catch {}
+    selfPauseRef.current = false;
+    // Solo reponer si rebobinó; no forzar el segundo viejo.
+    restoreInterruptPosition(a);
+    const p = a.play();
+    if (p && p.then) {
+      p.then(() => {
+        clearSystemInterrupted();
+        const ct = a.currentTime || anchor;
+        setMediaSessionState('playing', ct);
+        setTime(ct);
+      }).catch(() => {
+        // play falló: otro media tiene el foco
+        bgWatchMetaRef.current.fails = (bgWatchMetaRef.current.fails || 0) + 1;
+        if (shouldConfirmMediaFocusLoss({
+          stillPaused: true,
+          userWantsPlay: playingRef.current,
+          keepAliveAttempt: bgWatchMetaRef.current.fails,
+          maxAttempts: 4,
+        })) {
+          markSystemInterrupted(a);
+          stopBackgroundWatch();
         }
+      });
+    }
+  };
 
-        // Reintentar soft play (también con app oculta).
-        if (a.volume < 0.05) a.volume = Math.max(vol, 0.5);
+  const stopBackgroundWatch = () => {
+    if (bgWatchRef.current) {
+      clearInterval(bgWatchRef.current);
+      bgWatchRef.current = null;
+    }
+    bgWatchMetaRef.current = { t: 0, stuck: 0, fails: 0 };
+  };
+
+  /**
+   * Watchdog en background: detecta pause real y zombie (tiempo pegado).
+   * Corre mientras la app está oculta y el usuario quiere oír.
+   */
+  const startBackgroundWatch = () => {
+    stopBackgroundWatch();
+    const a0 = audioRef.current;
+    bgWatchMetaRef.current = {
+      t: a0 && Number.isFinite(a0.currentTime) ? a0.currentTime : 0,
+      stuck: 0,
+      fails: 0,
+    };
+    // Al salir: si ya pausó, soft play; si “playing”, el interval detecta zombie.
+    if (a0 && playingRef.current && !a0.ended && a0.paused) {
+      if (a0.volume < 0.05) a0.volume = Math.max(vol, 0.35);
+      a0.play().then(() => {
+        clearSystemInterrupted();
+        setMediaSessionState('playing', a0.currentTime);
+      }).catch(() => {});
+    }
+
+    bgWatchRef.current = setInterval(() => {
+      if (!playingRef.current || selfPauseRef.current) return;
+      // Si volvimos a visible, el interval de foreground se encarga.
+      if (isDocumentVisible()) return;
+      const a = audioRef.current;
+      if (!a || a.ended) return;
+
+      const ct = Number.isFinite(a.currentTime) ? a.currentTime : 0;
+      const prev = bgWatchMetaRef.current.t;
+
+      if (a.paused) {
+        // Chrome al salir: a menudo paused. Soft play (no mark interrupted aún).
+        bgWatchMetaRef.current.stuck = 0;
+        if (a.volume < 0.05) a.volume = Math.max(vol, 0.35);
         restoreInterruptPosition(a);
-        // Mantener notificación en "playing" mientras intentamos (no parpadear a paused).
-        setMediaSessionState('playing', interruptPositionRef.current ?? a.currentTime);
-
         const p = a.play();
         if (p && p.then) {
           p.then(() => {
-            if (gen !== keepAliveGenRef.current) return;
-            restoreInterruptPosition(a);
             clearSystemInterrupted();
             setMediaSessionState('playing', a.currentTime);
+            bgWatchMetaRef.current.fails = 0;
+            bgWatchMetaRef.current.t = a.currentTime || ct;
           }).catch(() => {
-            if (gen !== keepAliveGenRef.current) return;
+            bgWatchMetaRef.current.fails += 1;
             if (shouldConfirmMediaFocusLoss({
               stillPaused: true,
               userWantsPlay: playingRef.current,
-              keepAliveAttempt: attempt,
-              maxAttempts,
+              keepAliveAttempt: bgWatchMetaRef.current.fails,
+              maxAttempts: 5,
             })) {
-              // Vídeo u otra app se quedó con el audio → notificación pausada.
               markSystemInterrupted(a);
+              stopBackgroundWatch();
             }
           });
-        } else if (shouldConfirmMediaFocusLoss({
-          stillPaused: a.paused,
-          userWantsPlay: playingRef.current,
-          keepAliveAttempt: attempt,
-          maxAttempts,
-        })) {
-          markSystemInterrupted(a);
         }
-      }, ms);
-      keepAliveTimersRef.current.push(id);
-    });
+        bgWatchMetaRef.current.t = ct;
+        return;
+      }
+
+      // No paused: ¿avanza el tiempo o es zombie?
+      if (isPlaybackZombie({
+        userWantsPlay: true,
+        paused: false,
+        ended: false,
+        prevTime: prev,
+        currTime: ct,
+        stuckTicks: bgWatchMetaRef.current.stuck + 1,
+        needTicks: 2,
+      })) {
+        bgWatchMetaRef.current.stuck += 1;
+        // Tiempo pegado con “playing” → soft kick (el bug que viste en Chrome).
+        softKickPlayback();
+      } else if (ct - prev > 0.12) {
+        // Progreso real: actualizar ancla y notificación.
+        bgWatchMetaRef.current.stuck = 0;
+        bgWatchMetaRef.current.fails = 0;
+        clearSystemInterrupted();
+        savePlaybackAnchor(a);
+        setMediaSessionState('playing', ct);
+        // setTime en background puede no pintar UI; igual actualizamos para al volver.
+        setTime(ct);
+      } else {
+        bgWatchMetaRef.current.stuck += 1;
+      }
+      bgWatchMetaRef.current.t = ct;
+    }, backgroundWatchIntervalMs());
   };
   // Web Audio para normalizar volumen (compresor de rango dinámico). Opt-in.
   // ── AudioContext eliminado: era incompatible con background playback en móvil ──
@@ -3023,7 +3100,7 @@ export default function App() {
     });
     if (strategy === 'noop') return;
     if (strategy === 'pause') {
-      cancelBackgroundKeepAlive();
+      stopBackgroundWatch();
       selfPauseRef.current = true;
       try { a.pause(); } catch {}
       selfPauseRef.current = false;
@@ -3047,7 +3124,7 @@ export default function App() {
           // En background: keep-alive (Chrome hide). En visible: reacquire.
           if (!isDocumentVisible()) {
             savePlaybackAnchor(a);
-            scheduleBackgroundKeepAlive();
+            startBackgroundWatch();
             return;
           }
           if (err?.name === 'NotAllowedError') return;
@@ -3215,17 +3292,16 @@ export default function App() {
 
     const onVis = () => {
       if (document.visibilityState === 'visible') {
-        // Volver a la app (o tras un vídeo): reanudar desde el segundo guardado.
+        stopBackgroundWatch();
         setTimeout(tryResume, 40);
         setTimeout(tryResume, 300);
         setTimeout(tryResume, 900);
       } else {
-        // Salir de la app / cambiar de pestaña: Chrome suele pause-ar.
-        // Keep-alive reintenta soft play para que la música SIGA (no quede en paused).
+        // Salir de la app: watchdog detecta pause y zombie (tiempo pegado).
         const a = audioRef.current;
         if (playingRef.current && a && !a.ended) {
           savePlaybackAnchor(a);
-          scheduleBackgroundKeepAlive();
+          startBackgroundWatch();
         }
         if (shouldSuspendPreloads(false)) {
           for (const r of [preloadAudioRef, preloadAudio2Ref]) {
@@ -3502,7 +3578,7 @@ export default function App() {
     // Fade SOLO en visible: si rAF se congela en background, volume queda en 0 = silencio eterno.
     if (a && shouldFadeIn(visible)) { a.volume = 0; pendingFadeRef.current = true; }
     else { if (a) a.volume = vol; pendingFadeRef.current = false; }
-    cancelBackgroundKeepAlive();
+    stopBackgroundWatch();
     clearSystemInterrupted();
     interruptPositionRef.current = null;
     const initialQueue = list && list.length ? list : [t.id];
@@ -4389,9 +4465,9 @@ export default function App() {
       onCanPlay={() => setLoadingAudio(false)}
       onPlay={() => {
         selfPauseRef.current = false;
-        cancelBackgroundKeepAlive();
         const el = audioRef.current;
-        if (el && interruptPositionRef.current != null) restoreInterruptPosition(el);
+        // Solo reponer si rebobinó (no clavar el mismo segundo).
+        restoreInterruptPosition(el);
         if (el && el.volume < vol * 0.5) el.volume = vol;
         clearSystemInterrupted();
         setMediaSessionState('playing', el?.currentTime);
@@ -4401,20 +4477,20 @@ export default function App() {
       }}
       onPlaying={() => {
         selfPauseRef.current = false;
-        cancelBackgroundKeepAlive();
         const el = audioRef.current;
-        if (el && interruptPositionRef.current != null) restoreInterruptPosition(el);
+        restoreInterruptPosition(el);
         if (el && el.volume < vol * 0.5) el.volume = vol;
         clearSystemInterrupted();
         setMediaSessionState('playing', el?.currentTime);
         setLoadingAudio(false);
         playErrorRef.current = { id: null, n: 0 };
         sustainedPlayRef.current = false;
+        // Si hay progreso real, ir actualizando ancla (no congelar en el segundo de salida).
+        if (el && !el.paused) savePlaybackAnchor(el);
         setTimeout(() => {
           if (audioRef.current && !audioRef.current.paused && audioRef.current.currentTime > 3) {
             consecutiveFailsRef.current = 0;
             sustainedPlayRef.current = true;
-            interruptPositionRef.current = null;
           }
         }, 5000);
         if (pendingFadeRef.current) {
@@ -4435,12 +4511,10 @@ export default function App() {
           audioEnded: a.ended,
         })) return;
 
-        // Pause externo:
-        // 1) Guardar segundo (por si rebobina).
-        // 2) Keep-alive soft play en background → Chrome al SALIR de la app sigue.
-        // 3) Solo si keep-alive falla ~2.5s → interrupción real (vídeo) y notificación paused.
+        // Pause externo (Chrome al salir / vídeo): watchdog en bg desbloquea zombie o re-play.
         savePlaybackAnchor(a);
-        scheduleBackgroundKeepAlive();
+        if (!isDocumentVisible()) startBackgroundWatch();
+        else softKickPlayback();
       }}
       onError={handleAudioError}
       onEnded={onEnded}

@@ -1,42 +1,24 @@
 /**
- * Continuidad de audio (móvil / multi-navegador) — decisiones puras.
+ * Continuidad de audio multi-navegador (móvil).
  *
- * Escenarios (todos los browsers: Chrome, Brave, Edge, Opera, Firefox, Safari iOS…):
- *
- * A) Usuario SALE de la app / apaga pantalla
- *    → la música DEBE seguir. Chrome a menudo dispara pause al ocultar;
- *      hay que reintentar soft play() en background (keep-alive).
- *
- * B) Otro media (YouTube/FB) roba el audio
- *    → keep-alive falla o el OS re-pausa; entonces Media Session = paused
- *      y se guarda el segundo. Al volver / recuperar foco → reanudar ahí.
- *
- * C) Avance de cola en background
- *    → soft play + URL pre-firmada; NUNCA forceReacquire/load en hidden.
+ * A) Salir de la app / apagar pantalla → debe SEGUIR (Chrome a menudo pausa o deja zombie).
+ * B) Zombie = playing pero currentTime no avanza → soft kick (pause+play, sin load).
+ * C) Vídeo roba audio → tras fallos reales → Media Session paused + posición guardada.
+ * D) NUNCA load()/forceReacquire pesado en background.
+ * E) Solo restaurar posición si el browser REBOBINÓ (no si estamos en el mismo segundo).
  */
 
-/** ¿La página está en primer plano? */
 export function isDocumentVisible(doc = typeof document !== 'undefined' ? document : null) {
   if (!doc) return true;
   return doc.visibilityState === 'visible';
 }
 
-/**
- * Estrategia al sincronizar playSrc/playing con el <audio>.
- * @returns {'soft-play'|'pause'|'noop'}
- *
- * Siempre soft-play si el usuario quiere reproducir (también en background).
- * force-reacquire NUNCA desde aquí — solo tryResume en foreground.
- */
 export function playSyncStrategy({ playing, hasSrc }) {
   if (!hasSrc) return 'noop';
   if (!playing) return 'pause';
   return 'soft-play';
 }
 
-/**
- * ¿Reanudar al volver a primer plano?
- */
 export function shouldResumeOnForeground({
   userWantsPlay,
   audioEnded,
@@ -47,21 +29,13 @@ export function shouldResumeOnForeground({
   timeStuck,
 }) {
   if (!userWantsPlay || audioEnded) return false;
-  if (systemPaused) return true;
-  if (audioPaused) return true;
+  if (systemPaused || audioPaused || timeStuck) return true;
   if (typeof volume === 'number' && typeof targetVolume === 'number' && targetVolume > 0 && volume < targetVolume * 0.5) {
     return true;
   }
-  if (timeStuck) return true;
   return true;
 }
 
-/**
- * Media Session en la notificación.
- * - playing + no interrupción confirmada → 'playing' (sigue en bg / pantalla off)
- * - interrupción confirmada (vídeo robó audio) → 'paused'
- * - usuario pausó → 'paused'
- */
 export function mediaSessionPlaybackState({ userWantsPlay, systemInterrupted }) {
   if (!userWantsPlay) return 'paused';
   if (systemInterrupted) return 'paused';
@@ -69,29 +43,37 @@ export function mediaSessionPlaybackState({ userWantsPlay, systemInterrupted }) 
 }
 
 /**
- * Tras un pause externo: ¿marcar ya como “vídeo robó el audio” o seguir en keep-alive?
- * keepAliveAttempt: 0..N (intentos de soft play en background)
- * stillPaused: el audio sigue pausado después del intento
- * maxAttempts: tras esto → interrupción confirmada
+ * Solo restaurar si rebobinó por detrás del ancla.
+ * Si currentTime ≈ saved o va por delante → NO tocar (evita “pegado en el segundo 5”).
  */
-export function shouldConfirmMediaFocusLoss({ stillPaused, userWantsPlay, keepAliveAttempt, maxAttempts = 6 }) {
+export function shouldRestoreInterruptPosition(currentTime, savedPosition, thresholdSec = 1.25) {
+  if (savedPosition == null || !Number.isFinite(savedPosition) || savedPosition < 0) return false;
+  if (!Number.isFinite(currentTime)) return true;
+  return currentTime < savedPosition - thresholdSec;
+}
+
+/**
+ * Zombie: el usuario quiere play, el elemento NO está paused, pero el tiempo no avanza.
+ * (Chrome al salir de la app: notificación “playing”, progreso congelado.)
+ */
+export function isPlaybackZombie({ userWantsPlay, paused, ended, prevTime, currTime, stuckTicks, needTicks = 2 }) {
+  if (!userWantsPlay || ended) return false;
+  if (paused) return false; // eso es pause real, no zombie
+  if (!Number.isFinite(prevTime) || !Number.isFinite(currTime)) return false;
+  if (currTime - prevTime > 0.12) return false; // avanza
+  return stuckTicks >= needTicks;
+}
+
+export function shouldConfirmMediaFocusLoss({ stillPaused, userWantsPlay, keepAliveAttempt, maxAttempts = 5 }) {
   if (!userWantsPlay || !stillPaused) return false;
   return keepAliveAttempt >= maxAttempts;
 }
 
-/** Delays (ms) para keep-alive multi-browser tras pause externo / hide. */
-export function backgroundKeepAliveDelays() {
-  // 0 inmediato (Chrome hide), luego reintentos escalonados; ~2.5s total.
-  return [0, 40, 120, 300, 700, 1500, 2500];
+/** Intervalo del watchdog en background (ms). */
+export function backgroundWatchIntervalMs() {
+  return 1000;
 }
 
-export function shouldRestoreInterruptPosition(currentTime, savedPosition, thresholdSec = 1) {
-  if (savedPosition == null || !Number.isFinite(savedPosition) || savedPosition < 0) return false;
-  if (!Number.isFinite(currentTime)) return true;
-  return Math.abs(currentTime - savedPosition) > thresholdSec;
-}
-
-/** forceReacquire solo en foreground. */
 export function canForceReacquire(visible) {
   return visible === true;
 }
