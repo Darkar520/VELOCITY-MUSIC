@@ -1,13 +1,28 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { fmt, hex2rgba, grad, hiResCover, dedupeByTitle, capPerArtist, slimTrack, parseLRC, lyricsOverlapRatio, plainFromSyncedLines, tintedVars } from '../helpers.js';
+/**
+ * MiniPlayerBar — barra de reproductor colapsada.
+ *
+ * Consume directamente del playerStore en vez de recibir props del padre.
+ * Solo recibe props los callbacks puntuales (setExpanded, setMenuTarget, next, prev)
+ * que son de UI/navigation y no corresponden al store del dominio player.
+ */
+import React from 'react';
+import { hex2rgba, grad, hiResCover } from '../helpers.js';
 import { useHSwipe } from '../hooks.js';
 import { FALLBACK_COVER } from '../constants.js';
 import { Icon } from '../Icons.jsx';
-import { EQViz, Spinner, ProgressRing, DownloadAllButton, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider, SettingCard, ToggleRow, ColorField } from '../components.jsx';
+import { Spinner } from '../components.jsx';
+import { usePlayerStore } from '../store/playerStore.js';
 
-export function MiniPlayerBar({ track, playing, togglePlay, loadingAudio, T, pct, setExpanded, setMenuTarget, next, prev }) {
+export function MiniPlayerBar({ T, pct, setExpanded, setMenuTarget, next, prev }) {
+  // Selectores finos — solo re-renderiza cuando cambian estos slices.
+  const track = usePlayerStore((s) => s.track);
+  const playing = usePlayerStore((s) => s.playing);
+  const loadingAudio = usePlayerStore((s) => s.loadingAudio);
+  const togglePlay = usePlayerStore((s) => s.togglePlay);
+
   const { dragX, handlers } = useHSwipe({ onLeft: next, onRight: prev, threshold: 60 });
   const isSliding = Math.abs(dragX) > 0;
+
   return (
     <div
       {...handlers}
@@ -17,7 +32,7 @@ export function MiniPlayerBar({ track, playing, togglePlay, loadingAudio, T, pct
     >
       <div style={{ position:'absolute', bottom:0, left:0, height:2.5, width:`${pct}%`, background:grad(T,90), borderRadius:99, boxShadow:`0 0 8px ${T.accent}`, transition:'width .15s linear' }} />
       <img
-        src={track.cover ? hiResCover(track.cover, 96) : FALLBACK_COVER} alt="" referrerPolicy="no-referrer" onError={e => { e.currentTarget.onerror = null; e.currentTarget.src = FALLBACK_COVER; }}
+        src={track?.cover ? hiResCover(track.cover, 96) : FALLBACK_COVER} alt="" referrerPolicy="no-referrer" onError={e => { e.currentTarget.onerror = null; e.currentTarget.src = FALLBACK_COVER; }}
         style={{ width:42, height:42, borderRadius:11, objectFit:'cover', flexShrink:0, boxShadow:'0 4px 12px #0007',
           transform: `translateX(${dragX * 0.6}px)`,
           transition: isSliding ? 'none' : 'transform .35s cubic-bezier(.22,1,.36,1)',
@@ -28,13 +43,13 @@ export function MiniPlayerBar({ track, playing, togglePlay, loadingAudio, T, pct
         transform: `translateX(${dragX * 0.25}px)`,
         transition: isSliding ? 'none' : 'transform .35s cubic-bezier(.22,1,.36,1)',
       }}>
-        <div style={{ fontSize:12.5, fontWeight:700, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title}</div>
-        <div style={{ fontSize:10, color:T.accent, marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.artist}</div>
+        <div style={{ fontSize:12.5, fontWeight:700, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track?.title || '—'}</div>
+        <div style={{ fontSize:10, color:T.accent, marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track?.artist || ''}</div>
       </div>
       <button aria-label={playing?'Pausar':'Reproducir'} onClick={e=>{ e.stopPropagation(); togglePlay(); }} className="btn-tap" style={{ background:grad(T), border:'none', borderRadius:'50%', width:36, height:36, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0, boxShadow:`0 0 14px ${hex2rgba(T.accent,.55)}` }}>{loadingAudio ? <Spinner c="#04060a" sz={18} /> : (playing ? <Icon.Pause c="#04060a" sz={20} /> : <Icon.Play c="#04060a" sz={20} />)}</button>
-      <button aria-label="Más" onClick={e=>{ e.stopPropagation(); setMenuTarget(track.id); }} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer', padding:4 }}><Icon.Dots c="var(--txt-1)" sz={19} /></button>
+      <button aria-label="Más" onClick={e=>{ e.stopPropagation(); setMenuTarget(track?.id); }} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer', padding:4 }}><Icon.Dots c="var(--txt-1)" sz={19} /></button>
     </div>
   );
 }
 
-
+export default MiniPlayerBar;
