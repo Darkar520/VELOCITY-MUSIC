@@ -12,6 +12,7 @@ import {
   hideRecoverDelays,
   parseSessionResume,
   shouldApplySessionResume,
+  isStreamUrlFresh,
 } from '../frontend/src/audioContinuity.js';
 
 test('playSyncStrategy: A7 — no play oculto SOLO si yielded; next en lock SÍ play', () => {
@@ -129,4 +130,13 @@ test('A12: session resume — parse y apply (cerrar app y volver al segundo N)',
   assert.equal(shouldApplySessionResume({
     trackId: 'lonely', resumeTrackId: 'aerials', resumePosition: 50, currentTime: 0,
   }), false);
+});
+
+test('A13: isStreamUrlFresh — no restaurar URL firmada caducada', () => {
+  const now = 1_700_000_000;
+  assert.equal(isStreamUrlFresh(null), false);
+  assert.equal(isStreamUrlFresh('blob:http://x/1'), true);
+  assert.equal(isStreamUrlFresh('/api/stream-proxy?artist=a&title=b'), false, 'sin exp');
+  assert.equal(isStreamUrlFresh(`/api/stream-proxy?exp=${now + 10}&sig=x`, now, 45), false, 'expira pronto');
+  assert.equal(isStreamUrlFresh(`/api/stream-proxy?exp=${now + 120}&sig=x`, now, 45), true);
 });

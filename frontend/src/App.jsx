@@ -20,6 +20,7 @@ import {
   shouldYieldOnExternalPause,
   parseSessionResume,
   shouldApplySessionResume,
+  isStreamUrlFresh,
 } from './audioContinuity.js';
 import { usePersisted, useViewport, useDominantColor, useHSwipe } from './hooks.js';
 import { Icon } from './Icons.jsx';
@@ -2183,7 +2184,13 @@ export default function App() {
   const [loadingAudio, setLoadingAudio] = useState(false);
   const [downloaded, setDownloaded] = useState(() => new Set());
   const [downloading, setDownloading] = useState(() => new Set());
-  const [playSrc, setPlaySrc] = useState(() => { const s = loadPlayerState(); return s && s.track.url ? s.track.url : null; });
+  // No restaurar URL firmada caducada: dispara error→play auto→UI "sonando" sin audio (A13).
+  const [playSrc, setPlaySrc] = useState(() => {
+    const s = loadPlayerState();
+    if (!s || !s.track) return null;
+    const u = s.track.url || null;
+    return isStreamUrlFresh(u) ? u : null;
+  });
   // ── Dispositivos de salida (altavoz, audífonos, Bluetooth) ──
   const [outputs, setOutputs] = useState([]);
   const [sinkId, setSinkId] = useState('');
@@ -2557,6 +2564,8 @@ export default function App() {
    */
   const applySessionResume = (a) => {
     if (!a) return false;
+    // Sin metadata seek falla o queda en 0.
+    if (a.readyState < 1) return false;
     const r = sessionResumeRef.current;
     if (!r) return false;
     const curId = trackRef.current?.id || track?.id || null;
@@ -3045,9 +3054,10 @@ export default function App() {
   useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
+    const hasSrc = Boolean(playSrc && (isStreamUrlFresh(playSrc) || playSrc.startsWith('blob:')));
     const strategy = playSyncStrategy({
       playing,
-      hasSrc: Boolean(playSrc || track?.url || a.src),
+      hasSrc,
       yieldedFocus: mediaInterrupted || systemPausedRef.current,
       visible: isDocumentVisible(),
     });
@@ -3056,15 +3066,17 @@ export default function App() {
       selfPauseRef.current = true;
       try { a.pause(); } catch {}
       selfPauseRef.current = false;
+      setLoadingAudio(false);
       return;
     }
     if (strategy === 'soft-play') {
+      // Sin URL fresca: togglePlay / play() ya firman; no spamear play() roto.
+      if (!hasSrc) return;
       if (a.volume < vol * 0.5) {
         cancelAnimationFrame(fadeRafRef.current);
         clearTimeout(fadeSafetyRef.current);
         a.volume = vol;
       }
-      // A12: reabrir app en el segundo N. A10: yield solo si cedimos.
       applySessionResume(a);
       restoreInterruptPosition(a);
       const p = a.play();
@@ -3073,19 +3085,16 @@ export default function App() {
           applySessionResume(a);
           restoreInterruptPosition(a);
           clearYieldedFocus();
+          setLoadingAudio(false);
           setMediaSessionState('playing', a.currentTime);
         }).catch((err) => {
           if (err?.name === 'AbortError') return;
-          if (!isDocumentVisible() && (systemPausedRef.current || mediaInterrupted)) {
-            // Ya habíamos cedido / seguimos ocultos → no pelear (A7).
+          if (!isDocumentVisible() && (systemPausedRef.current || mediaInterrupted)) return;
+          if (!isDocumentVisible()) return;
+          if (err?.name === 'NotAllowedError') {
+            setLoadingAudio(false);
             return;
           }
-          if (!isDocumentVisible()) {
-            // Fallo de play en hide SIN yield (p.ej. next en lock): no ceder a ciegas;
-            // el SO puede reintentar; Media Session play sigue disponible.
-            return;
-          }
-          if (err?.name === 'NotAllowedError') return;
           if (canForceReacquire(true)) setTimeout(() => forceReacquire(), 120);
         });
       }
@@ -3602,27 +3611,100 @@ export default function App() {
   };
   const togglePlay = () => {
     if (!track) return;
-    setPlaying(p => {
-      const np = !p;
-      // Al despausar tras reabrir la app: el reloj UI puede decir 0:50 pero el
-      // <audio> está en 0 → aplicar resume de sesión ANTES del play effect.
-      if (np) {
-        const el = audioRef.current;
-        if (el) {
-          applySessionResume(el);
-          // Fallback: si el estado React tiene posición y el audio está en 0.
-          if ((el.currentTime || 0) < 1.5 && time > 1.5) {
-            try { el.currentTime = time; } catch {}
-          }
-        }
-      }
+    // ── Pausar (explícito, sin soft-kick ni loading eterno) ──
+    if (playingRef.current || playing) {
+      selfPauseRef.current = true;
+      playingRef.current = false;
+      setPlaying(false);
+      setLoadingAudio(false);
+      clearSystemInterrupted();
+      try { audioRef.current?.pause(); } catch {}
+      selfPauseRef.current = false;
       api.updateNowPlaying({
         trackId: track.id, title: track.title, artist: track.artist, cover: track.cover,
         position: audioRef.current?.currentTime || time || 0, duration: track.durationSeconds || 0,
-        playing: np, deviceName: navigator.userAgent.includes('Mobile') ? 'Móvil' : 'Web',
+        playing: false, deviceName: navigator.userAgent.includes('Mobile') ? 'Móvil' : 'Web',
         quality: '',
       });
-      return np;
+      return;
+    }
+    // ── Reanudar / play: re-firmar stream si hace falta (A13) + seek sesión (A12) ──
+    const el = audioRef.current;
+    const qParam = ({ high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' }[quality] || 'high');
+    const sp = streamParamsFor(track, qParam);
+    const resumePos = (sessionResumeRef.current && sessionResumeRef.current.trackId === track.id)
+      ? sessionResumeRef.current.position
+      : (time > 1.5 ? time : 0);
+
+    playingRef.current = true;
+    setPlaying(true);
+    setLoadingAudio(true);
+    clearSystemInterrupted();
+
+    const startAt = async () => {
+      try {
+        let url = playSrc && isStreamUrlFresh(playSrc) ? playSrc : null;
+        if (!url) url = api.peekStreamUrl(sp, 45);
+        if (!url) url = await api.ensureStreamUrl(sp);
+        if (!playingRef.current) return; // usuario pausó mientras firmábamos
+        if (url && url !== playSrc) setPlaySrc(url);
+        const a = audioRef.current;
+        if (!a) { setLoadingAudio(false); return; }
+        // Si cambiamos src, esperar un frame de metadata; si no, seek ya.
+        const kick = () => {
+          if (!playingRef.current || !audioRef.current) return;
+          const node = audioRef.current;
+          applySessionResume(node);
+          if ((node.currentTime || 0) < 1.5 && resumePos > 1.5) {
+            try { node.currentTime = resumePos; setTime(resumePos); } catch {}
+          }
+          if (node.volume < vol * 0.5) node.volume = vol;
+          node.play().then(() => {
+            applySessionResume(node);
+            setLoadingAudio(false);
+            setMediaSessionState('playing', node.currentTime);
+          }).catch((err) => {
+            if (err?.name === 'AbortError') return;
+            setLoadingAudio(false);
+            if (err?.name === 'NotAllowedError') {
+              playingRef.current = false;
+              setPlaying(false);
+              showToast('Toca de nuevo para reproducir');
+              return;
+            }
+            // Último recurso: re-firmar y reintentar una vez
+            api.ensureStreamUrl(sp).then((fresh) => {
+              if (!playingRef.current) return;
+              setPlaySrc(fresh + (fresh.includes('?') ? '&' : '?') + '_r=' + Date.now());
+            }).catch(() => {
+              playingRef.current = false;
+              setPlaying(false);
+              setLoadingAudio(false);
+              showToast('No se pudo reproducir. Reintenta.');
+            });
+          });
+        };
+        if (url && url !== (a.src || playSrc)) {
+          // src nuevo vía React; canplay/onPlay harán el resto, con timeout de seguridad
+          setTimeout(kick, 120);
+          setTimeout(() => { if (playingRef.current && audioRef.current?.paused) kick(); }, 500);
+        } else {
+          kick();
+        }
+      } catch {
+        if (!playingRef.current) return;
+        playingRef.current = false;
+        setPlaying(false);
+        setLoadingAudio(false);
+        showToast('No se pudo autorizar el audio. Reintenta.');
+      }
+    };
+    startAt();
+    api.updateNowPlaying({
+      trackId: track.id, title: track.title, artist: track.artist, cover: track.cover,
+      position: resumePos || 0, duration: track.durationSeconds || 0,
+      playing: true, deviceName: navigator.userAgent.includes('Mobile') ? 'Móvil' : 'Web',
+      quality: '',
     });
   };
   const orderIds = queue.length ? queue : (track ? [track.id] : []);
@@ -4420,12 +4502,21 @@ export default function App() {
     const a = audioRef.current;
     const cur = track?.id;
     if (!a || !cur) { setLoadingAudio(false); setPlaying(false); return; }
+    // A13: si el usuario NO quiere play (p.ej. reabrió la app con URL vieja),
+    // no reintentar con play() — eso ponía la UI en "reproduciendo" sin audio.
+    if (!playingRef.current) {
+      setLoadingAudio(false);
+      playErrorRef.current = { id: null, n: 0 };
+      // Quitar src caducado para no re-disparar error en bucle.
+      try {
+        if (playSrc && !isStreamUrlFresh(playSrc)) setPlaySrc(null);
+      } catch {}
+      return;
+    }
     const st = playErrorRef.current;
     const n = (st.id === cur) ? st.n : 0;
     const isBlob = typeof a.currentSrc === 'string' && a.currentSrc.startsWith('blob:');
-    // Reintentos agresivos: la prioridad es reproducir LA canción seleccionada.
-    // 6 intentos con espera creciente (1.5s, 3s, 5s, 8s, 12s, 16s). Cubre: resolución
-    // en frío con 5 clientes YT, URL expirada, backend saturado, rate-limit.
+    // Reintentos solo con intención de play. 6 intentos con espera creciente.
     if (n < MAX_PLAY_RETRIES && !isBlob) {
       const attempt = n + 1;
       playErrorRef.current = { id: cur, n: attempt };
@@ -4434,16 +4525,19 @@ export default function App() {
       const delay = delays[Math.min(attempt - 1, delays.length - 1)];
       setTimeout(async () => {
         if (!audioRef.current || trackRef.current?.id !== cur) return;
+        if (!playingRef.current) { setLoadingAudio(false); return; }
         try {
           const q = ({ high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' }[quality] || 'high');
           if (attempt > 2) api._streamSignCache?.clear?.();
           const base = await api.ensureStreamUrl({ artist: track.artist, title: track.title, id: track.id, quality: q });
-          // Primeros intentos: URL firmada (backend/caché).
-          // Últimos: cache-bust de query (la firma sigue válida; solo fuerza re-fetch red).
+          if (!playingRef.current) { setLoadingAudio(false); return; }
           audioRef.current.src = attempt > 2 ? (base + '&_r=' + Date.now()) : base;
+          setPlaySrc(audioRef.current.src);
           audioRef.current.load();
           const p = audioRef.current.play(); if (p && p.catch) p.catch(() => {});
-        } catch {}
+        } catch {
+          if (!playingRef.current) setLoadingAudio(false);
+        }
       }, delay);
       return;
     }
@@ -4467,7 +4561,7 @@ export default function App() {
 
   const audioEl = (
     <>
-    <audio ref={audioRef} src={playSrc || (track ? track.url : undefined)} preload="auto" playsInline
+    <audio ref={audioRef} src={playSrc || undefined} preload="none" playsInline
       onTimeUpdate={() => {
         const a = audioRef.current; if (!a) return;
         // Solo congelar reloj si la interrupción por vídeo está CONFIRMADA y sigue pausado.
@@ -4487,21 +4581,33 @@ export default function App() {
       onPlay={() => {
         selfPauseRef.current = false;
         const el = audioRef.current;
+        // A13: no forzar playing=true si el usuario no pidió play (error recovery).
+        if (!playingRef.current) {
+          selfPauseRef.current = true;
+          try { el?.pause(); } catch {}
+          selfPauseRef.current = false;
+          setLoadingAudio(false);
+          return;
+        }
         applySessionResume(el);
-        // Restaurar ancla SOLO si hay yield activo (A10); luego consumirla.
         restoreInterruptPosition(el);
         clearSystemInterrupted();
         clearPlaybackAnchor();
         if (el && el.volume < vol * 0.5) el.volume = vol;
         setMediaSessionState('playing', el?.currentTime);
         setLoadingAudio(false);
-        playingRef.current = true;
         if (!playing) setPlaying(true);
       }}
       onPlaying={() => {
         selfPauseRef.current = false;
         const el = audioRef.current;
-        // Si el browser reseteó a 0 al start, reaplicar sesión una vez más.
+        if (!playingRef.current) {
+          selfPauseRef.current = true;
+          try { el?.pause(); } catch {}
+          selfPauseRef.current = false;
+          setLoadingAudio(false);
+          return;
+        }
         applySessionResume(el);
         if (el && el.volume < vol * 0.5) el.volume = vol;
         clearSystemInterrupted();
@@ -4521,11 +4627,16 @@ export default function App() {
           else if (audioRef.current) audioRef.current.volume = vol;
         }
       }}
-      onStalled={() => setLoadingAudio(true)}
-      onWaiting={() => setLoadingAudio(true)}
+      onStalled={() => { if (playingRef.current) setLoadingAudio(true); }}
+      onWaiting={() => { if (playingRef.current) setLoadingAudio(true); }}
       onPause={() => {
         const a = audioRef.current;
         if (!a) return;
+        // Sin intención de play: no soft-kick (evita bucle pause/load al reabrir).
+        if (!playingRef.current) {
+          setLoadingAudio(false);
+          return;
+        }
         if (!isExternalPause({
           selfPause: selfPauseRef.current,
           pendingFade: pendingFadeRef.current,
@@ -4535,8 +4646,6 @@ export default function App() {
 
         savePlaybackAnchor(a);
 
-        // A7 definitivo: pause externo + oculto → ceder YA. Cero soft-play en bg.
-        // (El soft-play en hide era lo que mataba el vídeo de IG/FB a ~2 s en Chrome.)
         if (shouldYieldOnExternalPause({
           hidden: !isDocumentVisible(),
           userWantsPlay: playingRef.current,
@@ -4550,7 +4659,6 @@ export default function App() {
         }
 
         if (systemPausedRef.current) return;
-        // Solo foreground: un soft-kick por ducking momentáneo del SO.
         softKickPlayback();
       }}
       onError={handleAudioError}

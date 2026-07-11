@@ -137,6 +137,24 @@ export function shouldApplySessionResume({
   return ct < nearStartSec || ct < resumePosition - alreadyThereSec;
 }
 
+/**
+ * ¿La URL de stream guardada sigue siendo usable?
+ * blob: ok. Firmada (exp=): solo si quedan > minRemainingSec.
+ * Sin firma / basura → no (evita error→play auto al reabrir app).
+ */
+export function isStreamUrlFresh(url, nowSec = Math.floor(Date.now() / 1000), minRemainingSec = 45) {
+  if (!url || typeof url !== 'string') return false;
+  if (url.startsWith('blob:') || url.startsWith('data:')) return true;
+  try {
+    const u = new URL(url, 'https://local.invalid');
+    const exp = Number(u.searchParams.get('exp'));
+    if (!Number.isFinite(exp) || exp <= 0) return false;
+    return exp - nowSec >= minRemainingSec;
+  } catch {
+    return false;
+  }
+}
+
 export function shouldResumeOnForeground({
   userWantsPlay,
   audioEnded,

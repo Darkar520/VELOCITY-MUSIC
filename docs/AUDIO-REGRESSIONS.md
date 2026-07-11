@@ -29,6 +29,7 @@ actualiza la tabla si introduces un cambio.
 | A10 | Seek vuelve al min 2; pistas nuevas arrancan a mitad; next en lock no suena | Ancla de yield se guardaba en play normal y se restauraba siempre; `playSync` bloqueaba todo play oculto | Ancla **solo al yield**, scoped a trackId; restore solo si `yieldedFocus`; soft-play oculto si **no** yielded (next lock) | `restore` en cada `onPlay`; `savePlaybackAnchor` continuo; noop en todo hide |
 | A11 | Next en notificación/lock no cambia de canción | `playSyncStrategy` hacía `noop` si hidden aunque el usuario pidiera next | soft-play si `playing && !yieldedFocus` aunque hidden; handlers MS vía refs | Bloquear todo `play()` con `document.hidden` |
 | A12 | Reabro la app: UI en 0:50 pausado, play reinicia a 0:00 | `resumeRef` se aplicaba una vez y se perdía al re-firmar URL; play no seek-eaba | `sessionResumeRef` {trackId,position}; apply en metadata/canplay/play/togglePlay | Borrar resume al primer metadata; no seek al play |
+| A13 | Reabro: UI “sonando” sin audio; pause → loading infinito | URL firmada caducada → `error` → `handleAudioError` llama `play()` → `onPlay` fuerza `playing=true` | No restaurar URL stale; error sin auto-play si `!playingRef`; togglePlay re-firma; onPlay no promueve playing | Restaurar `track.url` caducado; recovery con play automático |
 
 ## Política actual (código)
 
@@ -39,8 +40,9 @@ Archivo: `frontend/src/audioContinuity.js` + `App.jsx`.
 3. **`playSyncStrategy`**: `noop` oculto **solo si** `yieldedFocus`. Si no yielded (next/autoplay) → `soft-play` aunque hidden.
 4. **Ancla (A10)**: guardar solo al yield; limpiar en `play()` / `seek` / next / prev; restore solo con `canRestoreInterruptPosition({ yieldedFocus: true, ... })`.
 5. **Sesión (A12)**: `velocity.player.t` + trackId; al reabrir, seek al segundo guardado en la **misma** pista al play/metadata. Limpiar en seek/next/pista nueva.
-6. **Visible + intención play** → `tryResume` si hace falta.
-7. **Foreground** pause residual → `softKickPlayback` sin tocar ancla de yield.
+6. **URL (A13)**: no montar `playSrc` caducado; al reabrir `playing=false` y sin auto-play; play del usuario re-firma stream.
+7. **Visible + intención play** → `tryResume` si hace falta.
+8. **Foreground** pause residual → `softKickPlayback` sin tocar ancla de yield.
 
 ### Por qué Brave “iba bien” y Chrome no
 
