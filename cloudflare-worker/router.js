@@ -12,8 +12,11 @@
 // URL base del Pages project (frontend estático)
 const PAGES_URL = 'https://velocity-music.pages.dev';
 
-// Prefijos que siempre van al backend (tunnel → laptop)
-const BACKEND_PREFIXES = ['/api/', '/img/', '/auth/'];
+// Prefijos que van al backend (tunnel → laptop).
+// IMPORTANTE: /auth/* NO va al tunnel. El callback de Google es HTML/JS
+// estático en Pages; si dependiera del backend y éste cae un segundo,
+// el usuario ve 502 y no puede ni terminar el login.
+const BACKEND_PREFIXES = ['/api/', '/img/'];
 
 export default {
   async fetch(request, env) {

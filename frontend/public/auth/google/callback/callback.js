@@ -1,55 +1,74 @@
-// Google OAuth callback — flujo de redirect completo (sin popup).
-//
-// Este script se ejecuta en la página /auth/google/callback/ después de que
-// Google redirige al usuario de vuelta con el credential en el hash fragment.
-//
-// Flujo:
-//   1. App.jsx redirige la ventana PRINCIPAL a Google (no abre popup).
-//   2. Google autentica al usuario y redirige aquí con #credential=...
-//   3. Este script extrae el credential, lo envía al backend (/api/auth/google),
-//      guarda el JWT en localStorage y redirige a la app.
-//
-// Ventajas sobre el flujo de popup:
-//   - No depende de window.opener (que Brave/Safari bloquean cross-origin).
-//   - No necesita postMessage entre ventanas.
-//   - Funciona en móviles (donde los popups son problemáticos).
-//   - Es el flujo recomendado por Google para OAuth 2.0 implicit.
+// Google OAuth callback — redirect flow (no popup).
+// Servido desde Cloudflare Pages (siempre disponible aunque el backend caiga).
+// POST /api/auth/google sí va al backend; reintentamos si hay 502/timeout.
 (async function () {
-  // Google Identity Services (GIS) envía el JWT en `credential`.
-  // El formato OAuth 2.0 clásico usaba `id_token`. Aceptamos ambos.
   var params = new URLSearchParams(location.hash.slice(1));
   var idToken = params.get('credential') || params.get('id_token');
-
-  // Si Google devolvió un error, redirigir a login con el mensaje.
   var error = params.get('error');
-  if (error) {
-    window.location.replace('/#google_auth_error=' + encodeURIComponent(error));
-    return;
+
+  function goErr(msg) {
+    window.location.replace('/#google_auth_error=' + encodeURIComponent(msg || 'error'));
   }
 
-  if (!idToken) {
-    window.location.replace('/#google_auth_error=no_token');
-    return;
-  }
+  if (error) { goErr(error); return; }
+  if (!idToken) { goErr('no_token'); return; }
 
+  // Mostrar estado simple mientras reintenta
   try {
-    var res = await fetch('/api/auth/google', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ credential: idToken }),
-    });
-    if (!res.ok) {
-      var errBody = await res.json().catch(function () { return {}; });
-      throw new Error(errBody.error || ('HTTP ' + res.status));
+    var el = document.getElementById('msg');
+    if (el) el.textContent = 'Conectando con Velocity…';
+  } catch (e) {}
+
+  async function postGoogle(attempt) {
+    var controller = new AbortController();
+    var t = setTimeout(function () { controller.abort(); }, 20000);
+    try {
+      var res = await fetch('/api/auth/google', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ credential: idToken }),
+        signal: controller.signal,
+      });
+      clearTimeout(t);
+      var body = await res.json().catch(function () { return {}; });
+      if (!res.ok) {
+        var err = new Error(body.error || ('HTTP ' + res.status));
+        err.status = res.status;
+        throw err;
+      }
+      return body;
+    } catch (e) {
+      clearTimeout(t);
+      throw e;
     }
-    var data = await res.json();
-    if (data.token) {
-      // Mismo key que usa api.js (velocity.token) para que la app lo encuentre.
-      localStorage.setItem('velocity.token', data.token);
-    }
-    // Redirigir a la app. El token ya está en localStorage; la app lo leerá al montar.
-    window.location.replace('/');
-  } catch (e) {
-    window.location.replace('/#google_auth_error=' + encodeURIComponent(e.message));
   }
+
+  var lastErr = null;
+  for (var i = 1; i <= 4; i++) {
+    try {
+      if (i > 1) {
+        try {
+          var el2 = document.getElementById('msg');
+          if (el2) el2.textContent = 'Reintentando conexión (' + i + '/4)…';
+        } catch (e2) {}
+        await new Promise(function (r) { setTimeout(r, 800 * i); });
+      }
+      var data = await postGoogle(i);
+      if (data && data.token) {
+        localStorage.setItem('velocity.token', data.token);
+        if (data.email) localStorage.setItem('velocity.email', data.email);
+        if (data.displayName) localStorage.setItem('velocity.name', data.displayName);
+      }
+      window.location.replace('/');
+      return;
+    } catch (e) {
+      lastErr = e;
+      // Reintentar solo si parece backend/túnel caído
+      var st = e && e.status;
+      var msg = (e && e.message) || '';
+      var retryable = st === 502 || st === 503 || st === 504 || /abort|network|Failed to fetch|HTTP 502|HTTP 503/i.test(msg);
+      if (!retryable) break;
+    }
+  }
+  goErr((lastErr && lastErr.message) || 'No se pudo completar el login con Google');
 })();

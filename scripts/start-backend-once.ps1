@@ -58,6 +58,11 @@ Log 'Starting node server.js (single process)'
 # server.js via direct node — no cluster fork storm
 $p = Start-Process -FilePath $node -ArgumentList 'server.js' -WorkingDirectory $Proj -WindowStyle Hidden -PassThru
 Log ('Started PID=' + $p.Id)
+try {
+  $proc = Get-Process -Id $p.Id -ErrorAction Stop
+  $proc.PriorityClass = 'High'
+  Log ('Priority High set for PID=' + $p.Id)
+} catch {}
 
 # Wait for HTTP
 for ($i = 0; $i -lt 20; $i++) {

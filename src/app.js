@@ -668,19 +668,46 @@ export function createApp(deps = {}) {
       const credential = (req.body || {}).credential;
       if (!credential) return res.status(400).json({ error: 'Falta el token de Google.' });
       try {
-        const r = await fetch('https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(credential));
-        if (!r.ok) return res.status(401).json({ error: 'Token de Google inválido.' });
-        const p = await r.json();
-        if (p.aud !== clientId) return res.status(401).json({ error: 'Token de Google no válido para esta app.' });
-        if (!(p.email_verified === true || p.email_verified === 'true')) return res.status(401).json({ error: 'El correo de Google no está verificado.' });
-        const email = String(p.email || '').trim().toLowerCase();
-        if (!email) return res.status(401).json({ error: 'Google no devolvió un correo.' });
-        const result = await authService.googleAuth({ email });
+        // Verificación con timeout + 1 reintento (red intermitente / tokeninfo lento).
+        const verifyOnce = async () => {
+          const ac = new AbortController();
+          const t = setTimeout(() => ac.abort(), 12000);
+          try {
+            const r = await fetch(
+              'https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(credential),
+              { signal: ac.signal },
+            );
+            if (!r.ok) return { ok: false, status: 401, error: 'Token de Google inválido.' };
+            const p = await r.json();
+            if (p.aud !== clientId) return { ok: false, status: 401, error: 'Token de Google no válido para esta app.' };
+            if (!(p.email_verified === true || p.email_verified === 'true')) {
+              return { ok: false, status: 401, error: 'El correo de Google no está verificado.' };
+            }
+            const email = String(p.email || '').trim().toLowerCase();
+            if (!email) return { ok: false, status: 401, error: 'Google no devolvió un correo.' };
+            return { ok: true, email };
+          } finally {
+            clearTimeout(t);
+          }
+        };
+        let verified;
+        try {
+          verified = await verifyOnce();
+        } catch {
+          try {
+            verified = await verifyOnce();
+          } catch {
+            return res.status(502).json({ error: 'No se pudo contactar a Google. Reintenta.' });
+          }
+        }
+        if (!verified.ok) return res.status(verified.status).json({ error: verified.error });
+        const result = await authService.googleAuth({ email: verified.email });
         if (statsRepo) statsRepo.incr('logins').catch(() => {});
         if (result.created) sendWelcomeEmail(result.email, result.displayName).catch(() => {});
         return res.json(result);
       } catch (err) {
         if (err instanceof AuthError) return res.status(err.status).json({ error: err.message });
+        console.error('[auth/google]', err?.message || err);
         return res.status(502).json({ error: 'No se pudo verificar con Google.' });
       }
     });
