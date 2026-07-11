@@ -45,24 +45,22 @@ La reproducción NUNCA debe cortarse. Invariantes:
 
 - **Un solo `<audio>` principal** reproduce; pre-buffers son auxiliares y se
   **vacían al ir a background** (Chrome confunde Media Session con 3 audios).
-- **Lógica pura en `frontend/src/audioContinuity.js`** + tests en
-  `test/audioContinuity.test.js` y **matriz cruzada**
-  `test/audioPolicyMatrix.test.js` (A7–A13). No merge si la matriz falla.
-  Ver `docs/AUDIO-REGRESSIONS.md` antes de tocar play/yield/seek/resume.
-- **Background + yielded (cedimos a IG/FB): NUNCA `audio.play()`.**  
-  Background **sin** yield (next desde lock / autoplay): **sí** `play()`.  
+- **Política de audio solo vía machine:**  
+  `audioContinuity.js` → `audio/audioMachine.js` (`reduce`) →  
+  `audio/runAudioEffects.js` → `App.jsx` (`dispatchAudio`).  
+  Tests: `audioMachine` + `audioPolicyMatrix` + `audioContinuity` + `runAudioEffects`.  
+  Ver `docs/AUDIO-REGRESSIONS.md`. No merge si machine o matriz fallan.
+- **Background + yielded: NUNCA `audio.play()`.**  
+  Background **sin** yield (next lock): **sí** `play()`.  
   Nunca `forceReacquire` / `load()` al cambiar de pista oculta.
-- **Ancla de posición (A10):** solo al **yield**. Limpiar en seek / next / play
-  de pista nueva. Restore solo si `yieldedFocus` y misma pista.  
-  **Prohibido** reaplicar ancla en cada `onPlay` (clavaba el seek al min 2).
-- **Sesión al reabrir (A12/A13):** posición en `velocity.player` + trackId;
-  no montar URL firmada caducada; no auto-`play()` en error si el usuario no
-  pidió play; al play del usuario re-firmar y seek al segundo guardado.
-- **Salir de la app / apagar pantalla (Chrome prioritario):**
-  - Si el audio **sigue** (`!paused`) → no tocar (pantalla off / lock).
-  - Si llega **pause externo** → **`yieldAudioFocus`** (MS `paused`, ancla).
-  - Next/prev en notificación → deben cambiar de pista y sonar.
-  - Al **volver visible** tras yield → `tryResume` desde el ancla.
+- **Ancla (A10):** solo yield; limpia en seek / TRACK_SET.
+- **Sesión (A12/A13):** `HYDRATE` + seek en STREAM_READY/USER_PLAY; no URL stale;
+  no auto-play en error sin intent play.
+- **Salir / pantalla off:**
+  - Sigue `!paused` → no tocar.
+  - Pause externo oculto → `EXTERNAL_PAUSE` (yield).
+  - Next/prev notificación → deben sonar.
+  - Visible tras yield → `DOC_VISIBLE`.
 - **Vídeo Instagram/Facebook/YouTube:**
   - Al ceder: no pelear. El vídeo debe oírse **solo**.
   - Al **volver a Velocity**: reanuda desde el segundo guardado.

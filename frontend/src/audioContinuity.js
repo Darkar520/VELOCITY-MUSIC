@@ -195,13 +195,8 @@ export function shouldPreExtendQueue(currentIndex, queueLength) {
   return currentIndex >= queueLength - 2;
 }
 
-// --- Legacy exports seguros ---
+// --- Legacy: empty recover (A7). No reintroducir delays > 0. ---
+/** @deprecated Siempre []. Tests anti-regresión; no usar en App. */
 export function hideRecoverDelays() {
   return [];
-}
-export function shouldYieldAudioFocus() {
-  return true;
-}
-export function shouldYieldOnRePause() {
-  return true;
 }

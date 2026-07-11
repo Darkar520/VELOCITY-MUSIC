@@ -31,20 +31,27 @@ actualiza la tabla si introduces un cambio.
 | A12 | Reabro la app: UI en 0:50 pausado, play reinicia a 0:00 | `resumeRef` se aplicaba una vez y se perdía al re-firmar URL; play no seek-eaba | `sessionResumeRef` {trackId,position}; apply en metadata/canplay/play/togglePlay | Borrar resume al primer metadata; no seek al play |
 | A13 | Reabro: UI “sonando” sin audio; pause → loading infinito | URL firmada caducada → `error` → `handleAudioError` llama `play()` → `onPlay` fuerza `playing=true` | No restaurar URL stale; error sin auto-play si `!playingRef`; togglePlay re-firma; onPlay no promueve playing | Restaurar `track.url` caducado; recovery con play automático |
 
-## Política actual (código)
+## Política actual (código) — máquina de estados (2026-07-11)
 
-Archivos: `frontend/src/audioContinuity.js` (predicados) +  
-`frontend/src/audio/audioMachine.js` (`reduce` / `dispatch` — Fase 1) +  
-`App.jsx` (adapter; migración a machine = Fase 2 del plan).
+| Capa | Archivo | Rol |
+|------|---------|-----|
+| Predicados | `frontend/src/audioContinuity.js` | Reglas puras A7–A13 |
+| **Reduce** | `frontend/src/audio/audioMachine.js` | `reduce(state, event) → { state, effects }` |
+| Effects | `frontend/src/audio/runAudioEffects.js` | Solo DOM/React/red (sin política) |
+| Adapter | `App.jsx` | `dispatchAudio` + espejos; **no** ifs de yield/seek sueltos |
 
-1. **Hide + sigue `!paused`** → no tocar (mejor caso pantalla off / Media Session).
-2. **Hide + `pause` externo** → **`yieldAudioFocus`** (ancla + trackId). Sin soft-recover.
-3. **`playSyncStrategy`**: `noop` oculto **solo si** `yieldedFocus`. Si no yielded (next/autoplay) → `soft-play` aunque hidden.
-4. **Ancla (A10)**: guardar solo al yield; limpiar en `play()` / `seek` / next / prev; restore solo con `canRestoreInterruptPosition({ yieldedFocus: true, ... })`.
-5. **Sesión (A12)**: `velocity.player.t` + trackId; al reabrir, seek al segundo guardado en la **misma** pista al play/metadata. Limpiar en seek/next/pista nueva.
-6. **URL (A13)**: no montar `playSrc` caducado; al reabrir `playing=false` y sin auto-play; play del usuario re-firma stream.
-7. **Visible + intención play** → `tryResume` si hace falta.
-8. **Foreground** pause residual → `softKickPlayback` sin tocar ancla de yield.
+```text
+evento → dispatchAudio → reduce → runAudioEffects
+```
+
+1. **Hide + sigue `!paused`** → no tocar (pantalla off / Media Session).
+2. **Hide + pause externo** → `EXTERNAL_PAUSE` → focus `yielded` (sin soft-recover).
+3. **`selectPlaySync`**: `noop` oculto solo si yielded; next lock sin yield → soft-play.
+4. **Ancla (A10)**: solo en yield; limpia en `USER_SEEK` / `TRACK_SET`.
+5. **Sesión (A12)**: `HYDRATE` + `USER_PLAY` / `STREAM_READY` seek a `sessionPosition`.
+6. **URL (A13)**: no montar `playSrc` caducado; `PLAY_FAILED` sin intent → clearSrc, no play.
+7. **Visible + intent play** → `DOC_VISIBLE` (seek ancla si yield, play).
+8. **SW**: invalidar shell al cambiar audio (`velocity-vN`).
 
 ### Por qué Brave “iba bien” y Chrome no
 
@@ -56,15 +63,17 @@ el fix es no pelear en Chrome, no detectar el browser.
 ## Tests obligatorios
 
 ```bash
-node --test test/audioContinuity.test.js test/audioPolicyMatrix.test.js
+node --test test/audioContinuity.test.js test/audioPolicyMatrix.test.js test/audioMachine.test.js test/runAudioEffects.test.js
+node --test
+cd frontend && npm run build
 ```
 
-- `audioContinuity.test.js`: unidades por helper (A7, A10–A13, …).
-- `audioPolicyMatrix.test.js`: **matriz cruzada** — un fix no puede romper otro
-  escenario sin fallar el CI. Actualizar matriz + esta tabla en el mismo commit.
-
-Cubren: play oculto solo sin yield, yield al pause oculto, MS paused al ceder,
-ancla solo con yield, sesión por trackId, URL firmada fresca, sin hide-recover.
+| Archivo | Qué prueba |
+|---------|------------|
+| `audioContinuity.test.js` | Helpers A7–A13 |
+| `audioPolicyMatrix.test.js` | Escenarios cruzados (no romper A al fix B) |
+| `audioMachine.test.js` | Transiciones `reduce` |
+| `runAudioEffects.test.js` | Runner sin política |
 
 ## Checklist manual (Chrome Android primero)
 
@@ -77,11 +86,12 @@ ancla solo con yield, sesión por trackId, URL firmada fresca, sin hide-recover.
 
 ## Al cambiar código de audio
 
-1. Actualiza esta tabla si aparece un bug nuevo.
-2. Añade un test unitario **y** una fila en `audioPolicyMatrix.test.js` que falle sin el fix.
-3. **No reintroduzcas** timers de soft-recover en hide ni `play()` oculto con `yieldedFocus`.
-4. Sube versión del service worker (`velocity-vN`) para invalidar caché del shell.
-5. Antes de merge: `node --test` (suite completa) + checklist manual Chrome.
+1. Preferir cambiar **`audioMachine.js` / `audioContinuity.js`**, no ifs en App.
+2. Actualiza esta tabla si aparece un bug nuevo (A14…).
+3. Test unitario + fila en `audioPolicyMatrix.test.js` + transición en `audioMachine.test.js`.
+4. **No** soft-recover en hide ni `play()` oculto con focus yielded.
+5. SW bump (`velocity-vN`).
+6. `node --test` + build + checklist Chrome.
 
 ## Matriz mental (no romper al “arreglar”)
 

@@ -2580,31 +2580,21 @@ export default function App() {
     },
   };
 
+  /** Espejos post-reacquire: alinear machine al dejar de ceder. */
   const clearYieldedFocus = () => {
     if (machineRef.current.focus === 'yielded') {
-      // Al limpiar sin evento: alinear machine al reanudar por otro camino
-      machineRef.current = { ...machineRef.current, focus: 'own', yieldPosition: null, yieldTrackId: null };
+      machineRef.current = {
+        ...machineRef.current,
+        focus: 'own',
+        yieldPosition: null,
+        yieldTrackId: null,
+      };
       syncMirrorsFromMachine(machineRef.current);
     }
     systemPausedRef.current = false;
     setMediaInterrupted(false);
   };
-  const clearPlaybackAnchor = () => {
-    machineRef.current = {
-      ...machineRef.current,
-      yieldPosition: null,
-      yieldTrackId: null,
-    };
-    interruptPositionRef.current = null;
-    interruptTrackIdRef.current = null;
-  };
-  const clearSessionResume = () => {
-    machineRef.current = { ...machineRef.current, sessionPosition: null };
-    sessionResumeRef.current = null;
-  };
-  const clearSystemInterrupted = () => clearYieldedFocus();
-  const stopBackgroundWatch = () => {};
-  // Compat: restore/seek de yield vía machine state (seek effect en DOC_VISIBLE).
+  // Compat DOM: seek session/yield cuando el elemento ya tiene metadata.
   const restoreInterruptPosition = (a) => {
     if (!a || machineRef.current.focus !== 'yielded') return;
     const saved = machineRef.current.yieldPosition;
@@ -2623,15 +2613,6 @@ export default function App() {
       setTime(s.sessionPosition);
       return true;
     } catch { return false; }
-  };
-  const savePlaybackAnchor = (a) => {
-    if (!a) return;
-    const pos = Number.isFinite(a.currentTime) ? a.currentTime : 0;
-    machineRef.current = { ...machineRef.current, livePosition: pos };
-  };
-  const softKickPlayback = () => {
-    if (!playingRef.current || !isDocumentVisible()) return;
-    runAudioEffects([{ type: 'play' }], effectCtxRef.current);
   };
   // Web Audio para normalizar volumen (compresor de rango dinámico). Opt-in.
   // ── AudioContext eliminado: era incompatible con background playback en móvil ──
@@ -3194,7 +3175,7 @@ export default function App() {
           }
         } catch {}
         reacquireInFlight.current = false;
-        clearSystemInterrupted();
+        clearYieldedFocus();
       }).catch(() => {
         selfPauseRef.current = true;
         try { a.pause(); } catch {}
@@ -3212,7 +3193,7 @@ export default function App() {
           if (p2 && p2.then) {
             p2.then(() => {
               reacquireInFlight.current = false;
-              clearSystemInterrupted();
+              clearYieldedFocus();
             }).catch(() => { reacquireInFlight.current = false; });
           } else { reacquireInFlight.current = false; }
         }, 100);
@@ -3569,7 +3550,6 @@ export default function App() {
     // Fade SOLO en visible: si rAF se congela en background, volume queda en 0 = silencio eterno.
     if (a && shouldFadeIn(visible)) { a.volume = 0; pendingFadeRef.current = true; }
     else { if (a) a.volume = vol; pendingFadeRef.current = false; }
-    stopBackgroundWatch();
     const initialQueue = list && list.length ? list : [t.id];
     setQueue(initialQueue);
     const qualityMap = { high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' };

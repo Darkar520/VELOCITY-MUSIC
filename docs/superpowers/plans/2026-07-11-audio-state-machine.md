@@ -180,12 +180,13 @@ Estas filas van a `test/audioMachine.test.js` (+ seguir cubriendo matriz pura).
 
 **DoD Fase 2:** suite + build verdes; checklist manual Chrome recomendado.
 
-### Fase 3 — Limpieza
+### Fase 3 — Limpieza ✅ 2026-07-11
 
-1. Eliminar dead code (`hideRecoverDelays` legacy si ya no se importa).  
-2. SW bump.  
-3. Actualizar AUDIO-REGRESSIONS + GUARDRAILS.  
-4. Merge.
+1. ✅ Dead helpers en App (softKick suelto, clear* no usados, stopBackgroundWatch vacío).  
+2. ✅ Legacy `shouldYieldOnRePause` / `shouldYieldAudioFocus` eliminados; `hideRecoverDelays` vacío se queda por anti-regresión.  
+3. ✅ SW **v28**.  
+4. ✅ AUDIO-REGRESSIONS + GUARDRAILS alineados a machine.  
+5. ✅ `test/runAudioEffects.test.js`.
 
 ### Fase 4 — Después (P1-E split App.jsx) — **otro plan, no este**
 
@@ -265,14 +266,14 @@ const dispatch = (event) => {
 
 ## 7. Checklist de cierre de este plan
 
-- [ ] `audioMachine.js` + `reduce` + tests de transición  
-- [ ] App cableada solo por `dispatch` / `runEffects` en caminos de audio  
-- [ ] `node --test` 100%  
-- [ ] `frontend` build OK  
-- [ ] SW bump  
-- [ ] AUDIO-REGRESSIONS actualizado  
-- [ ] Checklist manual Chrome (tabla A7–A13)  
-- [ ] Plan P1-E (split) abierto como **siguiente** documento, no mezclado aquí  
+- [x] `audioMachine.js` + `reduce` + tests de transición  
+- [x] App cableada por `dispatchAudio` / `runAudioEffects`  
+- [x] `node --test` 100% (ver commit Fase 3)  
+- [x] `frontend` build OK  
+- [x] SW bump (v28)  
+- [x] AUDIO-REGRESSIONS + GUARDRAILS actualizados  
+- [ ] Checklist manual Chrome (tabla A7–A13) — **operador**  
+- [ ] Plan P1-E (split App) — siguiente, no mezclado aquí  
 
 ---
 
