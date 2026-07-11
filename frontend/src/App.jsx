@@ -6,6 +6,16 @@ import { isSpotifyUrl } from './spotifyImport.js';
 import { CSS, THEMES, SEED_ROWS, LATIN_ROWS, DISCOVERY, GENRES, ONBOARDING_GENRES, MOODS, ERAS, FALLBACK_COVER, BASE_VARS } from './constants.js';
 import { fmt, hex2rgba, grad, hiResCover, dedupeByTitle, capPerArtist, slimTrack, parseLRC, lyricsOverlapRatio, plainFromSyncedLines, tintedVars } from './helpers.js';
 import { cacheTrack, cacheTracks, trackById, allCached, loadMeta, loadPlayerState, saveMeta, normalizeTrack } from './catalog.js';
+import {
+  isDocumentVisible,
+  playSyncStrategy,
+  shouldResumeOnForeground,
+  canForceReacquire,
+  isExternalPause,
+  shouldFadeIn,
+  shouldSuspendPreloads,
+  shouldPreExtendQueue,
+} from './audioContinuity.js';
 import { usePersisted, useViewport, useDominantColor, useHSwipe } from './hooks.js';
 import { Icon } from './Icons.jsx';
 import { EQViz, Spinner, ProgressRing, DownloadAllButton, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider, SettingCard, ToggleRow, ColorField } from './components.jsx';
@@ -2882,30 +2892,44 @@ export default function App() {
   }, [authed]);
 
   // ── Sincronizar elemento audio (playSrc incluido: reproduce al resolver archivo offline) ──
+  // REGLA ANTI-REGRESIÓN: en background NUNCA forceReacquire. Chrome/Edge matan
+  // la Media Session si se interviene con pause/load al cambiar de pista con
+  // la pantalla apagada. Solo soft play() (audioContinuity.playSyncStrategy).
   useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
-    if (playing) {
-      // Restaurar volumen si el fundido lo dejó en 0 (ej: pantalla bloqueada durante el fade)
-      if (a.volume === 0) { cancelAnimationFrame(fadeRafRef.current); clearTimeout(fadeSafetyRef.current); a.volume = vol; }
-      // En background, el OS puede tener la sesión de audio suspendida.
-      // Usar forceReacquire (pause+load+play) para re-enganzchar.
-      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
-        forceReacquire();
-      } else {
-        const p = a.play();
-        if (p && p.catch) {
-          p.catch((err) => {
-            if (err.name !== 'AbortError' && err.name !== 'NotAllowedError') {
-              console.warn('[Audio]', err.name, err.message);
-            }
-          });
-        }
-      }
-    } else {
-      a.pause();
+    const visible = isDocumentVisible();
+    const strategy = playSyncStrategy({
+      playing,
+      visible,
+      audioPaused: a.paused,
+      hasSrc: Boolean(playSrc || track?.url || a.src),
+    });
+    if (strategy === 'pause') {
+      selfPauseRef.current = true;
+      try { a.pause(); } catch {}
+      selfPauseRef.current = false;
+      return;
     }
-  }, [playing, track, playSrc]);
+    if (strategy === 'soft-play' || strategy === 'force-reacquire') {
+      // Restaurar volumen si el fundido lo dejó en 0 (fade + pantalla bloqueada = silencio).
+      if (a.volume < vol * 0.5) {
+        cancelAnimationFrame(fadeRafRef.current);
+        clearTimeout(fadeSafetyRef.current);
+        a.volume = vol;
+      }
+      const p = a.play();
+      if (p && p.catch) {
+        p.catch((err) => {
+          if (err?.name === 'AbortError' || err?.name === 'NotAllowedError') return;
+          // Solo escalar a reacquire en primer plano.
+          if (canForceReacquire(isDocumentVisible())) {
+            setTimeout(() => forceReacquire(), 120);
+          }
+        });
+      }
+    }
+  }, [playing, track, playSrc, vol]);
 
   // ── Wake Lock API: previene que la CPU/screen se suspenda mientras reproduce ──
   // En algunos dispositivos Android agresivos, el navegador puede suspender
@@ -2979,46 +3003,42 @@ export default function App() {
   // Sincronizar playingRef con la intención.
   useEffect(() => { playingRef.current = playing; }, [playing]);
 
-  // ── Reanudación robusta de audio al volver a primer plano ──
-  // Problema: cuando el teléfono se bloquea o la app va a background, el OS
-  // suspende la sesión de audio. El <audio> sigue reportando paused=false pero
-  // no produce sonido. Llamar play() es un no-op porque el navegador cree que
-  // ya está reproduciendo.
-  // Solución: pause()+play() fuerza al navegador a liberar y re-adquirir la
-  // sesión de audio del OS. Es lo mismo que pasa al cambiar de canción.
+  // ── Reanudación robusta al volver de vídeo/otra app/pantalla bloqueada ──
+  // - Vídeo YT/FB: el OS pausa o deja zombie silencioso; playingRef sigue true.
+  // - Al volver a visible: restaurar volumen + soft play; forceReacquire solo
+  //   en foreground si hace falta (NUNCA en background).
   const lastTimeRef = useRef(0);
   const stuckCheckRef = useRef(null);
-
-  // Re-enganzchar la sesión de audio del OS.
-  // SOLO llamar desde foreground (página visible). En background, NO intervenir
-  // — Chrome + Media Session API mantienen el audio solos si no los interrumpimos.
-  // load() en background mata la sesión permanentemente.
+  const systemPausedRef = useRef(false);
   const reacquireInFlight = useRef(false);
+
   const forceReacquire = () => {
+    // Solo primer plano. En background Chrome mata la sesión de media.
+    if (!canForceReacquire(isDocumentVisible())) return;
     if (reacquireInFlight.current) return;
     const a = audioRef.current;
     if (!a || !playingRef.current || a.ended) return;
     reacquireInFlight.current = true;
-    const savedTime = a.currentTime;
-    if (a.volume === 0) a.volume = vol;
+    if (a.volume < vol * 0.5) a.volume = vol;
 
-    // Paso 1: play() sin pause. Menos disruptivo.
     const p1 = a.play();
     if (p1 && p1.then) {
-      p1.then(() => { reacquireInFlight.current = false; })
+      p1.then(() => { reacquireInFlight.current = false; systemPausedRef.current = false; })
         .catch(() => {
-          // Paso 2: pause() + play().
           selfPauseRef.current = true;
           try { a.pause(); } catch {}
           selfPauseRef.current = false;
           setTimeout(() => {
-            if (!playingRef.current) { reacquireInFlight.current = false; return; }
+            if (!playingRef.current || !canForceReacquire(isDocumentVisible())) {
+              reacquireInFlight.current = false;
+              return;
+            }
             const a2 = audioRef.current;
             if (!a2 || a2.ended) { reacquireInFlight.current = false; return; }
-            if (a2.volume === 0) a2.volume = vol;
+            if (a2.volume < vol * 0.5) a2.volume = vol;
             const p2 = a2.play();
             if (p2 && p2.then) {
-              p2.then(() => { reacquireInFlight.current = false; })
+              p2.then(() => { reacquireInFlight.current = false; systemPausedRef.current = false; })
                 .catch(() => { reacquireInFlight.current = false; });
             } else { reacquireInFlight.current = false; }
           }, 100);
@@ -3027,40 +3047,73 @@ export default function App() {
   };
 
   useEffect(() => {
-    // Tras video/otra pestaña: el OS deja playing=true pero audio.paused.
-    // Re-enganchar al volver a primer plano (visibility + focus + pageshow).
     const tryResume = () => {
       const a = audioRef.current;
-      if (!a || !playingRef.current || a.ended) return;
-      if (!a.paused && a.currentTime > 0) return;
-      // Soft play primero; forceReacquire solo si sigue pausado.
-      if (a.volume === 0) a.volume = vol;
+      if (!a) return;
+      const timeStuck = lastTimeRef.current > 0
+        && Math.abs((a.currentTime || 0) - lastTimeRef.current) < 0.05
+        && (a.currentTime || 0) > 0.5
+        && !a.paused;
+      if (!shouldResumeOnForeground({
+        userWantsPlay: playingRef.current,
+        audioEnded: a.ended,
+        audioPaused: a.paused,
+        volume: a.volume,
+        targetVolume: vol,
+        systemPaused: systemPausedRef.current,
+        timeStuck,
+      })) return;
+
+      // Siempre restaurar volumen (fade roto / ducking del OS).
+      cancelAnimationFrame(fadeRafRef.current);
+      clearTimeout(fadeSafetyRef.current);
+      if (a.volume < vol * 0.9) a.volume = vol;
+
       const p = a.play();
-      if (p && p.catch) {
-        p.catch(() => { setTimeout(forceReacquire, 120); });
-      } else if (a.paused) {
+      if (p && p.then) {
+        p.then(() => { systemPausedRef.current = false; })
+          .catch(() => {
+            if (canForceReacquire(isDocumentVisible())) setTimeout(forceReacquire, 120);
+          });
+      } else if (a.paused && canForceReacquire(isDocumentVisible())) {
         setTimeout(forceReacquire, 120);
       }
     };
+
     const onVis = () => {
-      if (document.visibilityState === 'visible') setTimeout(tryResume, 80);
+      if (document.visibilityState === 'visible') {
+        // Tras YouTube/FB el audio puede quedar "playing" en silencio: nudge siempre.
+        setTimeout(tryResume, 60);
+        setTimeout(tryResume, 400);
+        setTimeout(tryResume, 1200);
+      } else if (shouldSuspendPreloads(false)) {
+        // Liberar pre-buffers para no competir con Media Session en Chrome.
+        for (const r of [preloadAudioRef, preloadAudio2Ref]) {
+          const el = r.current;
+          if (!el) continue;
+          try { el.removeAttribute('src'); el.load(); } catch {}
+        }
+      }
     };
-    const onFocus = () => setTimeout(tryResume, 80);
-    const onPageShow = (e) => { if (e.persisted || document.visibilityState === 'visible') setTimeout(tryResume, 80); };
+    const onFocus = () => setTimeout(tryResume, 60);
+    const onPageShow = (e) => {
+      if (e.persisted || isDocumentVisible()) setTimeout(tryResume, 60);
+    };
 
     document.addEventListener('visibilitychange', onVis);
     window.addEventListener('focus', onFocus);
     window.addEventListener('pageshow', onPageShow);
 
     stuckCheckRef.current = setInterval(() => {
-      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      if (!isDocumentVisible()) return;
       const a = audioRef.current;
       if (!a || !playingRef.current || a.ended) { lastTimeRef.current = 0; return; }
       const ct = a.currentTime || 0;
-      // Pausado con intención de play, o "zombie" (playing pero tiempo congelado).
-      if (a.paused) {
+      if (a.paused || systemPausedRef.current) {
         tryResume();
       } else if (lastTimeRef.current > 0 && Math.abs(ct - lastTimeRef.current) < 0.05 && ct > 0.5) {
+        // Zombie silencioso en foreground.
+        if (a.volume < vol * 0.5) a.volume = vol;
         forceReacquire();
       }
       lastTimeRef.current = ct;
@@ -3121,22 +3174,28 @@ export default function App() {
   }, [track?.id, queue, quality]);
 
   // ── Continuidad en segundo plano: extender la cola ANTES de que acabe ──
-  // Si la pista actual es la última de la cola, se anexan relacionadas AHORA
-  // (en primer plano), de modo que al terminar (aunque el celular esté
-  // bloqueado) `next()` sea síncrono y la reproducción no se detenga.
+  // Última O penúltima pista → anexar relacionadas YA (en primer plano),
+  // para que onEnded/next() sea síncrono con pantalla bloqueada.
   const autoExtendRef = useRef(null);
   useEffect(() => {
     if (!track || !settings.autoplay) return;
     const ids = queue.length ? queue : [track.id];
     const i = ids.indexOf(track.id);
-    if (i !== -1 && i < ids.length - 1) return;           // aún hay siguiente
-    if (autoExtendRef.current === track.id) return;        // ya se pidió para esta
-    autoExtendRef.current = track.id;
+    if (!shouldPreExtendQueue(i, ids.length)) return;
+    // Clave por pista+longitud para re-extender si la cola creció y volvemos al final.
+    const key = `${track.id}:${ids.length}`;
+    if (autoExtendRef.current === key) return;
+    autoExtendRef.current = key;
     (async () => {
       try {
         const addIds = await buildContinuation(track, ids);
         if (!addIds.length) return;
-        setQueue(q => { const base = q && q.length ? q : [track.id]; const merged = [...base]; addIds.forEach(id => { if (!merged.includes(id)) merged.push(id); }); return merged; });
+        setQueue(q => {
+          const base = q && q.length ? q : [track.id];
+          const merged = [...base];
+          addIds.forEach(id => { if (!merged.includes(id)) merged.push(id); });
+          return merged;
+        });
       } catch {}
     })();
   }, [track?.id, queue, settings.autoplay]);
@@ -3289,10 +3348,12 @@ export default function App() {
     cacheTrack(t); saveMeta();
     // Detener limpiamente la pista anterior para evitar el "clic" al cortar la onda.
     const a = audioRef.current;
-    const visible = typeof document === 'undefined' || document.visibilityState === 'visible';
+    const visible = isDocumentVisible();
     if (a) { try { cancelAnimationFrame(fadeRafRef.current); clearTimeout(fadeSafetyRef.current); selfPauseRef.current = true; a.pause(); } catch {} }
-    if (a && visible) { a.volume = 0; pendingFadeRef.current = true; }  // fundido al arrancar
-    else { if (a) a.volume = vol; pendingFadeRef.current = false; }      // segundo plano: sin fundido
+    // Fade SOLO en visible: si rAF se congela en background, volume queda en 0 = silencio eterno.
+    if (a && shouldFadeIn(visible)) { a.volume = 0; pendingFadeRef.current = true; }
+    else { if (a) a.volume = vol; pendingFadeRef.current = false; }
+    systemPausedRef.current = false;
     const initialQueue = list && list.length ? list : [t.id];
     setQueue(initialQueue);
     const qualityMap = { high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' };
@@ -3957,8 +4018,28 @@ export default function App() {
       applyMeta(appArt);
     })();
     const a = () => audioRef.current;
-    const doPlay = () => { const el = a(); if (el) { if (el.volume === 0) el.volume = vol; el.play().catch(() => {}); setPlaying(true); } };
-    const doPause = () => { const el = a(); if (el) { el.pause(); setPlaying(false); } };
+    const doPlay = () => {
+      const el = a();
+      if (!el) return;
+      // Lock screen / notificación: restaurar volumen y reanudar (tras vídeo a menudo volume=0 o paused).
+      if (el.volume < vol * 0.5) el.volume = vol;
+      systemPausedRef.current = false;
+      playingRef.current = true;
+      setPlaying(true);
+      el.play().catch(() => {
+        if (canForceReacquire(isDocumentVisible())) forceReacquire();
+      });
+    };
+    const doPause = () => {
+      const el = a();
+      if (!el) return;
+      selfPauseRef.current = true;
+      try { el.pause(); } catch {}
+      selfPauseRef.current = false;
+      systemPausedRef.current = false;
+      playingRef.current = false;
+      setPlaying(false);
+    };
     navigator.mediaSession.setActionHandler('play', doPlay);
     navigator.mediaSession.setActionHandler('pause', doPause);
     navigator.mediaSession.setActionHandler('previoustrack', () => prev());
@@ -4145,27 +4226,58 @@ export default function App() {
       }}
       onLoadedMetadata={() => { setDur(audioRef.current?.duration||0); if (resumeRef.current != null && audioRef.current) { try { audioRef.current.currentTime = resumeRef.current; } catch {} setTime(resumeRef.current); resumeRef.current = null; } }}
       onCanPlay={() => setLoadingAudio(false)}
-      onPlay={() => { selfPauseRef.current = false; setLoadingAudio(false); playingRef.current = true; if (!playing) setPlaying(true); }}
-      onPlaying={() => { selfPauseRef.current = false; setLoadingAudio(false); playErrorRef.current = { id: null, n: 0 }; sustainedPlayRef.current = false; setTimeout(() => { if (audioRef.current && !audioRef.current.paused && audioRef.current.currentTime > 3) { consecutiveFailsRef.current = 0; sustainedPlayRef.current = true; } }, 5000); if (pendingFadeRef.current) { pendingFadeRef.current = false; fadeInAudio(); } }}
+      onPlay={() => {
+        selfPauseRef.current = false;
+        systemPausedRef.current = false;
+        setLoadingAudio(false);
+        playingRef.current = true;
+        if (!playing) setPlaying(true);
+        // Asegurar volumen real (evita "suena en silencio" post-vídeo/fade).
+        const el = audioRef.current;
+        if (el && el.volume < vol * 0.5) el.volume = vol;
+      }}
+      onPlaying={() => {
+        selfPauseRef.current = false;
+        systemPausedRef.current = false;
+        setLoadingAudio(false);
+        playErrorRef.current = { id: null, n: 0 };
+        sustainedPlayRef.current = false;
+        setTimeout(() => {
+          if (audioRef.current && !audioRef.current.paused && audioRef.current.currentTime > 3) {
+            consecutiveFailsRef.current = 0;
+            sustainedPlayRef.current = true;
+          }
+        }, 5000);
+        if (pendingFadeRef.current) {
+          pendingFadeRef.current = false;
+          if (isDocumentVisible()) fadeInAudio();
+          else if (audioRef.current) audioRef.current.volume = vol;
+        }
+      }}
       onStalled={() => setLoadingAudio(true)}
       onWaiting={() => setLoadingAudio(true)}
       onPause={() => {
-        if (selfPauseRef.current) return;
-        if (pendingFadeRef.current) return;
         const a = audioRef.current;
-        if (!a || a.ended) return;
-        if (!playingRef.current) return;
-        // En background: NO intervenir. Chrome pausa el audio temporalmente
-        // y lo reanuda solo. Nuestro forceReacquire haría load() y mataría
-        // la sesión permanentemente. Solo guardar el estado.
-        if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
-        // En foreground: el OS pausó el audio mientras la app está visible.
-        // Reanudar con forceReacquire.
-        setTimeout(() => {
-          if (playingRef.current && audioRef.current && !audioRef.current.ended && audioRef.current.paused) {
-            forceReacquire();
-          }
-        }, 200);
+        if (!a) return;
+        // ¿Pause externo (vídeo YT/FB, otra app, OS)? Mantener intención de play.
+        if (isExternalPause({
+          selfPause: selfPauseRef.current,
+          pendingFade: pendingFadeRef.current,
+          userWantsPlay: playingRef.current,
+          audioEnded: a.ended,
+        })) {
+          systemPausedRef.current = true;
+          // Background: no intervenir (Chrome reanuda solo o al volver a la app).
+          if (!isDocumentVisible()) return;
+          // Foreground: reintentar en breve (notificación, ducking momentáneo).
+          setTimeout(() => {
+            if (!playingRef.current || !audioRef.current || audioRef.current.ended) return;
+            if (!audioRef.current.paused && audioRef.current.volume >= vol * 0.5) return;
+            if (audioRef.current.volume < vol * 0.5) audioRef.current.volume = vol;
+            const p = audioRef.current.play();
+            if (p && p.catch) p.catch(() => { if (canForceReacquire(isDocumentVisible())) forceReacquire(); });
+          }, 350);
+        }
       }}
       onError={handleAudioError}
       onEnded={onEnded}

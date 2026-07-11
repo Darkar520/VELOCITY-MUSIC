@@ -33,7 +33,9 @@
    - Online cache miss + visible: await sign once, then set src.
    - Online cache miss + hidden: still attempt await (best-effort); never leave unsigned URL as playSrc.
 4. **`prefetchNext`**: also warm signatures (not only `/api/resolve`).
-5. **Re-acquire**: on `visibilitychange`→visible, `focus`, `pageshow` — if `playingRef && audio.paused && !ended`, soft `play()`; avoid `load()` unless stream dead.
+5. **Re-acquire**: on `visibilitychange`→visible, `focus`, `pageshow` — if user still wants play, restore volume + soft `play()`; `forceReacquire` **only when document is visible**. Never force-reacquire in background (Chrome kills Media Session). See `frontend/src/audioContinuity.js`.
+6. **External pause** (YouTube/FB/other app): keep `playingRef=true`, set `systemPausedRef`; resume on return to app — do not `setPlaying(false)`.
+7. **Preload `<audio>` elements**: clear `src` when going hidden so they do not compete with Media Session.
 
 ## B — Covers
 

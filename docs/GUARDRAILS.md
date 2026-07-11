@@ -43,30 +43,52 @@ npm run verify      # corre TODOS los tests (node --test) + build del frontend
 
 La reproducción NUNCA debe cortarse. Invariantes:
 
-- **Un solo `<audio>`**; la fuente se cambia por estado (`playSrc`), y el
-  efecto de sincronización llama `play()` sin `await` previo bloqueante.
-- **Auto-avance en segundo plano:** la cola se **pre-extiende con relacionadas
-  ANTES** de que termine la pista (efecto `autoExtendRef`). Así `next()` es
-  síncrono al terminar y funciona con la pantalla bloqueada. No revertir a
-  resolver la siguiente con `await` dentro de `onEnded`.
-- **`onPause`** ignora las pausas de fondo (no hace `setPlaying(false)` cuando
-  la app está oculta) y se reanuda al volver (`visibilitychange`).
-- **`playingRef`** DEBE estar declarado (`useRef(false)`) y sincronizado con
-  `playing`. Su ausencia causó una pantalla negra (`ReferenceError`).
-- **Web Audio (normalizar):** grafo mínimo `src→comp→gain→dest`, compresor
-  suave. NO reintroducir el ecualizador ambiental (causó estática). No añadir
-  nodos que puedan degradar/interferir el audio.
+- **Un solo `<audio>` principal** reproduce; pre-buffers son auxiliares y se
+  **vacían al ir a background** (Chrome confunde Media Session con 3 audios).
+- **Lógica pura en `frontend/src/audioContinuity.js`** + tests en
+  `test/audioContinuity.test.js`. No reintroducir comportamientos que fallen
+  esos tests.
+- **En background (document hidden): SOLO `audio.play()` suave.** NUNCA
+  `forceReacquire` / `pause+load+play` / `load()` al cambiar de pista con la
+  pantalla apagada o la app oculta. Eso **mata la sesión de media en Chrome**
+  (Brave a veces aguanta; no es razón para volver al reacquire en bg).
+- **Tras vídeo YouTube/Facebook/otra app:** el OS puede pausar o dejar
+  zombie silencioso (`playing=true`, `volume=0` o tiempo congelado).
+  - `playingRef` permanece `true` (el usuario no pausó).
+  - `systemPausedRef` marca pause externo.
+  - Al `visibilitychange`→visible / `focus` / `pageshow`: restaurar `volume`
+    y soft `play()`; reacquire solo en foreground si falla.
+- **Fade-in (`volume=0`) SOLO con página visible.** Si rAF se congela en
+  background, el volume se queda en 0 → “suena en silencio”. En bg: `volume=vol`.
+- **Auto-avance en segundo plano:** la cola se **pre-extiende** en última o
+  **penúltima** pista (`shouldPreExtendQueue`). Así `next()` es síncrono al
+  terminar con pantalla bloqueada. No resolver la siguiente con `await` en
+  `onEnded` si se puede evitar.
+- **`onPause` externo** no hace `setPlaying(false)`. Solo pause del usuario
+  (toggle / Media Session pause) cambia la intención.
+- **`playingRef`** DEBE estar declarado y sincronizado con `playing`.
+- **Web Audio API** no debe secuestrar el `<audio>` para normalizar (suspende
+  el contexto en background). Solo ajuste de volumen.
 - El **proxy de streaming** (`/api/stream-proxy`) NO pasa por gzip ni por rate
   limiting (rompería Range/playback). Ver §6.
 - **Firma HMAC obligatoria** en `/api/stream-proxy` (`exp` + `sig`). El
-  `<audio>` no envía Bearer; el cliente obtiene la firma vía
-  `GET /api/stream-sign` (JWT) → `api.ensureStreamUrl()`. Sin firma → 401.
-- **Prefirma de cola (P1):** mientras la app está visible se precalientan
-  firmas de la actual + próximas pistas (`warmStreamUrl` / `peekStreamUrl`).
-  `play()` / `next()` / `onEnded` deben poder poner `playSrc` **en síncrono**
-  si hay hit de caché (margen ≥90s). No depender de `await` de red al
-  avanzar con la pantalla bloqueada (online fallaba; offline no).
+  `<audio>` no envía Bearer; firma vía `GET /api/stream-sign` →
+  `api.ensureStreamUrl()`. Sin firma → 401.
+- **Prefirma de cola:** actual + próximas pistas (`warmStreamUrl` /
+  `peekStreamUrl`). `play()` / `next()` / `onEnded` ponen `playSrc` **en
+  síncrono** si hay hit (margen ≥90s). No depender de `await` de red al
+  avanzar con pantalla bloqueada.
 - **`/api/resolve` requiere JWT** (prefetch/warm-up). Sin token → 401.
+- **Compatibilidad:** Chrome, Brave, Edge, Opera, Safari iOS (PWA/móvil).
+  No optimizar solo para un navegador a costa de otro.
+
+### Checklist manual anti-regresión (móvil)
+
+1. Cola ≥3 online → bloquear pantalla → debe avanzar a la siguiente.
+2. Reproducir → abrir YouTube/FB vídeo → al volver a Velocity: audio reanuda
+   con volumen real (no silencio zombie).
+3. Offline descargada: no regresión de blob.
+4. Media Session: play/pause/next en pantalla de bloqueo.
 
 ## 4. Carátulas
 
