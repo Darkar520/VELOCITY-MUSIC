@@ -81,13 +81,13 @@ function AuthScreen({ onAuthed, T }) {
   const googleLogin = () => {
     if (!googleClientId) return;
     setBusy(true); setErr('');
-    // Flujo de redirect completo (no popup). La ventana principal navega a
-    // Google, que redirige a /auth/google/callback/ con el credential en el
-    // hash. Esa página llama al backend, guarda el JWT en localStorage y
-    // redirige de vuelta a /.
+    // Flujo de redirect completo (no popup). Google redirige a
+    // /auth/google/callback con el id_token en el hash. Esa página llama al
+    // backend, guarda el JWT y vuelve a /.
     //
-    // Este flujo es robusto en TODOS los navegadores (incluido Brave, que
-    // bloquea window.opener en popups cross-origin) y en móviles.
+    // redirect_uri SIN barra final: debe coincidir EXACTO con Google Cloud
+    // Console. El callback carga callback.js por ruta ABSOLUTA para que no
+    // falle cuando la URL no termina en / (bug "Conectando…" eterno).
     const redirect = window.location.origin + '/auth/google/callback';
     const url = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=' + encodeURIComponent(googleClientId) + '&redirect_uri=' + encodeURIComponent(redirect) + '&response_type=id_token&scope=openid%20email%20profile&nonce=' + Date.now();
     window.location.assign(url);

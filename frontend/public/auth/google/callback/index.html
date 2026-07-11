@@ -6,7 +6,19 @@
   <title>Velocity Music · Google</title>
 </head>
 <body style="background:#04060a;color:#fff;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
-  <p id="msg" style="font-size:15px;opacity:.9">Conectando…</p>
-  <script src="callback.js"></script>
+  <p id="msg" style="font-size:15px;opacity:.9;text-align:center;padding:0 24px;line-height:1.5">Conectando…</p>
+  <!--
+    Ruta ABSOLUTA obligatoria.
+    Con redirect_uri sin barra final (/auth/google/callback), un src relativo
+    "callback.js" se resuelve a /auth/google/callback.js → el Worker/Pages
+    devuelve el index de la SPA y el JS nunca corre → "Conectando…" eterno.
+  -->
+  <script
+    src="/auth/google/callback/callback.js"
+    onerror="document.getElementById('msg').textContent='No se pudo cargar el login. Recarga o usa otro navegador.';setTimeout(function(){location.replace('/#google_auth_error='+encodeURIComponent('No se pudo cargar el script de Google'));},2500);"
+  ></script>
+  <noscript>
+    <p style="color:#fb7185;text-align:center;padding:24px">Activa JavaScript para iniciar sesión con Google.</p>
+  </noscript>
 </body>
 </html>
