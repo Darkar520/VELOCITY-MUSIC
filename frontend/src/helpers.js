@@ -78,6 +78,29 @@ export function parseLRC(s) {
   return out.sort((a, b) => a.t - b.t);
 }
 
+// Solape de palabras entre dos textos de letra (0–1). Evita que al sincronizar
+// se sustituya la letra correcta por otra de lrclib mal emparejada.
+export function lyricsOverlapRatio(a, b) {
+  const tok = (s) => String(s || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length > 1);
+  const A = new Set(tok(String(a || '').slice(0, 4000)));
+  const B = new Set(tok(String(b || '').slice(0, 4000)));
+  if (A.size < 4 || B.size < 4) return 1;
+  let inter = 0;
+  for (const t of A) if (B.has(t)) inter += 1;
+  return inter / Math.min(A.size, B.size);
+}
+
+// Texto plano a partir de líneas LRC parseadas.
+export function plainFromSyncedLines(lines) {
+  if (!Array.isArray(lines)) return '';
+  return lines.map((l) => (l && l.text) || '').filter(Boolean).join('\n');
+}
+
 // Genera variables de superficie OSCURAS tintadas con un color, mezclándolo
 // dentro del negro base a baja intensidad. Mantiene el texto claro (no se
 // sobrescribe) para garantizar contraste/legibilidad con cualquier tinte.

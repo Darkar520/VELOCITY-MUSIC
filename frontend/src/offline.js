@@ -4,19 +4,75 @@
 
 const DB_NAME = 'velocity-offline';
 const STORE = 'tracks';
+const LYRICS_STORE = 'lyrics';
 let _db = null;
 
 function openDB() {
   if (_db) return Promise.resolve(_db);
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
+    // v2: store de letras sincronizadas para offline (solo biblioteca).
+    const req = indexedDB.open(DB_NAME, 2);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, { keyPath: 'id' });
+      if (!db.objectStoreNames.contains(LYRICS_STORE)) db.createObjectStore(LYRICS_STORE, { keyPath: 'id' });
     };
     req.onsuccess = () => { _db = req.result; resolve(_db); };
     req.onerror = () => reject(req.error);
   });
+}
+
+/** Guarda letra (LRC y/o plain) para reproducción offline. */
+export async function saveLyrics(id, data) {
+  if (!id || !data) return false;
+  try {
+    const db = await openDB();
+    // Asegurar store en DBs antiguas abiertas sin upgrade (edge case).
+    if (!db.objectStoreNames.contains(LYRICS_STORE)) return false;
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(LYRICS_STORE, 'readwrite');
+      tx.objectStore(LYRICS_STORE).put({
+        id,
+        synced: data.synced || null,
+        plain: data.plain || null,
+        source: data.source || null,
+        at: Date.now(),
+      });
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => reject(tx.error);
+    });
+    return true;
+  } catch { return false; }
+}
+
+/** Lee letra cacheada (offline). */
+export async function getLyrics(id) {
+  if (!id) return null;
+  try {
+    const db = await openDB();
+    if (!db.objectStoreNames.contains(LYRICS_STORE)) return null;
+    return await new Promise((resolve) => {
+      const tx = db.transaction(LYRICS_STORE, 'readonly');
+      const rq = tx.objectStore(LYRICS_STORE).get(id);
+      rq.onsuccess = () => resolve(rq.result || null);
+      rq.onerror = () => resolve(null);
+    });
+  } catch { return null; }
+}
+
+export async function deleteLyrics(id) {
+  if (!id) return false;
+  try {
+    const db = await openDB();
+    if (!db.objectStoreNames.contains(LYRICS_STORE)) return false;
+    await new Promise((resolve) => {
+      const tx = db.transaction(LYRICS_STORE, 'readwrite');
+      tx.objectStore(LYRICS_STORE).delete(id);
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+    });
+    return true;
+  } catch { return false; }
 }
 
 export async function saveTrack(meta, blob) {

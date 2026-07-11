@@ -203,17 +203,26 @@ export async function bootstrap() {
     searchAllImpl: (() => {
       const ytSearchAll = createYTMusicSearchAll();
       const scCatalog = createSoundCloudCatalog();
-      // Búsqueda combinada: YouTube Music (principal) + SoundCloud (indie/underground).
-      // Los resultados de SC se añaden a las canciones con una etiqueta de fuente,
-      // para que el frontend pueda distinguirlos (source='soundcloud') si hace falta.
+      // YT Music principal; SoundCloud solo como cola y solo si título/artista
+      // se parecen a la query (evita basura que no reproduce y "Charyl - System of a Down").
       return async (q, limit) => {
         const [ytData, scTracks] = await Promise.allSettled([
           ytSearchAll(q, limit),
-          scCatalog(q, Math.min(limit ?? 10, 10)),
+          scCatalog(q, Math.min(limit ?? 8, 8)),
         ]);
         const yt = ytData.status === 'fulfilled' ? ytData.value : { songs: [], albums: [], artists: [] };
-        const sc = scTracks.status === 'fulfilled' ? scTracks.value : [];
-        // Mezclar canciones de SC al final de las de YT (no reemplazar, ampliar).
+        const scRaw = scTracks.status === 'fulfilled' ? scTracks.value : [];
+        const nq = String(q || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        const sc = (scRaw || []).filter((t) => {
+          if (!t || !t.id || !t.title) return false;
+          if (!t.streamUrl && !t.stream) return false; // sin stream no se puede reproducir
+          const blob = `${t.title || ''} ${t.artist || ''}`.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+          // Al menos un token significativo de la query debe aparecer.
+          const tokens = nq.split(/\s+/).filter((w) => w.length > 2);
+          if (!tokens.length) return false;
+          const hits = tokens.filter((w) => blob.includes(w)).length;
+          return hits >= Math.min(2, tokens.length) || blob.includes(nq);
+        }).slice(0, 5);
         return {
           songs: [...(yt.songs || []), ...sc],
           albums: yt.albums || [],

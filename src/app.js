@@ -17,6 +17,12 @@ import { sendWelcomeEmail } from './services/mailer.js';
 import { createRequireAuth } from './middleware/requireAuth.js';
 import { checkAdminKey } from './middleware/adminAuth.js';
 import { signStreamParams, verifyStreamParams } from './lib/streamSign.js';
+import {
+  cleanLyricQuery,
+  pickBestLyricsCandidate,
+  plainFromSynced,
+  lyricsOverlapRatio,
+} from './lib/lyricsMatch.js';
 import { createPlaylistService, PlaylistError } from './services/playlistService.js';
 import { createFavoritesService, FavoritesError } from './services/favoritesService.js';
 import { createHistoryService, HistoryError } from './services/historyService.js';
@@ -314,7 +320,9 @@ export function createApp(deps = {}) {
     }
   });
 
-  // ---- Letras (YouTube Music nativo + lrclib + lyrics.ovh, con timeout) ----
+  // ---- Letras (YouTube Music nativo + lrclib filtrado + lyrics.ovh) ----
+  // lrclib search devolvía el primer hit y a menudo la letra de OTRA canción.
+  // Ahora se puntúa por artist/title/duration y se rechaza si no cuadra.
   const lyricsCache = new Map();
   const LYRICS_CACHE_MAX = 500;
   const lyricsCacheSet = (key, val) => {
@@ -324,7 +332,6 @@ export function createApp(deps = {}) {
     }
     lyricsCache.set(key, val);
   };
-  let lrclibDownUntil = 0; // circuit breaker: si lrclib falla, se salta un rato
   const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
   app.get('/api/lyrics', async (req, res) => {
     const artist = String(req.query.artist || '').trim();
@@ -335,63 +342,100 @@ export function createApp(deps = {}) {
     const syncOnly = String(req.query.sync || '') === '1';
     if (!artist || !title) return res.status(400).json({ error: 'Se requieren artist y title.' });
 
-    const key = `${artist}|${title}`.toLowerCase();
+    const cleanTitle = cleanLyricQuery(title);
+    const key = `${id || ''}|${artist}|${title}`.toLowerCase();
     const cached = lyricsCache.get(key);
     if (cached && Date.now() - cached.at < 7 * 86400000) {
-      // En modo sync solo sirve la caché si ya es sincronizada.
       if (!syncOnly || cached.data.synced) return res.json(cached.data);
     }
 
-    const clean = (s) => s.replace(/\s*[\(\[][^\)\]]*(official|video|audio|lyric|remaster|feat\.?|ft\.?)[^\)\]]*[\)\]]/gi, '').trim();
     const head = { 'User-Agent': 'VelocityMusic/1.0 (personal use)' };
+    const queryMeta = { artist, title: cleanTitle || title, duration };
     const finish = (data) => { lyricsCacheSet(key, { data, at: Date.now() }); return res.json(data); };
 
+    const packFromCandidate = (c) => {
+      if (!c) return null;
+      const synced = c.syncedLyrics || c.synced || null;
+      const plain = c.plainLyrics || c.plain || (synced ? plainFromSynced(synced) : null);
+      if (!synced && !plain) return null;
+      return { source: 'lrclib', synced: synced || null, plain: plain || null };
+    };
+
+    // GET exacto de lrclib (artist+title+duration) — más fiable que search.
     const lrcGet = (ms) => (async () => {
       try {
         const u = new URL('https://lrclib.net/api/get');
         u.searchParams.set('artist_name', artist);
-        u.searchParams.set('track_name', title);
+        u.searchParams.set('track_name', cleanTitle || title);
         if (album) u.searchParams.set('album_name', album);
-        if (duration) u.searchParams.set('duration', duration);
+        if (duration) u.searchParams.set('duration', String(Math.round(Number(duration) || duration)));
         const r = await withTimeout(fetch(u, { headers: head }), ms);
-        if (r.ok) { const d = await r.json(); if (d && (d.syncedLyrics || d.plainLyrics)) return { synced: d.syncedLyrics || null, plain: d.plainLyrics || null }; }
-      } catch {}
-      return null;
+        if (!r.ok) return null;
+        const d = await r.json();
+        if (!d || !(d.syncedLyrics || d.plainLyrics)) return null;
+        // Aun el GET puede devolver basura: puntuar.
+        const scored = pickBestLyricsCandidate(queryMeta, [d], 45);
+        return scored ? packFromCandidate(scored.candidate) : null;
+      } catch { return null; }
     })();
+
+    // SEARCH de lrclib: ranking estricto, NUNCA arr[0] a ciegas.
     const lrcSearch = (ms) => (async () => {
       try {
         const u = new URL('https://lrclib.net/api/search');
-        u.searchParams.set('q', `${clean(title)} ${artist}`);
+        u.searchParams.set('q', `${cleanTitle || title} ${artist}`);
         const r = await withTimeout(fetch(u, { headers: head }), ms);
-        if (r.ok) { const arr = await r.json(); if (Array.isArray(arr) && arr.length) { const b = arr.find(x => x.syncedLyrics) || arr.find(x => x.plainLyrics) || arr[0]; if (b && (b.syncedLyrics || b.plainLyrics)) return { synced: b.syncedLyrics || null, plain: b.plainLyrics || null }; } }
-      } catch {}
-      return null;
+        if (!r.ok) return null;
+        const arr = await r.json();
+        if (!Array.isArray(arr) || !arr.length) return null;
+        const picked = pickBestLyricsCandidate(queryMeta, arr, 55);
+        return picked ? packFromCandidate(picked.candidate) : null;
+      } catch { return null; }
     })();
 
-    // ── Modo "solo sincronizada": solo lrclib con timeout largo (lrclib puede tardar) ──
+    const bestLrc = async (ms) => {
+      const [g, se] = await Promise.all([lrcGet(ms), lrcSearch(ms)]);
+      // Preferir el que tenga synced y, a igualdad, el GET.
+      if (g?.synced) return g;
+      if (se?.synced) return se;
+      return g || se || null;
+    };
+
+    // ── Modo sync: solo lrclib bien emparejado ──
     if (syncOnly) {
-      const [g, se] = await Promise.all([lrcGet(15000), lrcSearch(15000)]);
-      const synced = (g && g.synced) || (se && se.synced);
-      if (synced) return finish({ source: 'lrclib', synced, plain: (g && g.plain) || (se && se.plain) || null });
-      const plain = (g && g.plain) || (se && se.plain);
-      if (plain) return finish({ source: 'lrclib', synced: null, plain });
+      const lrc = await bestLrc(15000);
+      if (lrc?.synced) return finish(lrc);
+      if (lrc?.plain) return finish({ ...lrc, synced: null });
       return res.status(404).json({ error: 'Sin letra sincronizada.' });
     }
 
-    // ── Modo rápido: muestra algo al instante (nativo YT + lrclib corto + ovh) ──
+    // ── Modo rápido: lrclib corto + YT nativo + ovh ──
     const ytP = (id && typeof lyricsByIdImpl === 'function')
-      ? withTimeout(lyricsByIdImpl(id), 4000).then(p => (p && p.trim()) ? p.trim() : null).catch(() => null)
+      ? withTimeout(lyricsByIdImpl(id), 4000).then((p) => (p && p.trim() ? p.trim() : null)).catch(() => null)
       : Promise.resolve(null);
-    const [g, se] = await Promise.all([lrcGet(4000), lrcSearch(4000)]);
-    const synced = (g && g.synced) || (se && se.synced);
-    if (synced) return finish({ source: 'lrclib', synced, plain: (g && g.plain) || (se && se.plain) || null });
+
+    const lrc = await bestLrc(4500);
+    if (lrc?.synced) return finish(lrc);
+
     const yt = await ytP;
-    if (yt) return finish({ source: 'youtube-music', synced: null, plain: yt });
-    const plain = (g && g.plain) || (se && se.plain);
-    if (plain) return finish({ source: 'lrclib', synced: null, plain });
+    if (yt) {
+      // Si lrclib trae plain que no se parece al de YT, ignorarlo.
+      if (lrc?.plain && lyricsOverlapRatio(yt, lrc.plain) < 0.35) {
+        return finish({ source: 'youtube-music', synced: null, plain: yt });
+      }
+      return finish({ source: 'youtube-music', synced: null, plain: yt });
+    }
+    if (lrc?.plain) return finish(lrc);
+
     try {
-      const r = await withTimeout(fetch(`https://api.lyrics.ovh/v1/${encodeURIComponent(artist)}/${encodeURIComponent(clean(title))}`, { headers: head }), 3500);
-      if (r.ok) { const d = await r.json(); if (d && d.lyrics && d.lyrics.trim()) return finish({ source: 'lyrics.ovh', synced: null, plain: d.lyrics.trim() }); }
+      const r = await withTimeout(
+        fetch(`https://api.lyrics.ovh/v1/${encodeURIComponent(artist)}/${encodeURIComponent(cleanTitle || title)}`, { headers: head }),
+        3500
+      );
+      if (r.ok) {
+        const d = await r.json();
+        if (d?.lyrics?.trim()) return finish({ source: 'lyrics.ovh', synced: null, plain: d.lyrics.trim() });
+      }
     } catch {}
     return res.status(404).json({ error: 'Letra no encontrada.' });
   });

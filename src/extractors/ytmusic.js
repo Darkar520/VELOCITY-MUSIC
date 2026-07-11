@@ -13,6 +13,7 @@
 import YTMusic from 'ytmusic-api';
 
 import { normalizeText } from '../lib/normalize.js';
+import { artistNameMatches } from '../lib/lyricsMatch.js';
 
 let _client = null;
 // Mutex de inicialización: una sola Promise compartida entre peticiones concurrentes
@@ -190,13 +191,39 @@ export async function getArtistData(artistId) {
     })
     .filter((al) => { if (seenAlb.has(al.albumId)) return false; seenAlb.add(al.albumId); return true; });
 
-  let songs = a.topSongs || [];
-  try { const full = await client.getArtistSongs(artistId); if (Array.isArray(full) && full.length) songs = full; } catch {}
+  // Canciones: topSongs suele ser fiable. getArtistSongs a veces mete
+  // recomendaciones ajenas ("Dale Don Dale" en System of a Down). Filtramos
+  // siempre por coincidencia de artista y priorizamos el orden de topSongs.
+  let rawSongs = Array.isArray(a.topSongs) ? a.topSongs.slice() : [];
+  try {
+    const full = await client.getArtistSongs(artistId);
+    if (Array.isArray(full) && full.length) {
+      const seen = new Set(rawSongs.map((s) => s.videoId || s.id).filter(Boolean));
+      for (const s of full) {
+        const vid = s.videoId || s.id;
+        if (vid && seen.has(vid)) continue;
+        if (vid) seen.add(vid);
+        rawSongs.push(s);
+      }
+    }
+  } catch {}
+  const mappedSongs = rawSongs
+    .map(mapYTMusicSong)
+    .filter((s) => s.id && s.title)
+    .filter((s) => !key || artistNameMatches(s.artist, artistName));
+  // Deduplicar por título normalizado (misma canción, distintas subidas).
+  const seenTitle = new Set();
+  const topSongs = mappedSongs.filter((s) => {
+    const k = `${normalizeText(s.title)}|${normalizeText(s.artist)}`;
+    if (seenTitle.has(k)) return false;
+    seenTitle.add(k);
+    return true;
+  });
   return {
     artistId,
     name: artistName,
     thumbnail: pickBestThumb(a.thumbnails),
-    topSongs: songs.map(mapYTMusicSong).filter(s => s.id && s.title),
+    topSongs,
     albums: mappedAlbums,
   };
 }
@@ -359,6 +386,73 @@ function mapArtistDetailed(a) {
   return { artistId: a.artistId ?? null, name: a.name ?? null, thumbnail: pickBestThumb(a.thumbnails) };
 }
 
+/** Puntúa una pista frente a la query (título exacto, artista, solape). */
+function scoreSearchSong(queryNorm, song, primaryArtistNorm) {
+  const title = normalizeText(song.title || '');
+  const artist = normalizeText(song.artist || '');
+  let sc = 0;
+  if (title === queryNorm) sc += 100;
+  else if (title.startsWith(queryNorm) || queryNorm.startsWith(title)) sc += 70;
+  else if (title.includes(queryNorm) || queryNorm.includes(title)) sc += 45;
+  else {
+    const qt = new Set(queryNorm.split(' ').filter((w) => w.length > 1));
+    const tt = title.split(' ').filter((w) => w.length > 1);
+    const hit = tt.filter((w) => qt.has(w)).length;
+    sc += hit * 12;
+  }
+  if (artist === queryNorm) sc += 90;
+  else if (artistNameMatches(song.artist, queryNorm)) sc += 70;
+  else if (artist.includes(queryNorm) || queryNorm.includes(artist)) sc += 35;
+
+  if (primaryArtistNorm) {
+    if (artist === primaryArtistNorm || artistNameMatches(song.artist, primaryArtistNorm)) sc += 55;
+    else sc -= 25; // en búsqueda de artista, castigar covers/ajenos
+  }
+  // Covers / tributos / karaoke suelen contaminar resultados de artista
+  if (/\b(cover|tribute|karaoke|instrumental|nightcore|8-bit|string quartet|lullaby|baby shark)\b/i.test(`${song.title} ${song.artist}`)) {
+    sc -= 40;
+  }
+  if (song.source === 'soundcloud') sc -= 15;
+  return sc;
+}
+
+/**
+ * Ordena (y opcionalmente filtra) canciones de búsqueda.
+ * - Query ≈ nombre de artista → prioriza/filtra canciones de ese artista.
+ * - Query ≈ título → la canción exacta primero, luego relacionadas.
+ */
+export function rankSearchSongs(query, songs, artists = []) {
+  const nq = normalizeText(query || '');
+  if (!nq || !Array.isArray(songs) || !songs.length) return songs || [];
+
+  // Artista principal: match exacto o muy cercano con la query.
+  let primary = null;
+  for (const a of artists) {
+    const na = normalizeText(a?.name || '');
+    if (!na) continue;
+    if (na === nq || nq === na || artistNameMatches(a.name, query) || artistNameMatches(query, a.name)) {
+      primary = a;
+      break;
+    }
+  }
+  // También si el top song ya es del artista buscado y la query es su nombre.
+  const primaryNorm = primary ? normalizeText(primary.name) : null;
+  const isArtistQuery = Boolean(primaryNorm);
+
+  let list = songs.slice();
+  if (isArtistQuery) {
+    const own = list.filter((s) => artistNameMatches(s.artist, primary.name));
+    const rest = list.filter((s) => !artistNameMatches(s.artist, primary.name));
+    // Primero solo del artista; el resto (género/relacionados) al final.
+    list = [...own, ...rest];
+  }
+
+  return list
+    .map((s, i) => ({ s, i, sc: scoreSearchSong(nq, s, primaryNorm) }))
+    .sort((a, b) => b.sc - a.sc || a.i - b.i)
+    .map((x) => x.s);
+}
+
 /** Búsqueda combinada: canciones + álbumes + artistas (en paralelo). */
 export async function searchAllYTMusic(query, limit = 20) {
   const client = await getClientSafe();
@@ -367,25 +461,27 @@ export async function searchAllYTMusic(query, limit = 20) {
     client.searchAlbums(query),
     client.searchArtists(query),
   ]);
-  let songs = songsR.status === 'fulfilled' ? songsR.value.slice(0, limit).map(mapYTMusicSong).filter(t => t.id && t.title) : [];
+  let songs = songsR.status === 'fulfilled' ? songsR.value.slice(0, Math.max(limit, 30)).map(mapYTMusicSong).filter(t => t.id && t.title) : [];
   const albums = albumsR.status === 'fulfilled' ? albumsR.value.slice(0, 12).map(mapAlbumDetailed).filter(a => a.albumId) : [];
   const artists = artistsR.status === 'fulfilled' ? artistsR.value.slice(0, 12).map(mapArtistDetailed).filter(a => a.artistId) : [];
 
   // Mejora para búsquedas de género/estilo: cuando los resultados de canciones
   // no son representativos (artistas poco conocidos dominan el top), enriquecer
   // con canciones de los artistas más representativos de los álbumes encontrados.
-  // Esto evita que "nu metal" devuelva artistas virales genéricos en vez de
-  // Linkin Park, Slipknot, etc. que sí aparecen en los álbumes del género.
-  if (songs.length > 0 && albums.length > 0) {
-    // Artistas presentes en canciones (los que ya tenemos)
+  // Solo si la query NO parece un artista concreto (evita contaminar "System of a Down").
+  const nq = normalizeText(query);
+  const looksLikeArtist = artists.some((a) => {
+    const na = normalizeText(a.name || '');
+    return na === nq || artistNameMatches(a.name, query);
+  });
+
+  if (!looksLikeArtist && songs.length > 0 && albums.length > 0) {
     const songArtistKeys = new Set(songs.map(s => (s.artist || '').toLowerCase().replace(/\s+/g, '')));
-    // Artistas de los álbumes que NO están en las canciones
     const albumArtists = albums
       .map(a => a.artist).filter(Boolean)
       .filter(a => !songArtistKeys.has(a.toLowerCase().replace(/\s+/g, '')));
     const missingArtists = [...new Set(albumArtists)].slice(0, 4);
     if (missingArtists.length) {
-      // Traer 1-2 canciones por artista representativo del género
       const extra = await Promise.all(missingArtists.map(async (artist) => {
         try {
           const r = await client.searchSongs(`${artist} ${query}`);
@@ -394,7 +490,6 @@ export async function searchAllYTMusic(query, limit = 20) {
       }));
       const extraFlat = extra.flat();
       if (extraFlat.length) {
-        // Intercalar: 1 canción del artista del género entre cada 3 del resultado original
         const merged = [];
         let ei = 0;
         for (let i = 0; i < songs.length; i++) {
@@ -402,11 +497,12 @@ export async function searchAllYTMusic(query, limit = 20) {
           if ((i + 1) % 3 === 0 && ei < extraFlat.length) merged.push(extraFlat[ei++]);
         }
         while (ei < extraFlat.length) merged.push(extraFlat[ei++]);
-        songs = merged.slice(0, limit);
+        songs = merged;
       }
     }
   }
 
+  songs = rankSearchSongs(query, songs, artists).slice(0, limit);
   return { songs, albums, artists };
 }
 
