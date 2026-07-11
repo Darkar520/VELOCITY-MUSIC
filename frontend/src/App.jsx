@@ -54,12 +54,20 @@ class AppErrorBoundary extends React.Component {
   componentDidCatch(e) { console.error('[Velocity] Error capturado:', e); }
   render() {
     if (!this.state.error) return this.props.children;
-    // Solo mostrar fallback si hay un crash real — recarga automática en 3s.
-    setTimeout(() => window.location.reload(), 3000);
+    const msg = this.state.error?.message || String(this.state.error);
     return (
-      <div style={{ minHeight:'100dvh', background:'#04060a', display:'flex', alignItems:'center', justifyContent:'center', fontFamily:'Inter,sans-serif' }}>
-        <div style={{ width:32, height:32, border:'3px solid #10d9a0', borderTopColor:'transparent', borderRadius:'50%', animation:'spin 0.8s linear infinite' }} />
-        <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+      <div style={{ minHeight:'100dvh', background:'#04060a', display:'flex', alignItems:'center', justifyContent:'center', fontFamily:'Inter,sans-serif', padding:24 }}>
+        <div style={{ maxWidth:360, textAlign:'center' }}>
+          <div style={{ fontSize:16, fontWeight:800, color:'#e8eaed', marginBottom:8 }}>Algo salió mal</div>
+          <div style={{ fontSize:12, color:'#9aa0a6', marginBottom:18, wordBreak:'break-word' }}>{msg}</div>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            style={{ background:'#10d9a0', color:'#04060a', border:'none', borderRadius:12, padding:'12px 22px', fontWeight:800, fontSize:13, cursor:'pointer' }}
+          >
+            Reintentar
+          </button>
+        </div>
       </div>
     );
   }
@@ -435,6 +443,8 @@ export default function App() {
   const preloadAudio2Ref = useRef(null);
   // Reintento por pista ante error de reproducción (URL de audio expirada, etc.).
   const playErrorRef = useRef({ id: null, n: 0 });
+  const consecutiveFailsRef = useRef(0);
+  const sustainedPlayRef = useRef(false);
   const playingRef = useRef(false);
   // Debe existir antes del effectCtx de la machine (pause self).
   const selfPauseRef = useRef(false);
@@ -2258,44 +2268,14 @@ export default function App() {
     setInstallEvt(null);
   };
 
-  if (!authed) return <AuthScreen onAuthed={handleAuthed} T={T} />;
-
-  const NAV = [
-    { id:'home', label:'Inicio', I: Icon.Home }, { id:'search', label:'Buscar', I: Icon.Search },
-    { id:'library', label:'Biblioteca', I: Icon.Lib }, { id:'profile', label:'Perfil', I: Icon.User },
-  ];
-
-  const ctx = {
-    track, playing, play, T, favs, toggleFav, playlists, createPlaylist, addToPlaylist, removeFromPlaylist, deletePlaylist,
-    recent, recentSearches, addSearch, removeSearch, homeRows, homeLoading, detailLoading,
-    openPlaylist, setOpenPlaylist, setTab, addToTarget: setAddTarget, onMenu: setMenuTarget,
-    themeKey, setThemeKey, quality, setQuality, glow, setGlow, eq, setEq, settings, setSettings,
-    view, setView, goArtist, goAlbum, goMix, goWrapped, startAiDj, shareTrack, email, onLogout, detailData,
-    installApp, canInstall: !!installEvt, isIOS, isStandalone,
-    addToQueue, removeFromQueue: removeFromQueueToast, download, removeDownload, downloadMany, clearDownloads, getDownloads, downloaded, downloading, openQueue: () => setShowQueue(true),
-    savedAlbums, saveAlbum, unsaveAlbum, isAlbumSaved,
-    savedPlaylists, savePlaylist, unsavePlaylist, isPlaylistSaved,
-    selecting, selection, toggleSelect, startSelection, clearSelection,
-    hydrateTracks, playStats: playStatsRef.current,
-    outputs, sinkId, setOutput: setSinkId,
-    customPalettes, activeCustomId, setActiveCustomId, activePalette, addPalette, updatePalette, deletePalette,
-    displayName, saveProfileName, deleteAccount, avatar, saveAvatar,
-    onboardPrefs, setOnboardPrefs, GENRES: ONBOARDING_GENRES,
-    backendDown,
-    playingFrom, goToPlayingPlaylist,
-    showImport, setShowImport, importJob, setImportJob, startImport, startImportText,
-  };
-
-  // Letra offline solo si está en likes, playlist propia o mezcla/playlist guardada.
+  // Letra offline: hooks SIEMPRE antes de cualquier return condicional (Rules of Hooks).
   const trackInLibrary = Boolean(track && (
     favs.includes(track.id)
     || playlists.some((p) => (p.trackIds || []).includes(track.id))
     || (savedPlaylists || []).some((p) => (p.trackIds || []).includes(track.id))
   ));
-
-  // Primera escucha en biblioteca: descargar letra (preferir sincronizada) en segundo plano.
   useEffect(() => {
-    if (!track?.id || !trackInLibrary) return;
+    if (!authed || !track?.id || !trackInLibrary) return;
     let cancel = false;
     (async () => {
       try {
@@ -2324,7 +2304,35 @@ export default function App() {
       } catch {}
     })();
     return () => { cancel = true; };
-  }, [track?.id, trackInLibrary]);
+  }, [authed, track?.id, trackInLibrary]);
+
+  if (!authed) return <AuthScreen onAuthed={handleAuthed} T={T} />;
+
+  const NAV = [
+    { id:'home', label:'Inicio', I: Icon.Home }, { id:'search', label:'Buscar', I: Icon.Search },
+    { id:'library', label:'Biblioteca', I: Icon.Lib }, { id:'profile', label:'Perfil', I: Icon.User },
+  ];
+
+  const ctx = {
+    track, playing, play, T, favs, toggleFav, playlists, createPlaylist, addToPlaylist, removeFromPlaylist, deletePlaylist,
+    recent, recentSearches, addSearch, removeSearch, homeRows, homeLoading, detailLoading,
+    openPlaylist, setOpenPlaylist, setTab, addToTarget: setAddTarget, onMenu: setMenuTarget,
+    themeKey, setThemeKey, quality, setQuality, glow, setGlow, eq, setEq, settings, setSettings,
+    view, setView, goArtist, goAlbum, goMix, goWrapped, startAiDj, shareTrack, email, onLogout, detailData,
+    installApp, canInstall: !!installEvt, isIOS, isStandalone,
+    addToQueue, removeFromQueue: removeFromQueueToast, download, removeDownload, downloadMany, clearDownloads, getDownloads, downloaded, downloading, openQueue: () => setShowQueue(true),
+    savedAlbums, saveAlbum, unsaveAlbum, isAlbumSaved,
+    savedPlaylists, savePlaylist, unsavePlaylist, isPlaylistSaved,
+    selecting, selection, toggleSelect, startSelection, clearSelection,
+    hydrateTracks, playStats: playStatsRef.current,
+    outputs, sinkId, setOutput: setSinkId,
+    customPalettes, activeCustomId, setActiveCustomId, activePalette, addPalette, updatePalette, deletePalette,
+    displayName, saveProfileName, deleteAccount, avatar, saveAvatar,
+    onboardPrefs, setOnboardPrefs, GENRES: ONBOARDING_GENRES,
+    backendDown,
+    playingFrom, goToPlayingPlaylist,
+    showImport, setShowImport, importJob, setImportJob, startImport, startImportText,
+  };
 
   const playerProps = { track, playing, togglePlay, next, prev, time, dur, seek, vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved: track ? favs.includes(track.id) : false, toggleFav, T, loadingAudio, nextCover, prevCover };
 
@@ -2342,8 +2350,6 @@ export default function App() {
   // fresca (evade caché de borde) y, si vuelve a fallar, salta a la siguiente
   // pista de la cola en lugar de detener todo. Reduce al máximo los cortes.
   const MAX_PLAY_RETRIES = 6;
-  const consecutiveFailsRef = useRef(0);
-  const sustainedPlayRef = useRef(false);
   const handleAudioError = () => {
     selfPauseRef.current = false;
     const a = audioRef.current;
