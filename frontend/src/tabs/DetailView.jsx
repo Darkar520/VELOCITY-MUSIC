@@ -1,15 +1,28 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { api, isAuthed, setOnUnauthorized } from '../api.js';
+import React, { useState, useEffect, useCallback } from 'react';
+import { api } from '../api.js';
 import { FALLBACK_COVER } from '../constants.js';
-import { fmt, hex2rgba, grad, hiResCover, dedupeByTitle, capPerArtist, slimTrack, parseLRC, lyricsOverlapRatio, plainFromSyncedLines, tintedVars } from '../helpers.js';
-import { cacheTrack, cacheTracks, trackById, allCached, loadMeta, loadPlayerState, saveMeta, normalizeTrack } from '../catalog.js';
+import { fmt, hex2rgba, grad, hiResCover, dedupeByTitle } from '../helpers.js';
+import { cacheTrack, cacheTracks, trackById } from '../catalog.js';
 import { Icon } from '../Icons.jsx';
-import { EQViz, Spinner, ProgressRing, DownloadAllButton, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider, SettingCard, ToggleRow, ColorField } from '../components.jsx';
+import { Spinner, DownloadAllButton, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard } from '../components.jsx';
 import { SearchBar } from './SearchBar.jsx';
 import { useListSearch } from './useListSearch.js';
+import { useLibraryStore } from '../store/libraryStore.js';
+import { usePlayerStore } from '../store/playerStore.js';
 
-export function DetailView({ view, ctx }) {
-  const { T, track, playing, play, favs, toggleFav, addToTarget, onMenu, goArtist, goAlbum, setView, detailLoading, detailData, downloaded, downloading, downloadMany, isAlbumSaved, saveAlbum, unsaveAlbum, isPlaylistSaved, savePlaylist, unsavePlaylist, selecting, selection, toggleSelect, startSelection, addToQueue, removeFromQueue } = ctx;
+export function DetailView({ view, T, play, addToTarget, onMenu, goArtist, goAlbum, setView, detailLoading, detailData, downloadMany, saveAlbum, unsaveAlbum, savePlaylist, unsavePlaylist, selecting, selection, toggleSelect, startSelection, addToQueue, removeFromQueue }) {
+  // Library store
+  const favs = useLibraryStore((s) => s.favs);
+  const toggleFavInStore = useLibraryStore((s) => s.toggleFav);
+  const isAlbumSaved = useLibraryStore((s) => s.isAlbumSaved);
+  const isPlaylistSaved = useLibraryStore((s) => s.isPlaylistSaved);
+  // Player store
+  const track = usePlayerStore((s) => s.track);
+  const playing = usePlayerStore((s) => s.playing);
+  const downloaded = usePlayerStore((s) => s.downloaded);
+  const downloading = usePlayerStore((s) => s.downloading);
+  // Wrapper
+  const toggleFav = (id) => toggleFavInStore(id);
   const [showAll, setShowAll] = useState(false);
   // Búsqueda dentro de la vista de detalle (mix, álbum, artista). Hook al nivel
   // superior para cumplir con las Rules of Hooks de React.
@@ -21,7 +34,7 @@ export function DetailView({ view, ctx }) {
   // título+artista normalizados. Resuelve el mismatch entre IDs de YT Music
   // y los IDs con los que se guardó la descarga en IndexedDB.
   const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-  const isDownloaded = React.useCallback((t) => {
+  const isDownloaded = useCallback((t) => {
     if (!t) return false;
     if (downloaded.has(t.id)) return true;
     // Fallback: comparar título+artista normalizados contra las metas cacheadas.
