@@ -1603,8 +1603,12 @@ export default function App() {
     api.updateNowPlaying({ trackId: '', title: '', artist: '', cover: '', position: 0, duration: 0, playing: false, deviceName: '', quality: '' });
     setPlaying(false);
   };
-  // ── Acciones de biblioteca (fav, playlist, search): extraídas a useLibraryActions ──
-  const { toggleFav, createPlaylist, addToPlaylist, removeFromPlaylist, deletePlaylist } = useLibraryActions({ authed, showToast });
+  // ── Acciones de biblioteca (fav, playlist, albums, mixes): extraídas a useLibraryActions ──
+  const {
+    toggleFav, createPlaylist, addToPlaylist, removeFromPlaylist, deletePlaylist,
+    isAlbumSaved, saveAlbum, unsaveAlbum,
+    isPlaylistSaved, savePlaylist, unsavePlaylist,
+  } = useLibraryActions({ authed, showToast });
 
   // Búsquedas recientes (UI local, no libraryStore)
   const addSearch = (term) => setRecentSearches(s => [term, ...s.filter(x => x.toLowerCase() !== term.toLowerCase())].slice(0, 8));
@@ -1780,49 +1784,6 @@ export default function App() {
     if (navigator.share) navigator.share({ title:t.title, text:`${t.title} — ${t.artist}`, url }).catch(()=>{});
     else if (navigator.clipboard) navigator.clipboard.writeText(url).then(() => showToast('Enlace copiado')).catch(() => showToast('No se pudo copiar'));
     else showToast(url);
-  };
-
-  // ── Álbumes guardados en biblioteca ──
-  const isAlbumSaved = (albumId) => savedAlbums.some(a => a.albumId === albumId);
-  const saveAlbum = async (album) => {
-    if (!album || !album.albumId || isAlbumSaved(album.albumId)) return;
-    setSavedAlbums(s => [{ ...album, savedAt: Date.now() }, ...s]);
-    try { await api.saveAlbum(album); showToast('Álbum guardado en tu biblioteca'); }
-    catch { setSavedAlbums(s => s.filter(a => a.albumId !== album.albumId)); showToast('No se pudo guardar el álbum'); }
-  };
-  const unsaveAlbum = async (albumId) => {
-    setSavedAlbums(s => s.filter(a => a.albumId !== albumId));
-    try { await api.unsaveAlbum(albumId); showToast('Álbum quitado'); } catch {}
-  };
-
-  // ── Mixes/Playlists guardados en biblioteca ──
-  const isPlaylistSaved = (pid) => savedPlaylists.some(p => p.playlistId === pid);
-  const savePlaylist = async (mix) => {
-    if (!mix) return;
-    // ID estable: basado en el label del mix (normalizado).
-    const pid = 'mix:' + (mix.label || '').toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').slice(0, 60);
-    if (isPlaylistSaved(pid)) { showToast('Ya está guardado'); return; }
-    // Strip data:/blob: URLs del cover: pueden pesar decenas de KB y causar
-    // errores 413 (body too large) o timeouts en el POST al backend.
-    const rawCover = mix.tracks?.[0]?.cover || '';
-    const cover = (typeof rawCover === 'string' && (rawCover.startsWith('data:') || rawCover.startsWith('blob:'))) ? '' : rawCover;
-    const entry = { playlistId: pid, name: mix.label || 'Mix', cover, trackIds: (mix.tracks || []).map(t => t.id).filter(Boolean) };
-    // Actualización optimista: añadir a estado local inmediatamente.
-    setSavedPlaylists(s => [entry, ...s]);
-    // Subir los metadatos de las pistas del mix para hidratación entre dispositivos.
-    if (mix.tracks?.length) api.saveTracks(mix.tracks.map(slimTrack).filter(Boolean));
-    // Sincronizar con el backend. Si falla, NO revertir: la playlist queda
-    // guardada localmente (localStorage) y se sincronizará en el próximo login.
-    try { await api.savePlaylist(entry); showToast('Mix guardado en tu biblioteca'); }
-    catch {
-      // Reintento único tras 2s (puede ser un timeout transitorio del túnel).
-      setTimeout(() => api.savePlaylist(entry).catch(() => {}), 2000);
-      showToast('Guardado localmente · se sincronizará después');
-    }
-  };
-  const unsavePlaylist = async (playlistId) => {
-    setSavedPlaylists(s => s.filter(p => p.playlistId !== playlistId));
-    try { await api.unsavePlaylist(playlistId); showToast('Mix quitado de biblioteca'); } catch {}
   };
 
   const onLogout = () => {

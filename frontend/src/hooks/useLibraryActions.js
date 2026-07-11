@@ -115,6 +115,63 @@ export function useLibraryActions({ authed, showToast } = {}) {
     catch { showToast?.('No se pudo eliminar'); }
   }, [showToast]);
 
+  // ─── Álbumes guardados ──────────────────────────────────────────
+  const isAlbumSaved = useCallback((albumId) => {
+    return useLibraryStore.getState().savedAlbums.some(a => a.albumId === albumId);
+  }, []);
+
+  const saveAlbum = useCallback(async (album) => {
+    if (!album || !album.albumId) return;
+    const store = useLibraryStore.getState();
+    if (store.savedAlbums.some(a => a.albumId === album.albumId)) return;
+    const entry = { ...album, savedAt: Date.now() };
+    store.saveAlbum(entry);
+    try { await api.saveAlbum(album); showToast?.('Álbum guardado en tu biblioteca'); }
+    catch {
+      store.unsaveAlbum(album.albumId);
+      showToast?.('No se pudo guardar el álbum');
+    }
+  }, [showToast]);
+
+  const unsaveAlbum = useCallback(async (albumId) => {
+    const store = useLibraryStore.getState();
+    store.unsaveAlbum(albumId);
+    try { await api.unsaveAlbum(albumId); showToast?.('Álbum quitado'); }
+    catch {}
+  }, [showToast]);
+
+  // ─── Mixes/Playlists guardados ──────────────────────────────────
+  const isPlaylistSaved = useCallback((pid) => {
+    return useLibraryStore.getState().savedPlaylists.some(p => p.playlistId === pid);
+  }, []);
+
+  const savePlaylist = useCallback(async (mix) => {
+    if (!mix) return;
+    const pid = 'mix:' + (mix.label || '').toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').slice(0, 60);
+    const store = useLibraryStore.getState();
+    if (store.savedPlaylists.some(p => p.playlistId === pid)) {
+      showToast?.('Ya está guardado');
+      return;
+    }
+    const rawCover = mix.tracks?.[0]?.cover || '';
+    const cover = (typeof rawCover === 'string' && (rawCover.startsWith('data:') || rawCover.startsWith('blob:'))) ? '' : rawCover;
+    const entry = { playlistId: pid, name: mix.label || 'Mix', cover, trackIds: (mix.tracks || []).map(t => t.id).filter(Boolean) };
+    store.savePlaylist(entry);
+    if (mix.tracks?.length) api.saveTracks(mix.tracks.map(slimTrack).filter(Boolean)).catch(() => {});
+    try { await api.savePlaylist(entry); showToast?.('Mix guardado en tu biblioteca'); }
+    catch {
+      setTimeout(() => api.savePlaylist(entry).catch(() => {}), 2000);
+      showToast?.('Guardado localmente · se sincronizará después');
+    }
+  }, [showToast]);
+
+  const unsavePlaylist = useCallback(async (playlistId) => {
+    const store = useLibraryStore.getState();
+    store.unsavePlaylist(playlistId);
+    try { await api.unsavePlaylist(playlistId); showToast?.('Mix quitado de biblioteca'); }
+    catch {}
+  }, [showToast]);
+
   return {
     toggleFav,
     createPlaylist,
@@ -122,6 +179,12 @@ export function useLibraryActions({ authed, showToast } = {}) {
     removeFromPlaylist,
     deletePlaylist,
     flushPendingFavs,
+    isAlbumSaved,
+    saveAlbum,
+    unsaveAlbum,
+    isPlaylistSaved,
+    savePlaylist,
+    unsavePlaylist,
   };
 }
 
