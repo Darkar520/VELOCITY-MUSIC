@@ -191,6 +191,42 @@ test('Frontend catalog: normalizeTrack respeta artworkUrl=albumCover forzado (Bu
     'cover no debe ser i.ytimg.com (thumbnail de video)');
 });
 
+// Bug 1 fix adicional: cacheTrack NO debe degradar portada de album canonica
+// (lh3/yt3.googleusercontent) a thumbnail de video (i.ytimg.com) cuando otra
+// fuente (radio/feed) cachea el mismo track ID con video thumb.
+test('Frontend catalog: cacheTrack no degrada album cover a video thumb (Bug 1)', () => {
+  const id = 'test-album-vs-video-' + Date.now();
+  const albumCover = 'https://lh3.googleusercontent.com/somealbum=w1200-h1200-l90-rj';
+  // 1) Album view cachea con portada del album (mi fix en applyTracks).
+  cacheTrack({ id, title: 'T', artist: 'A', cover: albumCover });
+  assert.equal(trackById(id).cover, albumCover);
+
+  // 2) Feed/radio cachea el mismo track con thumbnail de video.
+  const videoThumb = 'https://i.ytimg.com/vi/abc/hqdefault.jpg';
+  cacheTrack({ id, title: 'T', artist: 'A', cover: videoThumb });
+
+  // 3) La portada del album debe prevalecer: no degradar a video thumb.
+  assert.equal(trackById(id).cover, albumCover,
+    'video thumb NO debe pisar portada del album ya cacheada');
+});
+
+test('Frontend catalog: cacheTrack SI acepta album cover que llega despues de video thumb', () => {
+  const id = 'test-video-to-album-' + Date.now();
+  const videoThumb = 'https://i.ytimg.com/vi/xyz/hqdefault.jpg';
+  const albumCover = 'https://yt3.googleusercontent.com/real-album=w1200-h1200';
+
+  // 1) Radio cachea primero con video thumb.
+  cacheTrack({ id, title: 'T', artist: 'A', cover: videoThumb });
+  assert.equal(trackById(id).cover, videoThumb);
+
+  // 2) Album view cachea despues con portada canonica.
+  cacheTrack({ id, title: 'T', artist: 'A', cover: albumCover });
+
+  // 3) Album cover debe ganar (mejorar Siempre permitido).
+  assert.equal(trackById(id).cover, albumCover,
+    'album cover debe poder reemplazar video thumb (mejora permitida)');
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // CATALOG — saveMeta/loadMeta persistencia
 // ─────────────────────────────────────────────────────────────────────────────

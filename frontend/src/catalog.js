@@ -9,11 +9,16 @@ const _catalog = new Map();
 
 const hasCover = (c) => !!c && c !== FALLBACK_COVER;
 const isDataUrl = (c) => typeof c === 'string' && c.startsWith('data:');
+// Miniaturas de video de YouTube (i.ytimg.com/hqdefault/mqdefault/maxresdefault)
+// son captures del video, NO artwork oficial del album. Preferimos siempre la
+// portada canonica del album (lh3/yt3.googleusercontent) sobre estos thumbs.
+const isVideoThumb = (c) => typeof c === 'string' && c.includes('i.ytimg.com');
 export function cacheTrack(t) {
   if (t && t.id) {
     const prev = _catalog.get(t.id);
     if (prev) {
-      // Prioridad de carátula (mayor → menor): data: URL > HTTPS > vacío.
+      // Prioridad de carátula (mayor → menor):
+      //   data: URL (offline IDB) > HTTPS album cover > HTTPS video thumb > vacío.
       // 1. Entrante data: siempre gana a HTTPS/vacío (offline IDB).
       if (isDataUrl(t.cover)) {
         // keep t.cover
@@ -22,6 +27,12 @@ export function cacheTrack(t) {
         t = { ...t, cover: prev.cover };
       } else if (hasCover(prev.cover) && !hasCover(t.cover)) {
         // 3. Nunca degradar una carátula real ya conocida a vacío.
+        t = { ...t, cover: prev.cover };
+      } else if (hasCover(prev.cover) && !isVideoThumb(prev.cover) && isVideoThumb(t.cover)) {
+        // 4. Bug 1 regresion: no degradar portada de album (lh3/yt3.googleusercontent)
+        //    a thumbnail de video (i.ytimg.com). El feed/radio a veces cachea
+        //    tracks con video thumbs y pisaban la portada del album que el
+        //    usuario vio al abrir el album.
         t = { ...t, cover: prev.cover };
       }
     }
