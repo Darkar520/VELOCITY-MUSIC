@@ -9,7 +9,7 @@ import { createRateLimiter } from './middleware/rateLimit.js';
 import { StreamCache } from './services/streamCache.js';
 import { searchTracks, MetadataError } from './services/metadataService.js';
 import { resolve as resolveAudio, ResolveError } from './services/audioResolver.js';
-import { enrichTrack as mbEnrichTrack } from './extractors/musicbrainz.js';
+import { enrichTrack as mbEnrichTrack, enrichAlbum as mbEnrichAlbum, getReleaseTracks as mbGetReleaseTracks } from './extractors/musicbrainz.js';
 import { createStreamProxyHandler } from './services/streamProxy.js';
 import { buildStatus } from './services/status.js';
 import { isFullResolutionAllowed } from './services/resolutionMode.js';
@@ -539,6 +539,11 @@ export function createApp(deps = {}) {
   });
 
   // ---- Álbum (metadatos + pistas reales) ----
+  // MB canónico: tras obtener el álbum de YTM, enriquecemos con MB release.
+  // Si MB trae tracklist canónico, reordenamos las pistas YTM según el
+  // trackNumber de MB y adjuntamos mbid + isLive + trackNumber por pista.
+  // Bug 2 fix: álbumes ya no aparecen desordenados cuando vienen de YTM
+  // en orden por relevancia. Bug 3 prepara: isLive se propaga al frontend.
   app.get('/api/album', async (req, res) => {
     const id = String(req.query.id || '').trim();
     if (!id) return res.status(400).json({ error: 'Se requiere id de álbum.' });
@@ -548,6 +553,8 @@ export function createApp(deps = {}) {
     if (cached) { res.setHeader('X-Cache', 'HIT'); return res.json(cached); }
     try {
       const data = await withTimeout(albumImpl(id), 12000);
+      // MB enrich: ~2-3s extra inline. Cache 45min cubre repeticiones.
+      try { await enrichAlbumWithMB(data); } catch { /* MB caído: devolver tal cual */ }
       detailCacheSet(cacheKey, data);
       res.setHeader('X-Cache', 'MISS');
       return res.json(data);
@@ -555,6 +562,77 @@ export function createApp(deps = {}) {
       return res.status(502).json({ error: 'No se pudo obtener el álbum.' });
     }
   });
+
+  /**
+   * Reordena tracks YTM segun tracklist canonico de MB (Bug 2). Match por
+   * titulo+artista normalize() + duracion +-3s. Adjunta mbid/trackNumber
+   * por pista y isLive/isCompilation al album. Sin match suficiente (MB
+   * caido o query no matchea) -> no toca el campo tracks (backwards compat).
+   */
+  async function enrichAlbumWithMB(data) {
+    if (!data || !Array.isArray(data.tracks) || !data.tracks.length) return;
+    if (!data.artist || !data.name) return;
+    const album = await mbEnrichAlbum({ artist: data.artist, albumName: data.name });
+    if (!album) return;
+    data.isLive = !!album.isLive;
+    data.isCompilation = !!album.isCompilation;
+    data.mbid = album.releaseMBID;
+    if (album.year && !data.year) data.year = album.year;
+    let mbTracks;
+    try { mbTracks = await mbGetReleaseTracks(album.releaseMBID); }
+    catch { return; }
+    if (!Array.isArray(mbTracks) || mbTracks.length < 2) return;
+    const normT = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
+    // Para cada pista YTM, buscar mejor match en MB por titulo+artista (+dur ±3s).
+    const mbUnmatched = new Set(mbTracks.map((mt) => mt.mbid));
+    const matched = []; // { ytmTrack, mbTrack | null }
+    for (const ytt of data.tracks) {
+      const ytTitle = normT(ytt.title);
+      const ytArtist = normT(ytt.artist || data.artist);
+      let best = null;
+      let bestScore = -1;
+      for (const mt of mbTracks) {
+        const mtTitle = normT(mt.title);
+        const mtArtist = normT(mt.artist);
+        let sc = 0;
+        if (mtTitle === ytTitle) sc += 12;
+        else if (mtTitle && (mtTitle.includes(ytTitle) || ytTitle.includes(mtTitle))) sc += 6;
+        if (mtArtist === ytArtist) sc += 8;
+        else if (mtArtist && (mtArtist.includes(ytArtist) || ytArtist.includes(mtArtist))) sc += 4;
+        if (ytt.durationSeconds && mt.durationSeconds) {
+          const delta = Math.abs(ytt.durationSeconds - mt.durationSeconds);
+          if (delta <= 3) sc += 6;
+          else if (delta <= 6) sc += 2;
+        }
+        if (sc > bestScore) { bestScore = sc; best = mt; }
+      }
+      if (best && bestScore >= 8) {
+        mbUnmatched.delete(best.mbid);
+        matched.push({ ytmTrack: ytt, mbTrack: best });
+      } else {
+        matched.push({ ytmTrack: ytt, mbTrack: null });
+      }
+    }
+    // Si al menos el 60% de las pistas YTM matchean con MB, reordenamos.
+    const matchCount = matched.filter((m) => m.mbTrack).length;
+    if (matchCount < Math.ceil(data.tracks.length * 0.6)) return;
+    // Construir nueva lista: primero las matcheadas en orden MB trackNumber,
+    // luego las no-matcheadas al final conservando su orden relativo.
+    const matchedByNumber = matched
+      .filter((m) => m.mbTrack)
+      .sort((a, b) => a.mbTrack.trackNumber - b.mbTrack.trackNumber);
+    const unmatched = matched.filter((m) => !m.mbTrack);
+    const newTracks = [];
+    for (const { ytmTrack, mbTrack } of matchedByNumber) {
+      newTracks.push({
+        ...ytmTrack,
+        mbid: mbTrack.mbid,
+        trackNumber: mbTrack.trackNumber,
+      });
+    }
+    for (const { ytmTrack } of unmatched) newTracks.push(ytmTrack);
+    data.tracks = newTracks;
+  }
 
   // ---- Radio / relacionadas (reproducción tipo Spotify) ----
   app.get('/api/radio', async (req, res) => {
