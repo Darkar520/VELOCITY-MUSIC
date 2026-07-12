@@ -10,7 +10,7 @@ import * as offline from '../offline.js';
 import { dedupeByTitle, capPerArtist, slimTrack } from '../helpers.js';
 import { cacheTrack, trackById, saveMeta, bestCoverFor, normalizeTrack } from '../catalog.js';
 import { isDocumentVisible, shouldFadeIn, isStreamUrlFresh } from '../audioContinuity.js';
-import { runAudioEffects, hardStopAudio, bumpAudioEpoch } from '../audio/runAudioEffects.js';
+import { runAudioEffects, bumpAudioEpoch } from '../audio/runAudioEffects.js';
 import { usePlayerStore } from '../store/playerStore.js';
 
 const QUALITY_MAP = { high: 'high', medium: 'medium', low: 'low', HQ: 'high', Standard: 'medium', FLAC: 'low' };
@@ -318,18 +318,25 @@ export function usePlaybackController(deps) {
     else if (!t.cover && t.artworkUrl) t = { ...t, cover: t.artworkUrl };
     cacheTrack(t); saveMeta();
 
-    // 1) Invalidar plays/seeks pendientes de la pista anterior (timeouts 40–450 ms).
+    // 1) Invalidar plays/seeks de la pista anterior (timeouts schedulePlay).
     const gen = ++playGenRef.current;
     try {
       cancelAnimationFrame(fadeRafRef.current);
       clearTimeout(fadeSafetyRef.current);
     } catch { /* ignore */ }
-    // 2) Hard-stop síncrono del <audio> (pause + vaciar src). Sin esto la
-    //    canción anterior sigue sonando mientras firma/carga la nueva.
-    hardStopAudio(effectCtxRef.current);
-    // TRACK_SET también emite clearSrc; el epoch ya está bumped.
 
+    // 2) Pause suave + epoch. El clearSrc real lo hace TRACK_SET una sola vez
+    //    (doble hardStop + bump extra mataba el schedulePlay de STREAM_READY).
     const a = audioRef.current;
+    if (a) {
+      try {
+        if (selfPauseRef) selfPauseRef.current = true;
+        a.pause();
+        if (selfPauseRef) selfPauseRef.current = false;
+      } catch { /* ignore */ }
+    }
+    bumpAudioEpoch(effectCtxRef.current);
+
     const visible = isDocumentVisible();
     if (a && shouldFadeIn(visible)) { a.volume = 0; pendingFadeRef.current = true; }
     else { if (a) a.volume = vol; pendingFadeRef.current = false; }
@@ -340,12 +347,11 @@ export function usePlaybackController(deps) {
 
     if (objUrlRef.current) { URL.revokeObjectURL(objUrlRef.current); objUrlRef.current = null; }
 
-    // TRACK_SET: live/session=0, clearSrc, ensureStream. Arranque siempre desde 0
-    // (salvo resume de sesión/yield en la MISMA pista vía USER_PLAY, no play()).
+    // TRACK_SET: live/session=0, clearSrc (hardStop), ensureStream. Seek 0.
+    // No volver a bumpAudioEpoch aquí: STREAM_READY del peek/sign debe
+    // schedulePlay con el epoch del clearSrc.
     dispatchAudio({ type: 'TRACK_SET', trackId: t.id, intent: 'play' });
     setTime(0);
-    // Tras clearSrc del machine, un nuevo epoch para el STREAM_READY que viene.
-    bumpAudioEpoch(effectCtxRef.current);
 
     if (downloaded.has(t.id)) {
       const trackWithQuality = { ...t, url: api.streamUrl(sp) };

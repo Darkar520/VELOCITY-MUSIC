@@ -7,6 +7,8 @@ import {
   runAudioEffects,
   hardStopAudio,
   bumpAudioEpoch,
+  hasRealMediaSrc,
+  applyMediaSrc,
 } from '../frontend/src/audio/runAudioEffects.js';
 
 test('runAudioEffects: pause + syncReact + mediaSession', () => {
@@ -47,7 +49,7 @@ test('runAudioEffects: pause + syncReact + mediaSession', () => {
   assert.equal(selfPauseRef.current, false, 'selfPause liberado tras pause');
 });
 
-test('runAudioEffects: clearSrc y ensureStream delegan', () => {
+test('runAudioEffects: clearSrc y ensureStream delegan (sin load vacío)', () => {
   let src = 'old';
   let ensured = null;
   let paused = false;
@@ -59,6 +61,7 @@ test('runAudioEffects: clearSrc y ensureStream delegan', () => {
       removeAttribute() {},
       currentTime: 55,
       readyState: 4,
+      src: 'https://cdn.example/a.mp3',
     },
   };
   runAudioEffects(
@@ -77,7 +80,33 @@ test('runAudioEffects: clearSrc y ensureStream delegan', () => {
   assert.equal(src, null);
   assert.equal(ensured, 't1');
   assert.equal(paused, true, 'clearSrc debe pausar el elemento');
-  assert.equal(loaded, true, 'clearSrc debe load() tras vaciar src');
+  assert.equal(loaded, false, 'clearSrc NO debe load() sin src (dispara onError)');
+});
+
+test('hasRealMediaSrc rechaza vacío y location.href', () => {
+  assert.equal(hasRealMediaSrc(null), false);
+  assert.equal(hasRealMediaSrc({ src: '', currentSrc: '', getAttribute: () => null }), false);
+  assert.equal(hasRealMediaSrc({
+    src: 'https://cdn.example/x.mp3',
+    currentSrc: 'https://cdn.example/x.mp3',
+    getAttribute: () => 'https://cdn.example/x.mp3',
+  }), true);
+  assert.equal(hasRealMediaSrc({
+    src: '/api/stream-proxy?x=1',
+    currentSrc: '',
+    getAttribute: () => '/api/stream-proxy?x=1',
+  }), true);
+});
+
+test('applyMediaSrc escribe src en el DOM de inmediato', () => {
+  let reactSrc = null;
+  const el = { src: '', getAttribute: () => '' };
+  applyMediaSrc(
+    { setPlaySrc: (u) => { reactSrc = u; }, audioRef: { current: el } },
+    'https://cdn.example/b.mp3',
+  );
+  assert.equal(reactSrc, 'https://cdn.example/b.mp3');
+  assert.equal(el.src, 'https://cdn.example/b.mp3');
 });
 
 test('hardStopAudio + epoch invalida schedulePlay de la pista anterior', async () => {
@@ -90,6 +119,7 @@ test('hardStopAudio + epoch invalida schedulePlay de la pista anterior', async (
       pause() {},
       load() { this.src = ''; this.currentSrc = ''; },
       removeAttribute() { this.src = ''; this.currentSrc = ''; },
+      getAttribute() { return this.src; },
       play() { playCalls += 1; return Promise.resolve(); },
       volume: 1,
       readyState: 4,
@@ -112,6 +142,7 @@ test('hardStopAudio + epoch invalida schedulePlay de la pista anterior', async (
   hardStopAudio(ctx);
   assert.equal(src, null);
   assert.ok((ctx._audioEpoch || 0) >= 1);
+  assert.equal(ctx._suppressAudioError, true, 'suprimir onError tras clearSrc');
 
   await new Promise((r) => setTimeout(r, 500));
   assert.equal(playCalls, 0, 'schedulePlay de la pista anterior no debe llamar play()');

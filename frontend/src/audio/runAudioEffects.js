@@ -19,28 +19,60 @@ export function bumpAudioEpoch(ctx) {
 }
 
 /**
- * Corta el audio actual de forma síncrona (pause + quitar src + load).
- * React setPlaySrc(null) es async; sin esto la pista anterior sigue sonando.
+ * ¿El elemento tiene un src de media real (no vacío / no la URL de la página)?
+ */
+export function hasRealMediaSrc(a) {
+  if (!a) return false;
+  const src = (a.currentSrc || a.getAttribute('src') || a.src || '').trim();
+  if (!src) return false;
+  if (typeof location !== 'undefined' && src === location.href) return false;
+  // data: / blob: / http(s) / relative API paths
+  return /^(blob:|data:|https?:|\/)/i.test(src) || src.includes('/api/') || src.includes('stream');
+}
+
+/**
+ * Corta el audio actual de forma síncrona (pause + quitar src).
+ * IMPORTANTE: no llamar a.load() sin src — en Chrome/Safari dispara
+ * onError (MEDIA_ERR_SRC_NOT_SUPPORTED) y el App lo interpreta como
+ * “no se pudo reproducir”.
  */
 export function hardStopAudio(ctx) {
   if (!ctx) return;
   bumpAudioEpoch(ctx);
+  ctx._suppressAudioError = true;
   if (ctx.selfPauseRef) ctx.selfPauseRef.current = true;
   const a = ctx.audioRef?.current;
   try {
     if (a) {
-      a.pause();
-      // currentTime=0 antes de vaciar src evita “pegar” posición al nuevo media.
-      try { a.currentTime = 0; } catch { /* ignore */ }
+      try { a.pause(); } catch { /* ignore */ }
       try {
+        // Quitar src sin load(): evita error event en elemento vacío.
         a.removeAttribute('src');
-        a.load();
+        // Algunos browsers dejan a.src = location.href; forzar vacío lógico.
+        try { a.src = ''; } catch { /* ignore */ }
       } catch { /* ignore */ }
     }
   } catch { /* ignore */ }
   if (ctx.selfPauseRef) ctx.selfPauseRef.current = false;
   if (typeof ctx.setPlaySrc === 'function') ctx.setPlaySrc(null);
   if (typeof ctx.setTime === 'function') ctx.setTime(0);
+  // Liberar el flag en el siguiente tick (tras el error sintético si lo hubo).
+  setTimeout(() => {
+    if (ctx) ctx._suppressAudioError = false;
+  }, 0);
+}
+
+/** Asigna src al DOM de inmediato (React setPlaySrc es async en el siguiente paint). */
+export function applyMediaSrc(ctx, url) {
+  if (!ctx || !url) return;
+  if (typeof ctx.setPlaySrc === 'function') ctx.setPlaySrc(url);
+  const a = ctx.audioRef?.current;
+  if (!a) return;
+  try {
+    const cur = a.getAttribute('src') || '';
+    if (cur === url || a.src === url) return;
+    a.src = url;
+  } catch { /* ignore */ }
 }
 
 export function runAudioEffects(effects, ctx) {
@@ -64,11 +96,10 @@ export function runAudioEffects(effects, ctx) {
         break;
       }
       case 'setSrc': {
-        if (typeof ctx.setPlaySrc === 'function' && e.url) ctx.setPlaySrc(e.url);
+        if (e.url) applyMediaSrc(ctx, e.url);
         break;
       }
       case 'clearSrc': {
-        // hard stop síncrono: no dejar la URL anterior en el elemento
         hardStopAudio(ctx);
         break;
       }
@@ -142,10 +173,7 @@ function schedulePlay(ctx, seekHint) {
     const a = ctx.audioRef?.current;
     if (!a) return;
     // Sin src real no reintentar play (evita reanimar elemento vacío post-clearSrc).
-    const src = a.currentSrc || a.src || '';
-    if (!src) return;
-    // Browsers resuelven src vacío a la URL de la página.
-    if (typeof location !== 'undefined' && src === location.href) return;
+    if (!hasRealMediaSrc(a)) return;
 
     const seekTo = ctx._pendingSeek;
     if (seekTo != null && Number.isFinite(seekTo) && a.readyState >= 1) {
@@ -160,7 +188,14 @@ function schedulePlay(ctx, seekHint) {
       a.volume = ctx.vol;
     }
 
-    const p = a.play();
+    let p;
+    try {
+      p = a.play();
+    } catch (err) {
+      if ((ctx._audioEpoch || 0) !== epoch) return;
+      if (typeof ctx.onPlayFail === 'function') ctx.onPlayFail(err);
+      return;
+    }
     if (p && p.then) {
       p.then(() => {
         if ((ctx._audioEpoch || 0) !== epoch) {
@@ -185,9 +220,10 @@ function schedulePlay(ctx, seekHint) {
   };
 
   // setSrc de React es async: reintentos cortos (epoch los invalida al cambiar pista)
-  setTimeout(attempt, 40);
-  setTimeout(attempt, 180);
-  setTimeout(attempt, 450);
+  setTimeout(attempt, 0);
+  setTimeout(attempt, 50);
+  setTimeout(attempt, 150);
+  setTimeout(attempt, 400);
 }
 
 /** Aplicar seek pendiente cuando llega metadata (onLoadedMetadata / onCanPlay). */

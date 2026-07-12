@@ -1479,8 +1479,13 @@ export default function App() {
   // pista de la cola en lugar de detener todo. Reduce al máximo los cortes.
   const MAX_PLAY_RETRIES = 6;
   const handleAudioError = () => {
-    selfPauseRef.current = false;
+    // Ignorar errores sintéticos al vaciar src (cambio de pista / clearSrc).
+    // Si no, el empty-load dispara “No se pudo reproducir esta pista”.
+    if (effectCtxRef.current?._suppressAudioError) return;
     const a = audioRef.current;
+    if (a && !(a.currentSrc || a.getAttribute('src'))) return;
+
+    selfPauseRef.current = false;
     const cur = track?.id;
     if (!a || !cur) {
       dispatchAudio({ type: 'PLAY_FAILED', reason: 'no-el' });
