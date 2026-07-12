@@ -65,6 +65,8 @@ export function usePlaybackController(deps) {
   const ensureStreamFnRef = useRef(async () => {});
   const playGenRef = useRef(0);
   const prefetchedRef = useRef(new Set());
+  /** Fallos de firma por trackId — evita bucle PLAY_FAILED↔ensureStream y toasts falsos. */
+  const signFailRef = useRef({ id: null, n: 0 });
 
   const getMachine = useCallback(() => usePlayerStore.getState().getMachineState(), []);
   const patchMachine = useCallback((p) => usePlayerStore.getState().patchMachine(p), []);
@@ -197,6 +199,7 @@ export function usePlaybackController(deps) {
   ensureStreamFnRef.current = async (trackId) => {
     const t = trackById(trackId) || (trackRef.current?.id === trackId ? trackRef.current : null);
     if (!t) {
+      // No toast: play() cacheTrack suele llegar ya; reintento silencioso vía machine.
       dispatchAudio({ type: 'PLAY_FAILED', reason: 'no-track' });
       return;
     }
@@ -209,24 +212,38 @@ export function usePlaybackController(deps) {
           if (objUrlRef.current) { try { URL.revokeObjectURL(objUrlRef.current); } catch { /* ignore */ } }
           const u = URL.createObjectURL(b);
           objUrlRef.current = u;
+          signFailRef.current = { id: null, n: 0 };
           dispatchAudio({ type: 'STREAM_READY', trackId, url: u });
           return;
         }
       }
-      // Calentar resolve en paralelo (primera pista: menos espera en stream-proxy).
       api.prefetchStream(sp);
       let url = api.peekStreamUrl(sp, 45);
       if (!url) url = await api.ensureStreamUrl(sp);
       if (getMachine().trackId !== trackId || getMachine().intent !== 'play') return;
       setTrack((prev) => (prev && prev.id === trackId ? { ...prev, url } : prev));
+      signFailRef.current = { id: null, n: 0 };
       dispatchAudio({ type: 'STREAM_READY', trackId, url });
     } catch (err) {
-      if (getMachine().trackId !== trackId) return;
-      dispatchAudio({ type: 'PLAY_FAILED', reason: 'sign' });
+      if (getMachine().trackId !== trackId || getMachine().intent !== 'play') return;
+      const n = signFailRef.current.id === trackId ? signFailRef.current.n + 1 : 1;
+      signFailRef.current = { id: trackId, n };
+      // 1 reintento silencioso (la canción suele arrancar en el 2º intento).
+      if (n <= 1) {
+        await new Promise((r) => setTimeout(r, 280));
+        if (getMachine().trackId === trackId && getMachine().intent === 'play') {
+          return ensureStreamFnRef.current(trackId);
+        }
+        return;
+      }
+      // Fallo real tras reintento silencioso.
+      // No PLAY_FAILED aquí: el machine re-dispara ensureStream y armaba un bucle
+      // + toast fantasma mientras el 2º intento (u otra ruta) ya reproducía.
       if (err?.status === 401) {
         showToast?.('Sesión caducada. Vuelve a iniciar sesión.');
+        dispatchAudio({ type: 'USER_PAUSE' });
       } else {
-        showToast?.('No se pudo preparar el audio. Toca de nuevo.');
+        setLoadingAudio?.(false);
       }
     }
   };
@@ -387,28 +404,16 @@ export function usePlaybackController(deps) {
     setTrack(trackWithQuality);
     afterPlaySideEffects(t, trackWithQuality, initialQueue, qParam, opts);
 
-    // Firma + warm resolve YA (TRACK_SET también llama ensureStream; inflight dedup).
-    // Prefetch reduce el cold-start de yt-dlp en la 1ª canción.
+    // UN solo camino de firma: TRACK_SET → ensureStream (arriba).
+    // Si ya hay firma en caché, STREAM_READY inmediato (sin 2ª petición ni toast).
     api.prefetchStream(sp);
     const peeked = api.peekStreamUrl(sp, 45);
     if (peeked) {
       dispatchAudio({ type: 'STREAM_READY', trackId: t.id, url: peeked });
-      return;
     }
-    api.ensureStreamUrl(sp).then((signedUrl) => {
-      if (playGenRef.current !== gen || getMachine().trackId !== t.id) return;
-      setTrack({ ...t, url: signedUrl });
-      dispatchAudio({ type: 'STREAM_READY', trackId: t.id, url: signedUrl });
-      try {
-        localStorage.setItem('velocity.player', JSON.stringify({ track: { ...t, url: signedUrl }, queue: initialQueue, t: 0 }));
-      } catch { /* ignore */ }
-    }).catch((err) => {
-      if (playGenRef.current !== gen) return;
-      // ensureStream del machine puede ya haber tostado; no duplicar si gen cambió.
-      dispatchAudio({ type: 'PLAY_FAILED', reason: 'sign' });
-      if (err?.status === 401) showToast?.('Sesión caducada. Vuelve a iniciar sesión.');
-      else showToast?.('No se pudo preparar el audio. Toca de nuevo.');
-    });
+    // Si no hay peek: ensureStream del TRACK_SET firma y hace STREAM_READY.
+    // No llamar ensureStreamUrl aquí (duplicaba firma → un catch tocaba toast
+    // aunque el otro camino arrancara el audio).
   }, [
     setPlayingFrom, audioRef, fadeRafRef, fadeSafetyRef, selfPauseRef, pendingFadeRef,
     vol, setQueue, quality, streamParamsFor, objUrlRef, dispatchAudio, setTime, downloaded,
