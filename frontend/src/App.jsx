@@ -1094,7 +1094,7 @@ export default function App() {
     toggleFav, createPlaylist, addToPlaylist, removeFromPlaylist, deletePlaylist,
     isAlbumSaved, saveAlbum, unsaveAlbum,
     isPlaylistSaved, savePlaylist, unsavePlaylist,
-  } = useLibraryActions({ authed, showToast });
+  } = useLibraryActions({ authed, showToast, download, downloadMany });
 
   // Búsquedas recientes (UI local, no libraryStore)
   const addSearch = (term) => setRecentSearches(s => [term, ...s.filter(x => x.toLowerCase() !== term.toLowerCase())].slice(0, 8));
@@ -1438,7 +1438,9 @@ export default function App() {
     setInstallEvt(null);
   };
 
-  // Letra offline: hooks SIEMPRE antes de cualquier return condicional (Rules of Hooks).
+  // Letra: se MUESTRA en cualquier pista (ExpandedPlayer online).
+  // Offline (IDB) solo biblioteca — backfill al reproducir si ya está en Me gusta /
+  // playlist / mezcla. El pack principal se dispara al AÑADIR (useLibraryActions).
   const trackInLibrary = Boolean(track && (
     favs.includes(track.id)
     || playlists.some((p) => (p.trackIds || []).includes(track.id))
@@ -1447,34 +1449,11 @@ export default function App() {
   useEffect(() => {
     if (!authed || !track?.id || !trackInLibrary) return;
     let cancel = false;
-    (async () => {
-      try {
-        const existing = await offline.getLyrics(track.id);
-        if (cancel) return;
-        if (existing?.synced) return; // ya tenemos LRC
-        const base = {
-          artist: track.artist,
-          title: track.title,
-          album: track.album,
-          duration: track.durationSeconds,
-          id: track.id,
-        };
-        // Intento sync primero; si no, plain.
-        let d = await api.lyrics({ ...base, sync: true }).catch(() => null);
-        if (cancel) return;
-        if (!d?.synced) d = await api.lyrics(base).catch(() => null);
-        if (cancel || !d) return;
-        if (d.synced || d.plain) {
-          await offline.saveLyrics(track.id, {
-            synced: d.synced || null,
-            plain: d.plain || null,
-            source: d.source,
-          });
-        }
-      } catch {}
-    })();
+    import('./offlineLibrary.js').then(({ ensureLyricsOffline }) => {
+      if (!cancel) ensureLyricsOffline(track);
+    }).catch(() => {});
     return () => { cancel = true; };
-  }, [authed, track?.id, trackInLibrary]);
+  }, [authed, track?.id, trackInLibrary, track]);
 
   if (!authed) return <AuthScreen onAuthed={handleAuthed} T={T} />;
 

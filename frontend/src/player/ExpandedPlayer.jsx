@@ -66,7 +66,8 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
         if (prev.status === 'ok' && prev.synced.length && !synced.length) return prev;
         return { status: 'ok', synced, plain: plain.length ? plain : prev.plain || [], source: d.source };
       });
-      // Offline: solo si la canción está en biblioteca (likes / playlist / mezcla guardada).
+      // Offline: SOLO biblioteca (Me gusta / playlist / mezcla).
+      // Reproducir sin guardar → letra online, sin escribir IndexedDB.
       if (inLibrary && track.id && (synced.length || plain.length)) {
         const lrcRaw = d.synced || null;
         offline.saveLyrics(track.id, {

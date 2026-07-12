@@ -17,10 +17,16 @@ import { api } from '../api.js';
 import { trackById } from '../catalog.js';
 import { slimTrack } from '../helpers.js';
 import { useLibraryStore } from '../store/libraryStore.js';
+import { scheduleLibraryOfflineSync } from '../offlineLibrary.js';
 
 const PENDING_FAVS_KEY = 'velocity.pendingFavs';
 
-export function useLibraryActions({ authed, showToast } = {}) {
+/**
+ * @param {{ authed?: boolean, showToast?: function, download?: function, downloadMany?: function }} opts
+ * download/downloadMany: al añadir a Me gusta / playlist / mezcla se cachea
+ * letra offline + se descarga audio (no al meramentear reproducir).
+ */
+export function useLibraryActions({ authed, showToast, download, downloadMany } = {}) {
   const pendingFavsRef = useRef(null);
   if (!pendingFavsRef.current) {
     pendingFavsRef.current = new Map(); // id → 'add' | 'remove'
@@ -59,12 +65,21 @@ export function useLibraryActions({ authed, showToast } = {}) {
   // Sincronizar al iniciar sesión
   useEffect(() => { if (authed) flushPendingFavs(); }, [authed, flushPendingFavs]);
 
+  const offlinePack = useCallback((ids) => {
+    scheduleLibraryOfflineSync(ids, { download, downloadMany });
+  }, [download, downloadMany]);
+
   const toggleFav = useCallback(async (id) => {
     const store = useLibraryStore.getState();
     const has = store.favs.includes(id);
     // Optimistic update via store wrapper
     store.toggleFav(id);
-    if (!has) { const tk = trackById(id); if (tk) api.saveTracks([slimTrack(tk)]).catch(() => {}); }
+    if (!has) {
+      const tk = trackById(id);
+      if (tk) api.saveTracks([slimTrack(tk)]).catch(() => {});
+      // Me gusta → offline (letra + audio). Quitar like no borra descargas.
+      offlinePack([id]);
+    }
     try {
       has ? await api.removeFavorite(id) : await api.addFavorite(id);
       pendingFavsRef.current.delete(id);
@@ -78,7 +93,7 @@ export function useLibraryActions({ authed, showToast } = {}) {
         showToast?.('No se pudo actualizar Me gusta');
       }
     }
-  }, [showToast]);
+  }, [showToast, offlinePack]);
 
   const createPlaylist = useCallback(async (name) => {
     const store = useLibraryStore.getState();
@@ -97,9 +112,10 @@ export function useLibraryActions({ authed, showToast } = {}) {
     store.addToPlaylist(pid, tid);
     const tk = trackById(tid);
     if (tk) api.saveTracks([slimTrack(tk)]).catch(() => {});
+    offlinePack([tid]);
     try { await api.addToPlaylist(pid, tid); }
     catch { showToast?.('No se pudo añadir'); }
-  }, [showToast]);
+  }, [showToast, offlinePack]);
 
   const removeFromPlaylist = useCallback(async (pid, tid) => {
     const store = useLibraryStore.getState();
@@ -158,12 +174,14 @@ export function useLibraryActions({ authed, showToast } = {}) {
     const entry = { playlistId: pid, name: mix.label || 'Mix', cover, trackIds: (mix.tracks || []).map(t => t.id).filter(Boolean) };
     store.savePlaylist(entry);
     if (mix.tracks?.length) api.saveTracks(mix.tracks.map(slimTrack).filter(Boolean)).catch(() => {});
-    try { await api.savePlaylist(entry); showToast?.('Mix guardado en tu biblioteca'); }
+    // Mezcla guardada → offline de todas sus pistas (letra + audio)
+    if (entry.trackIds?.length) offlinePack(entry.trackIds);
+    try { await api.savePlaylist(entry); showToast?.('Mix guardado · descargando offline…'); }
     catch {
       setTimeout(() => api.savePlaylist(entry).catch(() => {}), 2000);
       showToast?.('Guardado localmente · se sincronizará después');
     }
-  }, [showToast]);
+  }, [showToast, offlinePack]);
 
   const unsavePlaylist = useCallback(async (playlistId) => {
     const store = useLibraryStore.getState();
