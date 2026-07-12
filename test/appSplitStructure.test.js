@@ -158,3 +158,15 @@ test('AppErrorBoundary does not auto-reload in a silent spinner loop', () => {
   assert.match(app, /AppErrorBoundary/);
   assert.match(app, /Reintentar|reintentar|reload/i);
 });
+
+test('App wires playerStore and libraryStore via bindings (no dual useState mirrors)', () => {
+  const app = readFileSync(src('App.jsx'), 'utf8');
+  assert.match(app, /usePlayerStoreBindings/);
+  assert.match(app, /useLibraryStoreBindings/);
+  // No reintroducir mirror useEffect de track→store
+  assert.doesNotMatch(app, /usePlayerStore\.setState\(\{\s*track:\s*mirrored/);
+  assert.ok(existsSync(src('hooks', 'usePlayerStoreBindings.js')));
+  assert.ok(existsSync(src('hooks', 'useLibraryStoreBindings.js')));
+  assert.ok(existsSync(src('store', 'playerStore.js')));
+  assert.ok(existsSync(src('store', 'libraryStore.js')));
+});

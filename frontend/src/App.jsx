@@ -24,6 +24,8 @@ import { useLibrarySync } from './hooks/useLibrarySync.js';
 import { useHomeFeed } from './hooks/useHomeFeed.js';
 import { useLibraryActions } from './hooks/useLibraryActions.js';
 import { useDownloads } from './hooks/useDownloads.js';
+import { usePlayerStoreBindings } from './hooks/usePlayerStoreBindings.js';
+import { useLibraryStoreBindings } from './hooks/useLibraryStoreBindings.js';
 import { useLibraryStore } from './store/libraryStore.js';
 import { usePlayerStore } from './store/playerStore.js';
 import { Icon } from './Icons.jsx';
@@ -132,63 +134,27 @@ export default function App() {
     try { const p = await api.updateProfile({ avatar: id }); setAvatar(p.avatar || ''); localStorage.setItem('velocity.avatar', p.avatar || ''); } catch {}
   };
 
-  // reproducción
+  // reproducción — fuente de verdad: playerStore (sin useState mirror)
   const [tab, setTab] = useState('home');
-  const [track, setTrack] = useState(() => {
-    const s = loadPlayerState();
-    if (!s || !s.track) return null;
-    // Enriquecer con el cover del catálogo (loadMeta ya lo pobló): el estado
-    // guardado puede tener cover vacío si saveMeta lo strippeó (data:/blob:).
-    const cached = trackById(s.track.id);
-    if (cached && cached.cover && !s.track.cover) return { ...s.track, cover: cached.cover };
-    return s.track;
-  });
-  const [playing, setPlaying] = useState(false);
-  const [time, setTime] = useState(() => { const s = loadPlayerState(); return s ? (s.t || 0) : 0; });
-  const [dur, setDur] = useState(0);
-  const [vol, setVol] = useState(0.85);
-  const [expanded, setExpanded] = useState(false);
-  const [shuffle, setShuffle] = useState(false);
-  const [repeat, setRepeat] = useState(false);
-  const [queue, setQueue] = useState(() => { const s = loadPlayerState(); return s ? (Array.isArray(s.queue) && s.queue.length ? s.queue : [s.track.id]) : []; });
-  const [loadingAudio, setLoadingAudio] = useState(false);
-  const [downloaded, setDownloaded] = useState(() => new Set());
-  const [downloading, setDownloading] = useState(() => new Set());
-  // No restaurar URL firmada caducada: dispara error→play auto→UI "sonando" sin audio (A13).
-  const [playSrc, setPlaySrc] = useState(() => {
-    const s = loadPlayerState();
-    if (!s || !s.track) return null;
-    const u = s.track.url || null;
-    return isStreamUrlFresh(u) ? u : null;
-  });
-  // Mirror App playback → playerStore (MiniPlayerBar/PlayerBar leen el store o props).
-  // Siempre reinyectar la mejor carátula conocida (catálogo / offline).
-  useEffect(() => {
-    const mirrored = track
-      ? { ...track, cover: bestCoverFor(track.id, track.cover || track.artworkUrl || '') || track.cover || '' }
-      : null;
-    usePlayerStore.setState({
-      track: mirrored,
-      playing: !!playing,
-      loadingAudio: !!loadingAudio,
-      time: time || 0,
-      duration: dur || 0,
-      volume: vol,
-      shuffle: !!shuffle,
-      repeat: !!repeat,
-      queue: Array.isArray(queue) ? queue : [],
-      playSrc: playSrc || null,
-    });
-    // Si el track de App no tenía cover y el catálogo sí, enriquecer App (UI consistente).
-    if (track && mirrored?.cover && mirrored.cover !== track.cover) {
-      setTrack((prev) => (prev && prev.id === track.id ? { ...prev, cover: mirrored.cover } : prev));
-    }
-  }, [track, playing, loadingAudio, time, dur, vol, shuffle, repeat, queue, playSrc]);
-  // ── Dispositivos de salida (altavoz, audífonos, Bluetooth) ──
-  const [outputs, setOutputs] = useState([]);
-  const [sinkId, setSinkId] = useState('');
-  // ── Now Playing: estado de otro dispositivo ──
-  const [remotePlaying, setRemotePlaying] = useState(null);
+  const {
+    track, setTrack,
+    playing, setPlaying,
+    time, setTime,
+    dur, setDur,
+    vol, setVol,
+    expanded, setExpanded,
+    shuffle, setShuffle,
+    repeat, setRepeat,
+    queue, setQueue,
+    loadingAudio, setLoadingAudio,
+    playSrc, setPlaySrc,
+    mediaInterrupted, setMediaInterrupted,
+    outputs, setOutputs,
+    sinkId, setSinkId,
+    remotePlaying, setRemotePlaying,
+    downloaded, setDownloaded,
+    downloading, setDownloading,
+  } = usePlayerStoreBindings();
   const sseRef = useRef(null);
   const objUrlRef = useRef(null);
   // Espejo de session (A12); la fuente de verdad es audioMachine.
@@ -225,58 +191,19 @@ export default function App() {
   // arrancar con un feed 100% personalizado desde el día 1.
   const [onboardPrefs, setOnboardPrefs] = usePersisted('velocity.onboard', null);
 
-  // datos del backend — fuente de verdad: libraryStore.
-  // Los useState locales son mirrors para los efectos internos de App.jsx que
-  // aún los referencian (feed, persistencia). Se sincronizan bidireccionalmente.
-  // Cuando el último efecto que los usa se migre, estos useState desaparecen.
-  const libStore = useLibraryStore;
-  const [favs, setFavsState] = useState(() => libStore.getState().favs);
-  const [playlists, setPlaylistsState] = useState(() => libStore.getState().playlists);
-  const [recent, setRecentState] = useState(() => libStore.getState().recent);
-  const [savedAlbums, setSavedAlbumsState] = useState(() => libStore.getState().savedAlbums);
-  const [savedPlaylists, setSavedPlaylistsState] = useState(() => libStore.getState().savedPlaylists);
-  // homeRows / homeLoading / feedNonce viven en libraryStore (useHomeFeed los escribe).
-  // NO usar usePersisted local que pise el store con un snapshot viejo a medias.
-  const homeRows = useLibraryStore((s) => s.homeRows);
-  const homeLoading = useLibraryStore((s) => s.homeLoading);
-
-  // Wrappers que escriben store + state local
-  const setFavs = (v) => { const arr = Array.isArray(v) ? v : []; libStore.getState().setFavs(arr); setFavsState(arr); };
-  const setPlaylists = (v) => { const arr = Array.isArray(v) ? v : []; libStore.getState().setPlaylists(arr); setPlaylistsState(arr); };
-  const setRecent = (v) => { const arr = Array.isArray(v) ? v : []; libStore.getState().setRecent(arr); setRecentState(arr); };
-  const setSavedAlbums = (v) => { const arr = Array.isArray(v) ? v : []; libStore.getState().setSavedAlbums(arr); setSavedAlbumsState(arr); };
-  const setSavedPlaylists = (v) => { const arr = Array.isArray(v) ? v : []; libStore.getState().setSavedPlaylists(arr); setSavedPlaylistsState(arr); };
-
-  // Suscripción: si el store cambia desde afuera (ej: useLibrarySync hidrata),
-  // sincronizar los useState locales.
-  useEffect(() => {
-    const unsub = libStore.subscribe((s) => {
-      if (s.favs !== favs) setFavsState(s.favs);
-      if (s.playlists !== playlists) setPlaylistsState(s.playlists);
-      if (s.recent !== recent) setRecentState(s.recent);
-      if (s.savedAlbums !== savedAlbums) setSavedAlbumsState(s.savedAlbums);
-      if (s.savedPlaylists !== savedPlaylists) setSavedPlaylistsState(s.savedPlaylists);
-    });
-    return unsub;
-  }, [favs, playlists, recent, savedAlbums, savedPlaylists]);
+  // Biblioteca — fuente de verdad: libraryStore (sin mirrors useState)
+  const {
+    favs, setFavs,
+    playlists, setPlaylists,
+    recent, setRecent,
+    savedAlbums, setSavedAlbums,
+    savedPlaylists, setSavedPlaylists,
+    homeRows, homeLoading, setHomeRows,
+    catVer, setCatVer,
+  } = useLibraryStoreBindings();
 
   // Hook de sincronización con backend (reemplaza los 3 useEffect de biblio)
   useLibrarySync({ authed });
-
-  // Hidratar feed cacheado → store una sola vez; persistir store → localStorage.
-  useEffect(() => {
-    try {
-      const cached = JSON.parse(localStorage.getItem('velocity.home') || 'null');
-      if (Array.isArray(cached) && cached.length && !libStore.getState().homeRows.length) {
-        libStore.getState().setHomeRows(cached);
-      }
-    } catch {}
-    return libStore.subscribe((s, prev) => {
-      if (s.homeRows !== prev?.homeRows) {
-        try { localStorage.setItem('velocity.home', JSON.stringify(s.homeRows || [])); } catch {}
-      }
-    });
-  }, []);
 
   // UI transitoria
   const [openPlaylist, setOpenPlaylist] = useState(null);
@@ -299,7 +226,6 @@ export default function App() {
   const [showQueue, setShowQueue] = useState(false);
   const [selecting, setSelecting] = useState(false);
   const [selection, setSelection] = useState(() => new Set());
-  const [catVer, setCatVer] = useState(0);
   const toastTimer = useRef(null);
   const showToast = (m) => { setToast(m); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 2400); };
 
@@ -551,7 +477,7 @@ export default function App() {
   const reacquireInFlight = useRef(false);
   const lastTimeRef = useRef(0);
   const stuckCheckRef = useRef(null);
-  const [mediaInterrupted, setMediaInterrupted] = useState(false);
+
   const nextTrackActionRef = useRef(() => {});
   const prevTrackActionRef = useRef(() => {});
   const audioHydratedRef = useRef(false);
@@ -1761,8 +1687,8 @@ export default function App() {
     // Registrar inicio de sesión en PG para trazabilidad de tiempo de sesión activa.
     api.sessionStart();
     // Forzar regeneración del feed al hacer login (borra el feed del usuario anterior).
-    libStore.getState().setHomeRows([]);
-    libStore.getState().bumpFeedNonce();
+    useLibraryStore.getState().setHomeRows([]);
+    useLibraryStore.getState().bumpFeedNonce();
     setAuthed(true);
   };
   const deleteAccount = async () => { try { await api.deleteAccount(); } catch {} onLogout(); };

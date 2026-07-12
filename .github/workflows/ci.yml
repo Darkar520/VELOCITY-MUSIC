@@ -29,8 +29,18 @@ jobs:
         run: npm ci || npm install
         working-directory: frontend
 
+      - name: Lint frontend (errors only — no-undef / hooks / jsx)
+        # --quiet: solo errors (0 warnings bloqueantes). Evita regresiones de
+        # imports huérfanos tras splits de App.jsx (Avatar is not defined, etc.).
+        run: npm run lint -- --quiet
+        working-directory: frontend
+
       - name: Run tests (unit + property-based)
         run: node --test
+
+      - name: Frontend unit tests (vitest — playerStore, etc.)
+        run: npm test
+        working-directory: frontend
 
       - name: Build frontend (production)
         run: npm run build

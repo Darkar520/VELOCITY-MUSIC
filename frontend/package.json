@@ -8,6 +8,7 @@
     "build": "vite build --outDir ../public --emptyOutDir",
     "build:pages": "vite build --outDir dist",
     "lint": "eslint .",
+    "lint:errors": "eslint . --quiet",
     "lint:fix": "eslint . --fix",
     "test": "vitest run",
     "test:watch": "vitest"
