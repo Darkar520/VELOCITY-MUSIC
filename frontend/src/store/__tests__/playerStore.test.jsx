@@ -92,9 +92,10 @@ describe('playerStore', () => {
   it('cambiar de pista (next/prev simulado via playTrack) resetea time y sessionPosition', () => {
     const store = usePlayerStore.getState();
     store.playTrack(T1, { intent: 'play' });
-    // simular avance de tiempo
+    // PLAYING solo cuenta con src listo (evita race de la pista anterior)
+    store.streamReady({ trackId: 't1', url: 'https://cdn.example/t1.mp3' });
     store.setTime(45);
-    store.reportPlaying({ position: 45 });
+    store.reportPlaying({ position: 45, trackId: 't1' });
     expect(usePlayerStore.getState().time).toBe(45);
     expect(usePlayerStore.getState()._getMachineState().livePosition).toBe(45);
 
@@ -105,6 +106,8 @@ describe('playerStore', () => {
     expect(s.time).toBe(0); // reseteado por syncReact patch del TRACK_SET
     expect(s._getMachineState().trackId).toBe('t2');
     expect(s._getMachineState().sessionPosition).toBeNull();
+    expect(s._getMachineState().livePosition).toBe(0);
+    expect(s._getMachineState().srcStatus).toBe('none');
   });
 
   it('pushToQueue agrega ids al final y respeta el orden', () => {

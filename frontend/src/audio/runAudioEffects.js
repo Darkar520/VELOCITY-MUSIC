@@ -2,9 +2,46 @@
  * Ejecuta effects emitidos por audioMachine.reduce.
  * Sin política: solo side-effects (DOM / React / red).
  *
+ * Epoch (_audioEpoch): invalida schedulePlay / seeks pendientes al cambiar
+ * de pista. Sin esto, timeouts 40/180/450 ms de la canción anterior reanudan
+ * el src viejo encima de la nueva.
+ *
  * @param {object[]} effects
  * @param {object} ctx
  */
+
+/** Invalida plays/seeks programados. Llamar en cada cambio de pista. */
+export function bumpAudioEpoch(ctx) {
+  if (!ctx) return 0;
+  ctx._audioEpoch = (ctx._audioEpoch || 0) + 1;
+  ctx._pendingSeek = null;
+  return ctx._audioEpoch;
+}
+
+/**
+ * Corta el audio actual de forma síncrona (pause + quitar src + load).
+ * React setPlaySrc(null) es async; sin esto la pista anterior sigue sonando.
+ */
+export function hardStopAudio(ctx) {
+  if (!ctx) return;
+  bumpAudioEpoch(ctx);
+  if (ctx.selfPauseRef) ctx.selfPauseRef.current = true;
+  const a = ctx.audioRef?.current;
+  try {
+    if (a) {
+      a.pause();
+      // currentTime=0 antes de vaciar src evita “pegar” posición al nuevo media.
+      try { a.currentTime = 0; } catch { /* ignore */ }
+      try {
+        a.removeAttribute('src');
+        a.load();
+      } catch { /* ignore */ }
+    }
+  } catch { /* ignore */ }
+  if (ctx.selfPauseRef) ctx.selfPauseRef.current = false;
+  if (typeof ctx.setPlaySrc === 'function') ctx.setPlaySrc(null);
+  if (typeof ctx.setTime === 'function') ctx.setTime(0);
+}
 
 export function runAudioEffects(effects, ctx) {
   if (!effects || !effects.length) return;
@@ -31,7 +68,8 @@ export function runAudioEffects(effects, ctx) {
         break;
       }
       case 'clearSrc': {
-        if (typeof ctx.setPlaySrc === 'function') ctx.setPlaySrc(null);
+        // hard stop síncrono: no dejar la URL anterior en el elemento
+        hardStopAudio(ctx);
         break;
       }
       case 'play': {
@@ -93,13 +131,21 @@ function applySeek(ctx, position) {
 }
 
 function schedulePlay(ctx, seekHint) {
+  // Capturar epoch: si hay TRACK_SET/clearSrc después, estos timeouts mueren.
+  const epoch = ctx._audioEpoch || 0;
   if (seekHint != null) ctx._pendingSeek = seekHint;
 
   const attempt = () => {
+    if ((ctx._audioEpoch || 0) !== epoch) return;
     if (ctx.playingRef && !ctx.playingRef.current) return;
     if (ctx.getIntent && ctx.getIntent() !== 'play') return;
     const a = ctx.audioRef?.current;
     if (!a) return;
+    // Sin src real no reintentar play (evita reanimar elemento vacío post-clearSrc).
+    const src = a.currentSrc || a.src || '';
+    if (!src) return;
+    // Browsers resuelven src vacío a la URL de la página.
+    if (typeof location !== 'undefined' && src === location.href) return;
 
     const seekTo = ctx._pendingSeek;
     if (seekTo != null && Number.isFinite(seekTo) && a.readyState >= 1) {
@@ -117,6 +163,10 @@ function schedulePlay(ctx, seekHint) {
     const p = a.play();
     if (p && p.then) {
       p.then(() => {
+        if ((ctx._audioEpoch || 0) !== epoch) {
+          try { a.pause(); } catch {}
+          return;
+        }
         if (ctx._pendingSeek != null && a.readyState >= 1) {
           try { a.currentTime = ctx._pendingSeek; } catch {}
           ctx._pendingSeek = null;
@@ -127,13 +177,14 @@ function schedulePlay(ctx, seekHint) {
         }
         if (typeof ctx.onPlayOk === 'function') ctx.onPlayOk(a);
       }).catch((err) => {
+        if ((ctx._audioEpoch || 0) !== epoch) return;
         if (err?.name === 'AbortError') return;
         if (typeof ctx.onPlayFail === 'function') ctx.onPlayFail(err);
       });
     }
   };
 
-  // setSrc de React es async: reintentos cortos
+  // setSrc de React es async: reintentos cortos (epoch los invalida al cambiar pista)
   setTimeout(attempt, 40);
   setTimeout(attempt, 180);
   setTimeout(attempt, 450);

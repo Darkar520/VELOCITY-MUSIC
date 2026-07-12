@@ -137,6 +137,67 @@ test('A11: TRACK_SET limpia anclas; STREAM_READY + intent play emite play aunque
   assert.equal(selectPlaySync(state, { visible: false }), 'soft-play');
 });
 
+// ── Anti-race: no clavar mitad de canción / pista anterior ──
+
+test('TRACK_SET emite clearSrc y STREAM_READY tras TRACK_SET busca 0 aunque live esté contaminado', () => {
+  // Simula: canción A en 120s → click en B → PLAYING residual no debe clavar B a 120.
+  let { state, effects } = reduce(
+    {
+      ...initialState(),
+      intent: 'play',
+      trackId: 'song-a',
+      livePosition: 120,
+      sessionPosition: 120,
+      srcStatus: 'ready',
+    },
+    { type: 'TRACK_SET', trackId: 'song-b', intent: 'play' },
+  );
+  assert.ok(hasEffect(effects, 'clearSrc'), 'debe cortar src de la pista anterior');
+  assert.equal(state.livePosition, 0);
+  assert.equal(state.sessionPosition, null);
+  assert.equal(state.srcStatus, 'none');
+
+  // Contaminación residual (bug histórico): PLAYING del <audio> viejo
+  const polluted = reduce(state, { type: 'PLAYING', position: 120, trackId: 'song-a' });
+  assert.equal(polluted.state.livePosition, 0, 'PLAYING de otra pista se ignora');
+  assert.equal(polluted.state.srcStatus, 'none');
+
+  const polluted2 = reduce(state, { type: 'PLAYING', position: 99 });
+  assert.equal(polluted2.state.livePosition, 0, 'PLAYING con src none se ignora');
+
+  // Forzar livePosition sucio (como si un race lo hubiera escrito) + src none
+  const dirty = { ...state, livePosition: 120, sessionPosition: null };
+  const ready = reduce(dirty, {
+    type: 'STREAM_READY',
+    trackId: 'song-b',
+    url: '/api/stream-proxy?exp=999&sig=x',
+  });
+  // srcStatus none → seek 0 aunque live sea 120
+  const seeks = effectsOfType(ready.effects, 'seek');
+  assert.ok(seeks.some((s) => s.position === 0), 'nueva pista arranca en 0');
+  assert.ok(!seeks.some((s) => s.position === 120), 'no clavar minuto 2 de la anterior');
+  assert.ok(hasEffect(ready.effects, 'play'));
+});
+
+test('STREAM_READY mid-play (src stale) conserva livePosition para re-sign', () => {
+  const { effects } = reduce(
+    {
+      ...initialState(),
+      intent: 'play',
+      trackId: 'same',
+      livePosition: 42,
+      srcStatus: 'stale',
+    },
+    {
+      type: 'STREAM_READY',
+      trackId: 'same',
+      url: '/api/stream-proxy?exp=999&sig=y',
+    },
+  );
+  const seeks = effectsOfType(effects, 'seek');
+  assert.ok(seeks.some((s) => s.position === 42), 're-sign mantiene posición');
+});
+
 // ── A10 seek ──
 
 test('A10: USER_SEEK limpia yield y session; emite seek', () => {

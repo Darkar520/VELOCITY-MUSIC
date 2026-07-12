@@ -3,7 +3,11 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runAudioEffects } from '../frontend/src/audio/runAudioEffects.js';
+import {
+  runAudioEffects,
+  hardStopAudio,
+  bumpAudioEpoch,
+} from '../frontend/src/audio/runAudioEffects.js';
 
 test('runAudioEffects: pause + syncReact + mediaSession', () => {
   let paused = false;
@@ -46,16 +50,76 @@ test('runAudioEffects: pause + syncReact + mediaSession', () => {
 test('runAudioEffects: clearSrc y ensureStream delegan', () => {
   let src = 'old';
   let ensured = null;
+  let paused = false;
+  let loaded = false;
+  const audioRef = {
+    current: {
+      pause() { paused = true; },
+      load() { loaded = true; },
+      removeAttribute() {},
+      currentTime: 55,
+      readyState: 4,
+    },
+  };
   runAudioEffects(
     [
       { type: 'clearSrc' },
       { type: 'ensureStream', trackId: 't1' },
     ],
     {
+      audioRef,
+      selfPauseRef: { current: false },
       setPlaySrc: (u) => { src = u; },
+      setTime: () => {},
       ensureStream: (id) => { ensured = id; },
     },
   );
   assert.equal(src, null);
   assert.equal(ensured, 't1');
+  assert.equal(paused, true, 'clearSrc debe pausar el elemento');
+  assert.equal(loaded, true, 'clearSrc debe load() tras vaciar src');
+});
+
+test('hardStopAudio + epoch invalida schedulePlay de la pista anterior', async () => {
+  let playCalls = 0;
+  let src = 'https://cdn.example/a.mp3';
+  const audioRef = {
+    current: {
+      src,
+      currentSrc: src,
+      pause() {},
+      load() { this.src = ''; this.currentSrc = ''; },
+      removeAttribute() { this.src = ''; this.currentSrc = ''; },
+      play() { playCalls += 1; return Promise.resolve(); },
+      volume: 1,
+      readyState: 4,
+      currentTime: 80,
+    },
+  };
+  const ctx = {
+    audioRef,
+    selfPauseRef: { current: false },
+    playingRef: { current: true },
+    getIntent: () => 'play',
+    setPlaySrc: (u) => { src = u; },
+    setTime: () => {},
+    vol: 1,
+  };
+
+  // Simula play de pista A programando reintentos
+  runAudioEffects([{ type: 'play' }], ctx);
+  // Cambio de pista: hard stop + epoch
+  hardStopAudio(ctx);
+  assert.equal(src, null);
+  assert.ok((ctx._audioEpoch || 0) >= 1);
+
+  await new Promise((r) => setTimeout(r, 500));
+  assert.equal(playCalls, 0, 'schedulePlay de la pista anterior no debe llamar play()');
+});
+
+test('bumpAudioEpoch limpia pendingSeek', () => {
+  const ctx = { _pendingSeek: 77, _audioEpoch: 0 };
+  bumpAudioEpoch(ctx);
+  assert.equal(ctx._pendingSeek, null);
+  assert.equal(ctx._audioEpoch, 1);
 });

@@ -1610,7 +1610,11 @@ export default function App() {
         flushPendingSeek(effectCtxRef.current);
         applySessionResume(el);
         if (el && el.volume < vol * 0.5) el.volume = vol;
-        dispatchAudio({ type: 'PLAYING', position: el?.currentTime || 0 });
+        dispatchAudio({
+          type: 'PLAYING',
+          position: el?.currentTime || 0,
+          trackId: getMachine().trackId || trackRef.current?.id || undefined,
+        });
         playErrorRef.current = { id: null, n: 0 };
         sustainedPlayRef.current = false;
         setTimeout(() => {

@@ -180,7 +180,8 @@ export const usePlayerStore = create((set, get) => {
     docHidden: ({ position }) => dispatch({ type: 'DOC_HIDDEN', position }),
 
     /** Reportar que el audio está sonando efectivamente. */
-    reportPlaying: ({ position }) => dispatch({ type: 'PLAYING', position }),
+    reportPlaying: ({ position, trackId } = {}) =>
+      dispatch({ type: 'PLAYING', position, trackId }),
 
     /** Reportar fallo de play. */
     reportPlayFailed: () => dispatch({ type: 'PLAY_FAILED' }),

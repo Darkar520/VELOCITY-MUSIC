@@ -10,7 +10,7 @@ import * as offline from '../offline.js';
 import { dedupeByTitle, capPerArtist, slimTrack } from '../helpers.js';
 import { cacheTrack, trackById, saveMeta, bestCoverFor, normalizeTrack } from '../catalog.js';
 import { isDocumentVisible, shouldFadeIn, isStreamUrlFresh } from '../audioContinuity.js';
-import { runAudioEffects } from '../audio/runAudioEffects.js';
+import { runAudioEffects, hardStopAudio, bumpAudioEpoch } from '../audio/runAudioEffects.js';
 import { usePlayerStore } from '../store/playerStore.js';
 
 const QUALITY_MAP = { high: 'high', medium: 'medium', low: 'low', HQ: 'high', Standard: 'medium', FLAC: 'low' };
@@ -102,7 +102,12 @@ export function usePlaybackController(deps) {
     getIntent: () => getMachine().intent,
     ensureStream: (trackId) => { ensureStreamFnRef.current(trackId); },
     onPlayOk: (a) => {
-      dispatchAudio({ type: 'PLAYING', position: a?.currentTime || 0 });
+      const tid = getMachine().trackId;
+      dispatchAudio({
+        type: 'PLAYING',
+        position: a?.currentTime || 0,
+        trackId: tid || undefined,
+      });
     },
     onPlayFail: (err) => {
       if (err?.name === 'NotAllowedError') {
@@ -144,7 +149,8 @@ export function usePlaybackController(deps) {
   const applySessionResume = useCallback((a) => {
     if (!a || a.readyState < 1) return false;
     const s = getMachine();
-    if (s.sessionPosition == null || !s.trackId) return false;
+    // Tras TRACK_SET no hay src: no aplicar sesión (evita clavar min X de la pista vieja).
+    if (s.srcStatus === 'none' || s.sessionPosition == null || !s.trackId) return false;
     if ((a.currentTime || 0) >= 1.5 && Math.abs((a.currentTime || 0) - s.sessionPosition) < 1.25) return false;
     if ((a.currentTime || 0) > s.sessionPosition + 1.25) return false;
     try {
@@ -311,28 +317,35 @@ export function usePlaybackController(deps) {
     if (best && best !== t.cover) t = { ...t, cover: best };
     else if (!t.cover && t.artworkUrl) t = { ...t, cover: t.artworkUrl };
     cacheTrack(t); saveMeta();
+
+    // 1) Invalidar plays/seeks pendientes de la pista anterior (timeouts 40–450 ms).
+    const gen = ++playGenRef.current;
+    try {
+      cancelAnimationFrame(fadeRafRef.current);
+      clearTimeout(fadeSafetyRef.current);
+    } catch { /* ignore */ }
+    // 2) Hard-stop síncrono del <audio> (pause + vaciar src). Sin esto la
+    //    canción anterior sigue sonando mientras firma/carga la nueva.
+    hardStopAudio(effectCtxRef.current);
+    // TRACK_SET también emite clearSrc; el epoch ya está bumped.
+
     const a = audioRef.current;
     const visible = isDocumentVisible();
-    if (a) {
-      try {
-        cancelAnimationFrame(fadeRafRef.current);
-        clearTimeout(fadeSafetyRef.current);
-        selfPauseRef.current = true;
-        a.pause();
-      } catch { /* ignore */ }
-    }
     if (a && shouldFadeIn(visible)) { a.volume = 0; pendingFadeRef.current = true; }
     else { if (a) a.volume = vol; pendingFadeRef.current = false; }
     const initialQueue = list && list.length ? list : [t.id];
     setQueue(initialQueue);
     const qParam = QUALITY_MAP[quality] || 'high';
     const sp = streamParamsFor(t, qParam);
-    const gen = ++playGenRef.current;
 
     if (objUrlRef.current) { URL.revokeObjectURL(objUrlRef.current); objUrlRef.current = null; }
 
+    // TRACK_SET: live/session=0, clearSrc, ensureStream. Arranque siempre desde 0
+    // (salvo resume de sesión/yield en la MISMA pista vía USER_PLAY, no play()).
     dispatchAudio({ type: 'TRACK_SET', trackId: t.id, intent: 'play' });
     setTime(0);
+    // Tras clearSrc del machine, un nuevo epoch para el STREAM_READY que viene.
+    bumpAudioEpoch(effectCtxRef.current);
 
     if (downloaded.has(t.id)) {
       const trackWithQuality = { ...t, url: api.streamUrl(sp) };

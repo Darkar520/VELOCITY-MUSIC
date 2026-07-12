@@ -82,6 +82,9 @@ export function reduce(state, event) {
     case 'TRACK_SET': {
       const trackId = event.trackId ? String(event.trackId) : null;
       const intent = event.intent === 'play' ? 'play' : 'pause';
+      // Cambio de pista (o replay): cortar src anterior YA. Si no, el <audio>
+      // sigue con la URL vieja y schedulePlay residual reanuda la canción anterior.
+      push(effects, { type: 'clearSrc' });
       next = {
         ...state,
         trackId,
@@ -172,7 +175,9 @@ export function reduce(state, event) {
 
       if (state.intent === 'play') {
         // Nuevo src siempre arranca en 0 en el elemento: hay que seek explícito.
-        // Prioridad: sesión (A12) → ancla yield (A10) → live si ya avanzó → 0.
+        // Prioridad: sesión (A12) → ancla yield (A10) → live SOLO si ya había src
+        // (re-sign mid-play). Tras TRACK_SET srcStatus es 'none': SIEMPRE 0,
+        // aunque un PLAYING residual haya contaminado livePosition.
         let seekTo = null;
         if (state.sessionPosition != null && state.sessionPosition >= 1.5) {
           seekTo = state.sessionPosition;
@@ -182,7 +187,10 @@ export function reduce(state, event) {
           state.yieldPosition >= 0
         ) {
           seekTo = state.yieldPosition;
-        } else if ((state.livePosition || 0) > 1.5) {
+        } else if (
+          (state.srcStatus === 'ready' || state.srcStatus === 'stale') &&
+          (state.livePosition || 0) > 1.5
+        ) {
           seekTo = state.livePosition;
         } else {
           seekTo = 0;
@@ -300,6 +308,14 @@ export function reduce(state, event) {
     }
 
     case 'PLAYING': {
+      // Ignorar eventos del <audio> de la pista anterior (solape / race).
+      if (event.trackId != null && state.trackId && String(event.trackId) !== String(state.trackId)) {
+        break;
+      }
+      // Tras TRACK_SET no hay src aún: un onPlaying del elemento viejo no debe
+      // clavar livePosition a mitad de la canción anterior.
+      if (state.srcStatus === 'none') break;
+
       const position = Number.isFinite(event.position) ? event.position : state.livePosition;
       next = {
         ...state,
