@@ -107,9 +107,17 @@ export async function resolve(params = {}, ctx = {}) {
         // Query canonica limpia: artist + title (MB) + album opcional.
         const cleanArtist = artist;
         const cleanTitle = title;
-        const cleanQuery = mbData.albumName
+        let cleanQuery = mbData.albumName
           ? `${cleanArtist} - ${cleanTitle} ${mbData.albumName}`.trim()
           : `${cleanArtist} - ${cleanTitle}`;
+
+        // Bug 3: si MB dice que el album NO es live, excluir variants live en
+        // la query de tier 2/3. Asi "Points of Authority" encuentra la version
+        // de Hybrid Theory y no un "Live at MSG". Solo cuando mbData.isLive es
+        // explicitamente false (no undefined — en ese caso no filtramos).
+        if (mbData.isLive === false) {
+          cleanQuery += ' -live -concert -tour -session -acoustic -unplugged';
+        }
 
         // Tier 2: YTM con query limpia (mismo pool, query distinta).
         try {

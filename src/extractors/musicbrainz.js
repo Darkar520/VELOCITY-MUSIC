@@ -86,7 +86,11 @@ export async function searchTrack({ artist, title, duration } = {}) {
  * Wrapper de searchTrack que devuelve solo los campos que el caller de
  * audioResolver/catalog necesita: MBID + año + álbum canónico.
  *
- * @returns {Promise<{mbid, year, albumId, albumName, genre, country}|null>}
+ * Ampliado (Bug 3): incluye `isLive` derivado del release-group del primer
+ * release. audioResolver lo usa para añadir `-live -concert -tour -acoustic`
+ * a la query de tier 2/3 cuando isLive === false (álbum de estudio).
+ *
+ * @returns {Promise<{mbid, year, albumId, albumName, isLive, genre, country}|null>}
  */
 export async function enrichTrack({ artist, title, duration } = {}) {
   const m = await searchTrack({ artist, title, duration });
@@ -96,6 +100,7 @@ export async function enrichTrack({ artist, title, duration } = {}) {
     year: m.year,
     albumId: m.albumId,
     albumName: m.albumName,
+    isLive: m.isLive,
     genre: m.genre,
     country: m.country,
     mbSource: 'musicbrainz',
@@ -115,13 +120,66 @@ export async function lookupByMBID(mbid) {
 }
 
 /**
+ * Busca el release MBID de un álbum por artist + albumName.
+ * Prefiere tipo Album sobre Live/Compilation/Single.
+ *
+ * @returns {Promise<{releaseMBID, albumName, year, isLive, isCompilation, artistMBID, trackCount}|null>}
+ */
+export async function enrichAlbum({ artist, albumName } = {}) {
+  if (!artist || !albumName) return null;
+  const q = `release:"${albumName.replace(/"/g, '')}" AND artist:"${artist.replace(/"/g, '')}"`;
+  const url = `${MB_ROOT}/release?query=${encodeURIComponent(q)}&fmt=json&limit=8`;
+  const d = await mbFetch(url);
+  if (!d || !Array.isArray(d.releases) || !d.releases.length) return null;
+  const na = normalizeText(artist);
+  const nal = normalizeText(albumName);
+  let best = null;
+  let bestScore = -1;
+  for (const rel of d.releases) {
+    const rArtist = normalizeText(rel['artist-credit']?.[0]?.name || '');
+    const rTitle = normalizeText(rel.title || '');
+    let score = 0;
+    if (rTitle === nal) score += 20;
+    else if (rTitle && (rTitle.includes(nal) || nal.includes(rTitle))) score += 10;
+    if (rArtist === na) score += 15;
+    else if (rArtist && (rArtist.includes(na) || na.includes(rArtist))) score += 8;
+    // Preferir Album sobre Live/Single/Compilation.
+    const rgType = rel['release-group']?.['primary-type'] || '';
+    if (rgType === 'Album') score += 6;
+    else if (rgType === 'Live') score -= 4;
+    else if (rgType === 'Compilation') score -= 2;
+    else if (rgType === 'Single') score -= 1;
+    // Bonus por fecha completa (año conocido).
+    if (rel.date) score += 1;
+    if (score > bestScore) { bestScore = score; best = rel; }
+  }
+  if (!best || bestScore < 10) return null;
+  const rgType = best['release-group']?.['primary-type'] || '';
+  return {
+    releaseMBID: best.id,
+    albumName: best.title || albumName,
+    year: best.date ? Number(String(best.date).slice(0, 4)) || null : null,
+    isLive: rgType === 'Live' || /\blive\b|\bconcert\b/i.test(best.title || ''),
+    isCompilation: rgType === 'Compilation',
+    artistMBID: best['artist-credit']?.[0]?.artist?.id || null,
+    trackCount: best['track-count'] || null,
+    mbSource: 'musicbrainz',
+  };
+}
+
+/**
  * Tracklist canónico de un release (álbum). Devuelve pistas con mbid pero
  * SIN videoId YTM (no existe en MB). En Velocity Music hoy esto se usa solo
  * como fallback informativo; el flujo principal de audio sigue con YTM.
+ *
+ * Salida ampliada (Bug 2 fix): cada pista incluye `trackNumber` (1-indexed,
+ * consecutivo a través de discos) y el album trae `isLive`/`isCompilation`
+ * derivados del tipo de release-group. Bug 3 tambien usa `isLive`.
  */
 export async function getReleaseTracks(releaseMBID) {
   if (!releaseMBID) return [];
-  const url = `${MB_ROOT}/release/${encodeURIComponent(releaseMBID)}?inc=recordings+artist-credits&fmt=json`;
+  // inc=release-groups trae el type (Album / Single / Live / Compilation).
+  const url = `${MB_ROOT}/release/${encodeURIComponent(releaseMBID)}?inc=recordings+artist-credits+release-groups&fmt=json`;
   const d = await mbFetch(url);
   if (!d || !d.id) return [];
   const media = Array.isArray(d.media) ? d.media : [];
@@ -129,9 +187,15 @@ export async function getReleaseTracks(releaseMBID) {
   const albumId = d.id;
   const year = d.date ? Number(String(d.date).slice(0, 4)) || null : null;
   const artistName = d['artist-credit']?.[0]?.name || null;
+  // Tipo de release-group: Album / Single / EP / Live / Compilation / Other.
+  const rgType = d['release-group']?.['primary-type'] || null;
+  const isLive = rgType === 'Live' || /\blive\b|\bconcert\b/i.test(d.title || '');
+  const isCompilation = rgType === 'Compilation';
   const out = [];
+  let globalIndex = 0;
   for (const m of media) {
     for (const tr of (m.track || [])) {
+      globalIndex += 1;
       out.push({
         id: null, // sin videoId YTM
         mbid: tr.id || null,
@@ -141,6 +205,9 @@ export async function getReleaseTracks(releaseMBID) {
         albumId,
         year,
         durationSeconds: tr.length ? Math.round(tr.length / 1000) : null,
+        trackNumber: globalIndex, // 1..N a través de discos
+        isLive,
+        isCompilation,
         mbSource: 'musicbrainz',
       });
     }
@@ -199,6 +266,12 @@ function pickMatch(recordings, { artist, title, duration }) {
 }
 
 function mapRecording(rec, release = null) {
+  // primary-type del release-group del release. MB anida release-group dentro
+  // de cada release. Si no trae, se asume null y isLive queda indefinido.
+  const rgType = release?.['release-group']?.['primary-type']
+    || rec.releases?.[0]?.['release-group']?.['primary-type']
+    || null;
+  const titleForLiveCheck = rec.title || release?.title || '';
   return {
     id: rec.id || null,
     title: rec.title || null,
@@ -209,6 +282,9 @@ function mapRecording(rec, release = null) {
     duration: rec.length ? Math.round(rec.length / 1000) : null,
     genre: rec.genres?.[0]?.name || null,
     country: release?.country || null,
+    isLive: rgType === 'Live' || /\blive\b|\bconcert\b|\bunplugged\b/i.test(titleForLiveCheck),
+    isCompilation: rgType === 'Compilation',
+    rgType,
     mbSource: 'musicbrainz',
   };
 }

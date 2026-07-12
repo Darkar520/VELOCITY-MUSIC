@@ -169,6 +169,28 @@ test('Frontend catalog: cacheTrack preserva mbid de inputs previos', () => {
     'mbid no debe corromperse a un valor spurious');
 });
 
+// Bug 1 regresión: en vista álbum, normalizeTrack debe receber artworkUrl
+// forzado a albumCover por App.jsx applyTracks / loadAlbumApi. El catálogo
+// por si solo no fuerza el override, pero el caller (App.jsx) SI lo hace.
+// Este test cubre el behavior esperado: cuando artworkUrl=albumCover y
+// cover=albumCover, normalizeTrack devuelve cover=albumCover (no thumbnail
+// de video). Regresión del bug donde Hybrid Theory mostraba thumbnails de
+// cada video individual.
+test('Frontend catalog: normalizeTrack respeta artworkUrl=albumCover forzado (Bug 1)', () => {
+  const albumCover = 'https://lh3.googleusercontent.com/album-cover=w1200-h1200';
+  const t = normalizeTrack({
+    id: 'yt-album-1',
+    title: 'Papercut',
+    artist: 'Linkin Park',
+    artworkUrl: albumCover, // forzado por App.jsx
+    cover: albumCover,
+  });
+  assert.equal(t.cover, albumCover,
+    'cover debe ser el del álbum, no un thumbnail de video');
+  assert.ok(!t.cover.includes('ytimg'),
+    'cover no debe ser i.ytimg.com (thumbnail de video)');
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // CATALOG — saveMeta/loadMeta persistencia
 // ─────────────────────────────────────────────────────────────────────────────

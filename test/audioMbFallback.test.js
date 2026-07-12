@@ -233,4 +233,85 @@ test('Cadena MB: cache hit -> no se llama extractor (sin tocar cadena)', async (
   restore();
 });
 
+// ─── Bug 3: filtro -live -concert -tour en query cuando isLive=false ──
+
+test('Cadena MB Bug 3: isLive=false añade filtro negativo a tier 2/3 query', async () => {
+  const ex = makeExtractor([
+    { returns: null },
+    { returns: 'https://audio.ytm.example/studio-version' },
+  ]);
+  const r = await resolve(
+    { artist: 'Linkin Park', title: 'Points of Authority' },
+    {
+      cache: fakeCache(),
+      mode: 'full',
+      extractorImpl: ex.impl,
+      timeoutMs: 30000,
+      mbEnrich: mbEnrichReturn({
+        mbid: 'u', year: 2000, albumName: 'Hybrid Theory',
+        isLive: false, // MB dice: album de estudio
+      }),
+      fallbackChain: true,
+    },
+  );
+  assert.equal(r.status, 302);
+  assert.ok(ex.calls.length >= 2, 'al menos tier 1 y tier 2');
+  // tier 2 query debe contener los filtros negativos.
+  const t2Query = ex.calls[1].query || '';
+  assert.ok(t2Query.includes('-live'), `tier 2 query debe excluir live: ${t2Query}`);
+  assert.ok(t2Query.includes('-concert'), `tier 2 query debe excluir concert: ${t2Query}`);
+  assert.ok(t2Query.includes('-tour'), `tier 2 query debe excluir tour: ${t2Query}`);
+  restore();
+});
+
+test('Cadena MB Bug 3: isLive=true NO añade filtro negativo (busca lives)', async () => {
+  const ex = makeExtractor([
+    { returns: null },
+    { returns: 'https://audio.ytm.example/live-version' },
+  ]);
+  const r = await resolve(
+    { artist: 'Linkin Park', title: 'Papercut' },
+    {
+      cache: fakeCache(),
+      mode: 'full',
+      extractorImpl: ex.impl,
+      timeoutMs: 30000,
+      mbEnrich: mbEnrichReturn({
+        mbid: 'u', year: 2010, albumName: 'Live at MSG',
+        isLive: true, // MB dice: album live
+      }),
+      fallbackChain: true,
+    },
+  );
+  assert.equal(r.status, 302);
+  const t2Query = ex.calls[1].query || '';
+  assert.ok(!t2Query.includes('-live'),
+    `album live NO debe excluir live: ${t2Query}`);
+  restore();
+});
+
+test('Cadena MB Bug 3: isLive undefined (MB no enriquecio) -> no filtra', async () => {
+  const ex = makeExtractor([
+    { returns: null },
+    { returns: 'https://audio.ytm.example/whatever' },
+  ]);
+  const r = await resolve(
+    { artist: 'X', title: 'Y' },
+    {
+      cache: fakeCache(),
+      mode: 'full',
+      extractorImpl: ex.impl,
+      timeoutMs: 30000,
+      // mbEnrich sin isLive: backwards compat
+      mbEnrich: mbEnrichReturn({ mbid: 'u', year: 2020, albumName: 'Z' }),
+      fallbackChain: true,
+    },
+  );
+  assert.equal(r.status, 302);
+  const t2Query = ex.calls[1].query || '';
+  assert.ok(!t2Query.includes('-live'),
+    `sin isLive: no se aplica filtro: ${t2Query}`);
+  restore();
+});
+
 function restore() {/* noop */}
