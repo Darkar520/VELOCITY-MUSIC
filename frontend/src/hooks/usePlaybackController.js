@@ -67,6 +67,8 @@ export function usePlaybackController(deps) {
   const prefetchedRef = useRef(new Set());
   /** Fallos de firma por trackId — evita bucle PLAY_FAILED↔ensureStream y toasts falsos. */
   const signFailRef = useRef({ id: null, n: 0 });
+  /** Snapshot de la pista pedida en play() (por si trackById aún no la tiene). */
+  const playSnapRef = useRef(null);
 
   const getMachine = useCallback(() => usePlayerStore.getState().getMachineState(), []);
   const patchMachine = useCallback((p) => usePlayerStore.getState().patchMachine(p), []);
@@ -197,10 +199,24 @@ export function usePlaybackController(deps) {
   }, [audioRef, fadeRafRef, fadeSafetyRef, vol]);
 
   ensureStreamFnRef.current = async (trackId) => {
-    const t = trackById(trackId) || (trackRef.current?.id === trackId ? trackRef.current : null);
-    if (!t) {
-      // No toast: play() cacheTrack suele llegar ya; reintento silencioso vía machine.
-      dispatchAudio({ type: 'PLAY_FAILED', reason: 'no-track' });
+    const t = trackById(trackId)
+      || (trackRef.current?.id === trackId ? trackRef.current : null)
+      || (playSnapRef.current?.id === trackId ? playSnapRef.current : null);
+    if (!t || !t.title) {
+      // Reintento corto: a veces el catálogo aún no tiene la meta.
+      const n = signFailRef.current.id === trackId ? signFailRef.current.n + 1 : 1;
+      signFailRef.current = { id: trackId, n };
+      if (n <= 2) {
+        await new Promise((r) => setTimeout(r, 120));
+        if (getMachine().trackId === trackId) return ensureStreamFnRef.current(trackId);
+      }
+      setLoadingAudio?.(false);
+      return;
+    }
+    if (!t.artist) {
+      // Firma exige artist+title; sin artista no hay stream-sign.
+      setLoadingAudio?.(false);
+      showToast?.('Falta el artista de esta pista. Prueba buscarla de nuevo.');
       return;
     }
     const qParam = QUALITY_MAP[quality] || 'high';
@@ -217,58 +233,53 @@ export function usePlaybackController(deps) {
           return;
         }
       }
+      // Warm resolve en paralelo (no bloquear firma).
       api.prefetchStream(sp);
-      let url = api.peekStreamUrl(sp, 45);
+      let url = api.peekStreamUrl(sp, 30);
       if (!url) url = await api.ensureStreamUrl(sp);
       if (getMachine().trackId !== trackId || getMachine().intent !== 'play') return;
-      setTrack((prev) => (prev && prev.id === trackId ? { ...prev, url } : prev));
+      setTrack((prev) => (prev && prev.id === trackId ? { ...prev, url } : { ...t, url }));
       signFailRef.current = { id: null, n: 0 };
       dispatchAudio({ type: 'STREAM_READY', trackId, url });
     } catch (err) {
       if (getMachine().trackId !== trackId || getMachine().intent !== 'play') return;
       const n = signFailRef.current.id === trackId ? signFailRef.current.n + 1 : 1;
       signFailRef.current = { id: trackId, n };
-      // 1 reintento silencioso (la canción suele arrancar en el 2º intento).
-      if (n <= 1) {
-        await new Promise((r) => setTimeout(r, 280));
+      if (n <= 2) {
+        api._streamSignCache?.delete?.(api._streamSignKey?.(sp));
+        await new Promise((r) => setTimeout(r, 350 * n));
         if (getMachine().trackId === trackId && getMachine().intent === 'play') {
           return ensureStreamFnRef.current(trackId);
         }
         return;
       }
-      // Fallo real tras reintento silencioso.
-      // No PLAY_FAILED aquí: el machine re-dispara ensureStream y armaba un bucle
-      // + toast fantasma mientras el 2º intento (u otra ruta) ya reproducía.
       if (err?.status === 401) {
         showToast?.('Sesión caducada. Vuelve a iniciar sesión.');
         dispatchAudio({ type: 'USER_PAUSE' });
       } else {
         setLoadingAudio?.(false);
+        // Dejar intent play: el onError del <audio> reintentará con firma fresca.
       }
     }
   };
 
   const prefetchNext = useCallback((currentId, ids, qParam) => {
-    if (!ids || ids.length < 1) return;
+    if (!ids || ids.length < 2) return;
     const i = ids.indexOf(currentId);
     if (i === -1) return;
-    for (let n = 0; n <= 3; n++) {
-      const nextId = ids[(i + n) % ids.length];
-      if (!nextId) continue;
-      if (downloaded.has(nextId)) continue;
-      const nt = trackById(nextId);
-      if (!nt) continue;
-      const sp = streamParamsFor(nt, qParam);
-      if (api.peekStreamUrl(sp, 300)) {
-        if (n === 0) continue;
-        if (prefetchedRef.current.has(nextId + ':' + qParam)) continue;
-      }
-      prefetchedRef.current.add(nextId + ':' + qParam);
-      api.warmStreamUrl(sp);
-      api.prefetchStream({ artist: nt.artist, title: nt.title, id: nt.id, quality: qParam });
-    }
-    if (prefetchedRef.current.size > 80) {
-      prefetchedRef.current = new Set([...prefetchedRef.current].slice(-40));
+    // Solo la siguiente (antes 4 pistas en paralelo → lag de red/CPU).
+    const nextId = ids[(i + 1) % ids.length];
+    if (!nextId || nextId === currentId || downloaded.has(nextId)) return;
+    const nt = trackById(nextId);
+    if (!nt) return;
+    const key = nextId + ':' + qParam;
+    if (prefetchedRef.current.has(key)) return;
+    prefetchedRef.current.add(key);
+    const sp = streamParamsFor(nt, qParam);
+    api.warmStreamUrl(sp);
+    api.prefetchStream({ artist: nt.artist, title: nt.title, id: nt.id, quality: qParam });
+    if (prefetchedRef.current.size > 40) {
+      prefetchedRef.current = new Set([...prefetchedRef.current].slice(-20));
     }
   }, [downloaded, streamParamsFor]);
 
@@ -339,9 +350,11 @@ export function usePlaybackController(deps) {
     if (best && best !== t.cover) t = { ...t, cover: best };
     else if (!t.cover && t.artworkUrl) t = { ...t, cover: t.artworkUrl };
     cacheTrack(t); saveMeta();
+    playSnapRef.current = t;
 
     // 1) Invalidar plays/seeks de la pista anterior (timeouts schedulePlay).
     const gen = ++playGenRef.current;
+    signFailRef.current = { id: null, n: 0 };
     try {
       cancelAnimationFrame(fadeRafRef.current);
       clearTimeout(fadeSafetyRef.current);

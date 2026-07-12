@@ -1094,7 +1094,7 @@ export default function App() {
     toggleFav, createPlaylist, addToPlaylist, removeFromPlaylist, deletePlaylist,
     isAlbumSaved, saveAlbum, unsaveAlbum,
     isPlaylistSaved, savePlaylist, unsavePlaylist,
-  } = useLibraryActions({ authed, showToast, download, downloadMany });
+  } = useLibraryActions({ authed, showToast });
 
   // Búsquedas recientes (UI local, no libraryStore)
   const addSearch = (term) => setRecentSearches(s => [term, ...s.filter(x => x.toLowerCase() !== term.toLowerCase())].slice(0, 8));
@@ -1207,62 +1207,133 @@ export default function App() {
     }
   };
   const goAlbum = (albumId, name, artist, songTitle, cover) => {
-    // Pasar la carátula al `view` para que el hero la muestre de inmediato
-    // mientras carga (antes desaparecía porque el detalle no la recibía).
     setExpanded(false); setView({ type:'album', albumId, name, artist, cover });
     setDetailData(null); setDetailLoading(true);
-    // Las pistas de álbum (YT Music) suelen no traer carátula propia: heredan la
-    // del álbum para que no aparezcan sin portada al abrir el detalle.
-    const loadAlbum = (aid) => api.album(aid).then(d => {
-      const albumCover = d.cover || cover || '';
-      const tracks = (d.tracks || []).map(t => normalizeTrack({ ...t, artworkUrl: t.artworkUrl || t.cover || albumCover }));
-      setDetailData({ type:'album', name: d.name || name, artist: d.artist || artist, artistId: d.artistId, cover: d.cover || cover, year: d.year, tracks });
-    });
-    // Fallback offline: buscar en IndexedDB las pistas de este álbum cuando la
-    // red no responde. Usa albumId exacto o nombre de álbum como criterio.
+
+    const applyTracks = (meta, tracks, { offline: isOff = false } = {}) => {
+      const albumCover = meta.cover || cover || tracks.find((t) => t.cover)?.cover || '';
+      const list = (tracks || []).map((t) => {
+        const n = normalizeTrack({ ...t, artworkUrl: t.artworkUrl || t.cover || albumCover });
+        cacheTrack(n);
+        return n.cover ? n : { ...n, cover: albumCover };
+      });
+      if (!list.length) return false;
+      setDetailData({
+        type: 'album',
+        albumId: meta.albumId || albumId,
+        name: meta.name || name,
+        artist: meta.artist || artist,
+        artistId: meta.artistId,
+        cover: albumCover,
+        year: meta.year,
+        tracks: list,
+        offline: isOff || undefined,
+      });
+      return true;
+    };
+
     const offlineFallback = async (aid, aName, aArtist, aCover) => {
       try {
         const metas = await offline.listMetas();
         const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
         const tracks = metas
-          .filter(m => m && (
-            (aid && m.albumId === aid) ||
-            (aName && norm(m.album) === norm(aName))
+          .filter((m) => m && (
+            (aid && m.albumId === aid)
+            || (aName && norm(m.album) === norm(aName))
           ))
           .map(normalizeTrack);
         if (!tracks.length) return false;
-        const albumCover = aCover || tracks.find(t => t.cover)?.cover || '';
-        const withCover = tracks.map(t => t.cover ? t : { ...t, cover: albumCover });
-        setDetailData({ type:'album', name: aName, artist: aArtist, cover: albumCover, tracks: withCover, offline: true });
-        return true;
+        return applyTracks({ name: aName, artist: aArtist, cover: aCover, albumId: aid }, tracks, { offline: true });
       } catch { return false; }
     };
+
+    // Canciones ya en catálogo local (guardadas al ver el álbum antes).
+    const catalogFallback = (aid, aName) => {
+      const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const all = allCached();
+      const tracks = all.filter((t) => (
+        (aid && t.albumId === aid)
+        || (aName && norm(t.album) === norm(aName) && (!artist || norm(t.artist).includes(norm(artist))))
+      ));
+      if (tracks.length < 2) return false;
+      return applyTracks({ albumId: aid, name: aName, artist, cover }, tracks);
+    };
+
+    const searchFallback = async (aName, aArtist) => {
+      const q = `${aName || ''} ${aArtist || ''}`.trim();
+      if (!q) return false;
+      const r = await api.searchAll(q).catch(() => null);
+      let songs = (r?.songs || []).map(normalizeTrack);
+      if (!songs.length) {
+        const raw = await api.search(q).catch(() => []);
+        songs = raw.map(normalizeTrack);
+      }
+      const norm = (s) => (s || '').toLowerCase();
+      // Preferir pistas del mismo álbum/artista
+      let tracks = songs.filter((t) => (
+        (aName && norm(t.album) === norm(aName))
+        || (aArtist && norm(t.artist).includes(norm(aArtist)) && aName && norm(t.title + t.album).includes(norm(aName).slice(0, 12)))
+      ));
+      if (tracks.length < 3) tracks = songs.filter((t) => aArtist && norm(t.artist).includes(norm(aArtist)));
+      if (tracks.length < 2) tracks = songs.slice(0, 20);
+      if (!tracks.length) return false;
+      const albId = tracks.find((t) => t.albumId)?.albumId || albumId;
+      return applyTracks({
+        albumId: albId,
+        name: aName,
+        artist: aArtist,
+        cover: cover || tracks[0]?.cover,
+      }, tracks);
+    };
+
+    const loadAlbumApi = async (aid) => {
+      const d = await api.album(aid);
+      const albumCover = d.cover || cover || '';
+      const tracks = (d.tracks || []).map((t) => normalizeTrack({
+        ...t,
+        artworkUrl: t.artworkUrl || t.cover || albumCover,
+      }));
+      if (!tracks.length) return false;
+      return applyTracks({
+        albumId: aid,
+        name: d.name || name,
+        artist: d.artist || artist,
+        artistId: d.artistId,
+        cover: albumCover,
+        year: d.year,
+      }, tracks);
+    };
+
     (async () => {
       try {
         let aid = albumId;
         if (!aid) {
-          // Resolver el álbum por nombre+artista (más fiable que solo canciones).
           const r = await api.searchAll(`${name} ${artist || ''}`.trim()).catch(() => null);
           aid = r?.albums?.[0]?.albumId
-            || (r?.songs || []).map(normalizeTrack).find(t => t.albumId)?.albumId
+            || (r?.songs || []).map(normalizeTrack).find((t) => t.albumId)?.albumId
             || null;
           if (!aid) {
             const raw = await api.search(`${songTitle || name} ${artist || ''}`.trim()).catch(() => []);
-            aid = raw.map(normalizeTrack).find(t => t.albumId)?.albumId || null;
+            aid = raw.map(normalizeTrack).find((t) => t.albumId)?.albumId || null;
           }
         }
-        if (aid) await loadAlbum(aid);
-        else {
-          // Sin aid: intentar fallback offline antes de declarar vacío.
-          if (!(await offlineFallback(albumId, name, artist, cover)))
-            setDetailData({ type:'album', name, artist, cover, tracks: [], none: true });
+        let ok = false;
+        if (aid) {
+          try { ok = await loadAlbumApi(aid); } catch { ok = false; }
         }
+        // API vacía/502 → catálogo → búsqueda → offline (antes: 0 canciones)
+        if (!ok) ok = catalogFallback(aid || albumId, name);
+        if (!ok) ok = await searchFallback(name, artist);
+        if (!ok) ok = await offlineFallback(aid || albumId, name, artist, cover);
+        if (!ok) setDetailData({ type: 'album', name, artist, cover, tracks: [], none: true });
       } catch {
-        // Red caída: intentar contenido offline antes de mostrar error.
-        if (!(await offlineFallback(albumId, name, artist, cover)))
-          setDetailData({ type:'album', name, artist, cover, tracks: [], none: true });
+        let ok = catalogFallback(albumId, name);
+        if (!ok) ok = await searchFallback(name, artist);
+        if (!ok) ok = await offlineFallback(albumId, name, artist, cover);
+        if (!ok) setDetailData({ type: 'album', name, artist, cover, tracks: [], none: true });
+      } finally {
+        setDetailLoading(false);
       }
-      finally { setDetailLoading(false); }
     })();
   };
   const shareTrack = (t) => {
@@ -1506,18 +1577,27 @@ export default function App() {
       const attempt = n + 1;
       playErrorRef.current = { id: cur, n: attempt };
       setLoadingAudio(true);
-      const delays = [1500, 3000, 5000, 8000, 12000, 16000];
+      // Primeros reintentos rápidos (resolve yt-dlp a veces falla a la 1ª).
+      const delays = [400, 900, 1800, 3500, 7000, 12000];
       const delay = delays[Math.min(attempt - 1, delays.length - 1)];
       setTimeout(async () => {
         if (!audioRef.current || trackRef.current?.id !== cur) return;
         if (!playingRef.current) { setLoadingAudio(false); return; }
         try {
           const q = ({ high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' }[quality] || 'high');
-          if (attempt > 2) api._streamSignCache?.clear?.();
-          const base = await api.ensureStreamUrl({ artist: track.artist, title: track.title, id: track.id, quality: q });
-          if (!playingRef.current) { setLoadingAudio(false); return; }
-          audioRef.current.src = attempt > 2 ? (base + '&_r=' + Date.now()) : base;
-          setPlaySrc(audioRef.current.src);
+          const tk = trackRef.current || track;
+          if (attempt >= 1) api._streamSignCache?.clear?.();
+          const sp = {
+            artist: tk.artist, title: tk.title, id: tk.id, quality: q,
+            stream: (tk.source === 'soundcloud' && tk.stream) ? tk.stream : undefined,
+          };
+          // forceRefresh vía resolve al 2º+ intento (prefetch limpia caché mala).
+          if (attempt >= 2) await api.prefetchStream(sp);
+          const base = await api.ensureStreamUrl(sp);
+          if (!playingRef.current || trackRef.current?.id !== cur) { setLoadingAudio(false); return; }
+          const url = attempt >= 2 ? (base + (base.includes('?') ? '&' : '?') + '_r=' + Date.now()) : base;
+          audioRef.current.src = url;
+          setPlaySrc(url);
           audioRef.current.load();
           const p = audioRef.current.play(); if (p && p.catch) p.catch(() => {});
         } catch {
