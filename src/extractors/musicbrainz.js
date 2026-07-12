@@ -86,7 +86,11 @@ export async function searchTrack({ artist, title, duration } = {}) {
  * Wrapper de searchTrack que devuelve solo los campos que el caller de
  * audioResolver/catalog necesita: MBID + año + álbum canónico.
  *
- * @returns {Promise<{mbid, year, albumId, albumName, genre, country}|null>}
+ * Ampliado (Bug 3): incluye `isLive` derivado del release-group del primer
+ * release. audioResolver lo usa para añadir `-live -concert -tour -acoustic`
+ * a la query de tier 2/3 cuando isLive === false (álbum de estudio).
+ *
+ * @returns {Promise<{mbid, year, albumId, albumName, isLive, genre, country}|null>}
  */
 export async function enrichTrack({ artist, title, duration } = {}) {
   const m = await searchTrack({ artist, title, duration });
@@ -96,6 +100,7 @@ export async function enrichTrack({ artist, title, duration } = {}) {
     year: m.year,
     albumId: m.albumId,
     albumName: m.albumName,
+    isLive: m.isLive,
     genre: m.genre,
     country: m.country,
     mbSource: 'musicbrainz',
@@ -261,6 +266,12 @@ function pickMatch(recordings, { artist, title, duration }) {
 }
 
 function mapRecording(rec, release = null) {
+  // primary-type del release-group del release. MB anida release-group dentro
+  // de cada release. Si no trae, se asume null y isLive queda indefinido.
+  const rgType = release?.['release-group']?.['primary-type']
+    || rec.releases?.[0]?.['release-group']?.['primary-type']
+    || null;
+  const titleForLiveCheck = rec.title || release?.title || '';
   return {
     id: rec.id || null,
     title: rec.title || null,
@@ -271,6 +282,9 @@ function mapRecording(rec, release = null) {
     duration: rec.length ? Math.round(rec.length / 1000) : null,
     genre: rec.genres?.[0]?.name || null,
     country: release?.country || null,
+    isLive: rgType === 'Live' || /\blive\b|\bconcert\b|\bunplugged\b/i.test(titleForLiveCheck),
+    isCompilation: rgType === 'Compilation',
+    rgType,
     mbSource: 'musicbrainz',
   };
 }

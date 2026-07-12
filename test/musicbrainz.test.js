@@ -12,7 +12,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { enrichTrack, searchTrack, lookupByMBID, getReleaseTracks, __resetThrottleForTests } from '../src/extractors/musicbrainz.js';
+import { enrichTrack, searchTrack, lookupByMBID, getReleaseTracks, enrichAlbum, __resetThrottleForTests } from '../src/extractors/musicbrainz.js';
 
 // ─── Stub de fetch ─────────────────────────────────────────────────
 const _origFetch = global.fetch;
@@ -171,5 +171,164 @@ test('MusicBrainz: getReleaseTracks ante red caída devuelve []', async () => {
   mockFetch(new Map([['/release/', null]]));
   const tracks = await getReleaseTracks('whatever-uuid');
   assert.deepEqual(tracks, []);
+  restoreFetch();
+});
+
+// ─── Bug 2: enrichAlbum + getReleaseTracks ampliado ─────────────────
+
+test('MusicBrainz: enrichAlbum devuelve releaseMBID prefiriendo Album sobre Live', async () => {
+  __resetThrottleForTests();
+  mockFetch(new Map([['/release?', {
+    releases: [
+      {
+        id: 'live-uuid',
+        title: 'Live atMSG',
+        'artist-credit': [{ name: 'Linkin Park', artist: { id: 'lp-mbid' } }],
+        'release-group': { 'primary-type': 'Live' },
+        date: '2010-01-01',
+      },
+      {
+        id: 'studio-uuid',
+        title: 'Hybrid Theory',
+        'artist-credit': [{ name: 'Linkin Park', artist: { id: 'lp-mbid' } }],
+        'release-group': { 'primary-type': 'Album' },
+        date: '2000-10-24',
+      },
+    ],
+  }]]));
+  const r = await enrichAlbum({ artist: 'Linkin Park', albumName: 'Hybrid Theory' });
+  assert.ok(r);
+  assert.equal(r.releaseMBID, 'studio-uuid',
+    'Album debe ganar sobre Live del mismo artista');
+  assert.equal(r.isLive, false, 'Album de estudio -> isLive false');
+  assert.equal(r.year, 2000);
+  assert.equal(r.artistMBID, 'lp-mbid');
+  restoreFetch();
+});
+
+test('MusicBrainz: enrichAlbum sin match devuelve null', async () => {
+  __resetThrottleForTests();
+  mockFetch(new Map([['/release?', {
+    releases: [{
+      id: 'other-uuid',
+      title: 'Completely Different Album',
+      'artist-credit': [{ name: 'Other Artist' }],
+      'release-group': { 'primary-type': 'Album' },
+    }],
+  }]]));
+  const r = await enrichAlbum({ artist: 'LP', albumName: 'Hybrid Theory' });
+  assert.equal(r, null, 'artista totalmente distinto -> null');
+  restoreFetch();
+});
+
+test('MusicBrainz: enrichAlbum ante red caida devuelve null', async () => {
+  __resetThrottleForTests();
+  mockFetch(new Map([['/release?', null]]));
+  const r = await enrichAlbum({ artist: 'LP', albumName: 'Anything' });
+  assert.equal(r, null);
+  restoreFetch();
+});
+
+test('MusicBrainz: getReleaseTracks ampliado trae trackNumber consecutivos', async () => {
+  __resetThrottleForTests();
+  mockFetch(new Map([['/release/', {
+    id: 'rel-uuid-100',
+    title: 'Hybrid Theory',
+    date: '2000-10-24',
+    'artist-credit': [{ name: 'Linkin Park' }],
+    'release-group': { 'primary-type': 'Album' },
+    media: [
+      {
+        track: [
+          { id: 't1', title: 'Papercut', length: 183000 },
+          { id: 't2', title: 'One Step Closer', length: 156000 },
+          { id: 't3', title: 'With You', length: 200000 },
+        ],
+      },
+      {
+        track: [
+          { id: 't4', title: 'Points of Authority', length: 200000 },
+          { id: 't5', title: 'Crawling', length: 182000 },
+        ],
+      },
+    ],
+  }]]));
+  const tracks = await getReleaseTracks('rel-uuid-100');
+  assert.equal(tracks.length, 5);
+  // trackNumber debe ser consecutivo 1..N a través de discos.
+  assert.deepEqual(tracks.map((t) => t.trackNumber), [1, 2, 3, 4, 5]);
+  assert.equal(tracks[3].title, 'Points of Authority');
+  assert.equal(tracks[3].trackNumber, 4);
+  // isLive: el album es Album (no Live) -> false.
+  assert.equal(tracks[0].isLive, false);
+  assert.equal(tracks[0].isCompilation, false);
+  restoreFetch();
+});
+
+test('MusicBrainz: getReleaseTracks de Live trae isLive=true', async () => {
+  __resetThrottleForTests();
+  mockFetch(new Map([['/release/', {
+    id: 'live-rel-uuid',
+    title: 'Live at Madison Square Garden',
+    date: '2010-08-29',
+    'artist-credit': [{ name: 'Linkin Park' }],
+    'release-group': { 'primary-type': 'Live' },
+    media: [{ track: [{ id: 'lt1', title: 'Papercut (Live)', length: 200000 }] }],
+  }]]));
+  const tracks = await getReleaseTracks('live-rel-uuid');
+  assert.equal(tracks.length, 1);
+  assert.equal(tracks[0].isLive, true, 'Live album -> isLive true');
+  restoreFetch();
+});
+
+test('MusicBrainz: enrichTrack ampliado trae isLive del release-group', async () => {
+  __resetThrottleForTests();
+  // Simula una busqueda de "Points of Authority" que primariamente matchea con
+  // un album de studio (Album) y por ende isLive=false.
+  mockFetch(new Map([['/recording?', {
+    recordings: [
+      {
+        id: 'rec-ptauth-studio',
+        title: 'Points of Authority',
+        'artist-credit': [{ name: 'Linkin Park' }],
+        length: 200000,
+        releases: [{
+          id: 'hybrid-theory-rel',
+          title: 'Hybrid Theory',
+          date: '2000-10-24',
+          'release-group': { 'primary-type': 'Album' },
+        }],
+      },
+    ],
+  }]]));
+  const e = await enrichTrack({ artist: 'Linkin Park', title: 'Points of Authority' });
+  assert.ok(e);
+  assert.equal(e.mbid, 'rec-ptauth-studio');
+  assert.equal(e.albumName, 'Hybrid Theory');
+  assert.equal(e.isLive, false, 'album de studio -> isLive false');
+  restoreFetch();
+});
+
+test('MusicBrainz: enrichTrack detecta Live album', async () => {
+  __resetThrottleForTests();
+  mockFetch(new Map([['/recording?', {
+    recordings: [
+      {
+        id: 'rec-live-uuid',
+        title: 'One Step Closer (Live)',
+        'artist-credit': [{ name: 'Linkin Park' }],
+        length: 165000,
+        releases: [{
+          id: 'live-rel',
+          title: 'Live at MSG',
+          date: '2010-08-29',
+          'release-group': { 'primary-type': 'Live' },
+        }],
+      },
+    ],
+  }]]));
+  const e = await enrichTrack({ artist: 'Linkin Park', title: 'One Step Closer' });
+  assert.ok(e);
+  assert.equal(e.isLive, true, 'Live album -> isLive true');
   restoreFetch();
 });

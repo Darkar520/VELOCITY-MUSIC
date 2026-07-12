@@ -31,6 +31,7 @@ import {
   createMemoryHistoryRepo,
   createMemoryTrackRepo,
 } from '../src/repositories/memory.js';
+import { __resetThrottleForTests as mbResetThrottle } from '../src/extractors/musicbrainz.js';
 
 const RUNS = { numRuns: 60 };
 const JWT_SECRET = 'test-secret';
@@ -762,5 +763,119 @@ test('Regresión: cleanTitle elimina sufijos promocionales de YouTube', () => {
   for (const [input, expected] of cases) {
     assert.equal(cleanTitle(input), expected,
       `cleanTitle("${input}") debería ser "${expected}"`);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bug 2: /api/album con MB canónico reordena el tracklist
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('Regresión Bug 2: /api/album con MB cayo devuelve tracks YTM sin reordenar', async () => {
+  // MB simula respuesta fallida (404) -> no reordena, devuelve album tal cual.
+  mbResetThrottle();
+  const origFetch = global.fetch;
+  global.fetch = async (url) => {
+    if (typeof url === 'string' && url.includes('musicbrainz.org')) {
+      return { ok: false, status: 404, json: async () => ({}) };
+    }
+    return origFetch(url);
+  };
+  try {
+    const albumImpl = async () => ({
+      albumId: 'alb-1',
+      name: 'Hybrid Theory',
+      artist: 'Linkin Park',
+      year: 2000,
+      cover: 'https://example.com/cover.jpg',
+      tracks: [
+        { id: 'a', title: 'Crawling', artist: 'Linkin Park', durationSeconds: 182 },
+        { id: 'b', title: 'Papercut', artist: 'Linkin Park', durationSeconds: 183 },
+        { id: 'c', title: 'Points of Authority', artist: 'Linkin Park', durationSeconds: 200 },
+      ],
+    });
+    const app = buildApp({ albumImpl });
+    const res = await request(app).get('/api/album?id=alb-1');
+    assert.equal(res.status, 200);
+    assert.equal(res.body.name, 'Hybrid Theory');
+    // Sin MB disponible: tracks en orden original de YTM (sin reordenar).
+    assert.deepEqual(res.body.tracks.map((t) => t.id), ['a', 'b', 'c'],
+      'MB caído -> tracks YTM en orden original');
+  } finally {
+    global.fetch = origFetch;
+  }
+});
+
+test('Regresión Bug 2: /api/album con MB exitoso reordena tracks segun trackNumber MB', async () => {
+  mbResetThrottle();
+  const origFetch = global.fetch;
+  // Mock con respuestas MB para /release (busqueda) y /release/<mbid> (tracks).
+  global.fetch = async (url) => {
+    if (typeof url === 'string' && url.includes('musicbrainz.org/ws/2/release?')) {
+      // Llamada enrichAlbum.
+      return {
+        ok: true, status: 200,
+        json: async () => ({
+          releases: [{
+            id: 'release-mb-uuid',
+            title: 'Hybrid Theory',
+            'artist-credit': [{ name: 'Linkin Park', artist: { id: 'lp-mbid' } }],
+            'release-group': { 'primary-type': 'Album' },
+            date: '2000-10-24',
+            'track-count': 3,
+          }],
+        }),
+      };
+    }
+    if (typeof url === 'string' && url.includes('musicbrainz.org/ws/2/release/release-mb-uuid')) {
+      // Llamada getReleaseTracks.
+      return {
+        ok: true, status: 200,
+        json: async () => ({
+          id: 'release-mb-uuid',
+          title: 'Hybrid Theory',
+          date: '2000-10-24',
+          'artist-credit': [{ name: 'Linkin Park' }],
+          'release-group': { 'primary-type': 'Album' },
+          media: [{
+            track: [
+              { id: 'mbid-1', title: 'Papercut', length: 183000 },
+              { id: 'mbid-2', title: 'Points of Authority', length: 200000 },
+              { id: 'mbid-3', title: 'Crawling', length: 182000 },
+            ],
+          }],
+        }),
+      };
+    }
+    return origFetch(url);
+  };
+  try {
+    // YTM devuelve orden "Crawling, Papercut, Points of Authority".
+    const albumImpl = async () => ({
+      albumId: 'alb-1',
+      name: 'Hybrid Theory',
+      artist: 'Linkin Park',
+      year: 2000,
+      cover: 'https://example.com/cover.jpg',
+      tracks: [
+        { id: 'yt-a', title: 'Crawling', artist: 'Linkin Park', durationSeconds: 182 },
+        { id: 'yt-b', title: 'Papercut', artist: 'Linkin Park', durationSeconds: 183 },
+        { id: 'yt-c', title: 'Points of Authority', artist: 'Linkin Park', durationSeconds: 200 },
+      ],
+    });
+    const app = buildApp({ albumImpl });
+    const res = await request(app).get('/api/album?id=alb-1');
+    assert.equal(res.status, 200);
+    // Reordenado segun MB trackNumber: Papercut(1), Points of Authority(2), Crawling(3).
+    assert.deepEqual(res.body.tracks.map((t) => t.id), ['yt-b', 'yt-c', 'yt-a'],
+      'tracks reordenadas por MB trackNumber');
+    // trackNumber adjunto por pista.
+    assert.deepEqual(res.body.tracks.map((t) => t.trackNumber), [1, 2, 3]);
+    // mbid por pista.
+    assert.equal(res.body.tracks[0].mbid, 'mbid-1');
+    assert.equal(res.body.tracks[1].mbid, 'mbid-2');
+    assert.equal(res.body.mbid, 'release-mb-uuid', 'album trae release MBID');
+    assert.equal(res.body.isLive, false, 'album de estudio -> isLive false');
+  } finally {
+    global.fetch = origFetch;
   }
 });
