@@ -5,7 +5,7 @@ import * as offline from './offline.js';
 import { isSpotifyUrl } from './spotifyImport.js';
 import { CSS, THEMES, SEED_ROWS, LATIN_ROWS, DISCOVERY, GENRES, ONBOARDING_GENRES, MOODS, ERAS, FALLBACK_COVER, BASE_VARS } from './constants.js';
 import { fmt, hex2rgba, grad, hiResCover, dedupeByTitle, capPerArtist, slimTrack, parseLRC, lyricsOverlapRatio, plainFromSyncedLines, tintedVars } from './helpers.js';
-import { cacheTrack, cacheTracks, trackById, allCached, loadMeta, loadPlayerState, saveMeta, normalizeTrack } from './catalog.js';
+import { cacheTrack, cacheTracks, trackById, allCached, loadMeta, loadPlayerState, saveMeta, normalizeTrack, bestCoverFor } from './catalog.js';
 import {
   isDocumentVisible,
   shouldResumeOnForeground,
@@ -162,9 +162,13 @@ export default function App() {
     return isStreamUrlFresh(u) ? u : null;
   });
   // Mirror App playback → playerStore (MiniPlayerBar/PlayerBar leen el store o props).
+  // Siempre reinyectar la mejor carátula conocida (catálogo / offline).
   useEffect(() => {
+    const mirrored = track
+      ? { ...track, cover: bestCoverFor(track.id, track.cover || track.artworkUrl || '') || track.cover || '' }
+      : null;
     usePlayerStore.setState({
-      track: track || null,
+      track: mirrored,
       playing: !!playing,
       loadingAudio: !!loadingAudio,
       time: time || 0,
@@ -175,6 +179,10 @@ export default function App() {
       queue: Array.isArray(queue) ? queue : [],
       playSrc: playSrc || null,
     });
+    // Si el track de App no tenía cover y el catálogo sí, enriquecer App (UI consistente).
+    if (track && mirrored?.cover && mirrored.cover !== track.cover) {
+      setTrack((prev) => (prev && prev.id === track.id ? { ...prev, cover: mirrored.cover } : prev));
+    }
   }, [track, playing, loadingAudio, time, dur, vol, shuffle, repeat, queue, playSrc]);
   // ── Dispositivos de salida (altavoz, audífonos, Bluetooth) ──
   const [outputs, setOutputs] = useState([]);
@@ -1315,13 +1323,10 @@ export default function App() {
     // Trackear la playlist de origen si se pasó opts.from. Permite mostrar un
     // botón en el reproductor para volver a la playlist de donde salió la pista.
     if (opts.from !== undefined) setPlayingFrom(opts.from);
-    // Cover: priorizar data: offline del catálogo (notificación + UI).
-    const cached = trackById(t.id);
-    if (cached && cached.cover) {
-      if (!t.cover || (String(cached.cover).startsWith('data:') && !String(t.cover || '').startsWith('data:'))) {
-        t = { ...t, cover: cached.cover };
-      }
-    }
+    // Cover: bestCoverFor elige data: offline > HTTPS del catálogo > la del track.
+    const best = bestCoverFor(t.id, t.cover || t.artworkUrl || '');
+    if (best && best !== t.cover) t = { ...t, cover: best };
+    else if (!t.cover && t.artworkUrl) t = { ...t, cover: t.artworkUrl };
     cacheTrack(t); saveMeta();
     // Detener limpiamente la pista anterior para evitar el "clic" al cortar la onda.
     const a = audioRef.current;

@@ -6,7 +6,8 @@ import React from 'react';
 import { fmt, hex2rgba, grad, hiResCover } from '../helpers.js';
 import { FALLBACK_COVER } from '../constants.js';
 import { Icon } from '../Icons.jsx';
-import { Spinner, RangeSlider } from '../components.jsx';
+import { Spinner, RangeSlider, CoverImg } from '../components.jsx';
+import { bestCoverFor } from '../catalog.js';
 import { usePlayerStore } from '../store/playerStore.js';
 
 export function PlayerBar({
@@ -45,6 +46,12 @@ export function PlayerBar({
   const setRepeat = typeof setRepeatProp === 'function' ? setRepeatProp : sSetRepeat;
 
   const pct = dur > 0 ? (time / dur) * 100 : 0;
+  const coverSrc = track
+    ? (bestCoverFor(track.id, track.cover || track.artworkUrl || '') || FALLBACK_COVER)
+    : FALLBACK_COVER;
+  const coverDisplay = (typeof coverSrc === 'string' && (coverSrc.startsWith('data:') || coverSrc.startsWith('blob:')))
+    ? coverSrc
+    : hiResCover(coverSrc, 128);
 
   if (!track) return (
     <div className="glass" style={{ flexShrink:0, height:90, borderTop:'1px solid var(--line-soft)', background:'#06080fcc', display:'flex', alignItems:'center', justifyContent:'center', color:'var(--txt-2)', fontSize:12.5 }}>Selecciona una canción para empezar</div>
@@ -53,7 +60,9 @@ export function PlayerBar({
   return (
     <div className="glass" style={{ flexShrink:0, height:90, borderTop:'1px solid var(--line-soft)', background:'#06080fcc', display:'grid', gridTemplateColumns:'minmax(180px,1fr) 2fr minmax(140px,1fr)', alignItems:'center', gap:18, padding:'0 22px' }}>
       <div style={{ display:'flex', alignItems:'center', gap:12, minWidth:0 }}>
-        <img src={track.cover ? hiResCover(track.cover, 128) : FALLBACK_COVER} alt="" onClick={onExpand} referrerPolicy="no-referrer" onError={e => { e.currentTarget.onerror = null; e.currentTarget.src = FALLBACK_COVER; }} className="press" style={{ width:52, height:52, borderRadius:12, objectFit:'cover', cursor:'pointer', boxShadow:`0 4px 14px ${hex2rgba(T.accent,.3)}`, flexShrink:0 }} />
+        <div className="press" onClick={onExpand} style={{ width:52, height:52, flexShrink:0, borderRadius:12, overflow:'hidden', cursor:'pointer', boxShadow:`0 4px 14px ${hex2rgba(T.accent,.3)}` }}>
+          <CoverImg key={`${track.id}-${String(coverDisplay).slice(0,40)}`} src={coverDisplay} alt="" radius={12} size={128} style={{ width:52, height:52 }} />
+        </div>
         <div style={{ minWidth:0 }}>
           <div style={{ fontSize:13, fontWeight:700, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', cursor:'pointer' }} onClick={onExpand}>{track.title}</div>
           <div style={{ fontSize:11, color:T.accent, marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.artist}</div>

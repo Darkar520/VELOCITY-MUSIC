@@ -1,15 +1,14 @@
 /**
  * MiniPlayerBar — barra de reproductor colapsada.
- *
- * Prioridad de estado: props de App (fuente de verdad actual del playback)
- * → fallback a playerStore (migración gradual).
+ * Props de App tienen prioridad; carátula resuelta vía bestCoverFor (catálogo/IDB).
  */
-import React from 'react';
+import React, { useMemo } from 'react';
 import { hex2rgba, grad, hiResCover } from '../helpers.js';
 import { useHSwipe } from '../hooks.js';
 import { FALLBACK_COVER } from '../constants.js';
 import { Icon } from '../Icons.jsx';
-import { Spinner } from '../components.jsx';
+import { Spinner, CoverImg } from '../components.jsx';
+import { bestCoverFor } from '../catalog.js';
 import { usePlayerStore } from '../store/playerStore.js';
 
 export function MiniPlayerBar({
@@ -32,6 +31,15 @@ export function MiniPlayerBar({
   const { dragX, handlers } = useHSwipe({ onLeft: next, onRight: prev, threshold: 60 });
   const isSliding = Math.abs(dragX) > 0;
 
+  // Siempre preferir carátula del catálogo (HTTPS o data: offline) sobre estado vacío.
+  const coverSrc = useMemo(() => {
+    if (!track) return FALLBACK_COVER;
+    const raw = bestCoverFor(track.id, track.cover || track.artworkUrl || '');
+    if (!raw || typeof raw !== 'string') return FALLBACK_COVER;
+    if (raw.startsWith('data:') || raw.startsWith('blob:')) return raw;
+    return hiResCover(raw, 96) || FALLBACK_COVER;
+  }, [track?.id, track?.cover, track?.artworkUrl]);
+
   if (!track) return null;
 
   return (
@@ -41,15 +49,26 @@ export function MiniPlayerBar({
       className="glass"
       style={{ background:`linear-gradient(135deg, ${hex2rgba(T.accent,.1)}, var(--surf-0))`, border:`1px solid ${hex2rgba(T.accent,.28)}`, borderRadius:20, padding:'10px 12px', display:'flex', alignItems:'center', gap:12, cursor:'pointer', boxShadow:`0 8px 28px ${hex2rgba(T.accent,.16)}, 0 2px 8px #0006`, position:'relative', overflow:'hidden', touchAction:'pan-y', userSelect:'none' }}
     >
-      <div style={{ position:'absolute', bottom:0, left:0, height:2.5, width:`${pct || 0}%`, background:grad(T,90), borderRadius:99, boxShadow:`0 0 8px ${T.accent}`, transition:'width .15s linear' }} />
-      <img
-        src={track.cover ? hiResCover(track.cover, 96) : FALLBACK_COVER} alt="" referrerPolicy="no-referrer" onError={e => { e.currentTarget.onerror = null; e.currentTarget.src = FALLBACK_COVER; }}
-        style={{ width:42, height:42, borderRadius:11, objectFit:'cover', flexShrink:0, boxShadow:'0 4px 12px #0007',
+      <div style={{ position:'absolute', bottom:0, left:0, height:2.5, width:`${pct || 0}%`, background:grad(T,90), borderRadius:99, boxShadow:`0 0 8px ${T.accent}`, transition:'width .15s linear', zIndex:2 }} />
+      <div
+        style={{
+          width:42, height:42, flexShrink:0, borderRadius:11, overflow:'hidden',
+          boxShadow:'0 4px 12px #0007',
           transform: `translateX(${dragX * 0.6}px)`,
           transition: isSliding ? 'none' : 'transform .35s cubic-bezier(.22,1,.36,1)',
-          opacity: 1 - Math.abs(dragX) / 200,
+          // Nunca bajar opacity a 0 en idle (bug visual de carátula “invisible”).
+          opacity: isSliding ? Math.max(0.35, 1 - Math.abs(dragX) / 200) : 1,
         }}
-      />
+      >
+        <CoverImg
+          key={`${track.id || 't'}-${coverSrc.slice(0, 48)}`}
+          src={coverSrc}
+          alt=""
+          radius={11}
+          size={96}
+          style={{ width:42, height:42 }}
+        />
+      </div>
       <div style={{ flex:1, minWidth:0,
         transform: `translateX(${dragX * 0.25}px)`,
         transition: isSliding ? 'none' : 'transform .35s cubic-bezier(.22,1,.36,1)',
