@@ -22,11 +22,10 @@ import { scheduleLibraryOfflineSync } from '../offlineLibrary.js';
 const PENDING_FAVS_KEY = 'velocity.pendingFavs';
 
 /**
- * @param {{ authed?: boolean, showToast?: function, download?: function, downloadMany?: function }} opts
- * download/downloadMany: al añadir a Me gusta / playlist / mezcla se cachea
- * letra offline + se descarga audio (no al meramentear reproducir).
+ * @param {{ authed?: boolean, showToast?: function }} opts
+ * Al añadir a biblioteca: solo letra offline (ligero). Audio = botón Descargar.
  */
-export function useLibraryActions({ authed, showToast, download, downloadMany } = {}) {
+export function useLibraryActions({ authed, showToast } = {}) {
   const pendingFavsRef = useRef(null);
   if (!pendingFavsRef.current) {
     pendingFavsRef.current = new Map(); // id → 'add' | 'remove'
@@ -66,8 +65,8 @@ export function useLibraryActions({ authed, showToast, download, downloadMany } 
   useEffect(() => { if (authed) flushPendingFavs(); }, [authed, flushPendingFavs]);
 
   const offlinePack = useCallback((ids) => {
-    scheduleLibraryOfflineSync(ids, { download, downloadMany });
-  }, [download, downloadMany]);
+    scheduleLibraryOfflineSync(ids);
+  }, []);
 
   const toggleFav = useCallback(async (id) => {
     const store = useLibraryStore.getState();
@@ -176,7 +175,7 @@ export function useLibraryActions({ authed, showToast, download, downloadMany } 
     if (mix.tracks?.length) api.saveTracks(mix.tracks.map(slimTrack).filter(Boolean)).catch(() => {});
     // Mezcla guardada → offline de todas sus pistas (letra + audio)
     if (entry.trackIds?.length) offlinePack(entry.trackIds);
-    try { await api.savePlaylist(entry); showToast?.('Mix guardado · descargando offline…'); }
+    try { await api.savePlaylist(entry); showToast?.('Mix guardado en tu biblioteca'); }
     catch {
       setTimeout(() => api.savePlaylist(entry).catch(() => {}), 2000);
       showToast?.('Guardado localmente · se sincronizará después');

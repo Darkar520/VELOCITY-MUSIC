@@ -1,15 +1,13 @@
 /**
- * Offline de biblioteca: letra + audio solo al añadir a Me gusta / playlist / mezcla.
+ * Offline de biblioteca: solo letra al guardar (Me gusta / playlist / mezcla).
  *
- * Regla de producto:
- *   - Reproducir cualquier canción → letra ONLINE (ExpandedPlayer).
- *   - Offline (IDB letra + blob audio) → SOLO si el usuario la guarda en biblioteca.
+ * Audio blob: SOLO con el botón Descargar. Auto-descargar audio al dar like
+ * saturaba red/CPU y lagueaba toda la app.
  */
 import { api } from './api.js';
 import * as offline from './offline.js';
 import { trackById } from './catalog.js';
 
-/** ¿Está en Me gusta, playlist propia o mezcla guardada? */
 export function isTrackInLibrary(trackId, { favs = [], playlists = [], savedPlaylists = [] } = {}) {
   if (!trackId) return false;
   if (favs.includes(trackId)) return true;
@@ -18,11 +16,6 @@ export function isTrackInLibrary(trackId, { favs = [], playlists = [], savedPlay
   return false;
 }
 
-/**
- * Descarga letra (sync preferido) y la guarda en IndexedDB.
- * No-op si ya hay LRC cacheado.
- * @returns {Promise<boolean>} true si se guardó o ya existía usable
- */
 export async function ensureLyricsOffline(track) {
   if (!track?.id) return false;
   try {
@@ -40,7 +33,6 @@ export async function ensureLyricsOffline(track) {
     let d = await api.lyrics({ ...base, sync: true }).catch(() => null);
     if (!d?.synced) d = await api.lyrics(base).catch(() => null);
     if (!d || (!d.synced && !d.plain)) {
-      // Si había plain sin sync, conservarlo
       if (existing?.plain) return true;
       return false;
     }
@@ -57,37 +49,20 @@ export async function ensureLyricsOffline(track) {
 }
 
 /**
- * Tras añadir a biblioteca: cachear letra y encolar descarga de audio.
- * Fire-and-forget seguro (no bloquea la UI).
- *
+ * Solo letras (ligero). No descarga audio.
  * @param {string|string[]} trackIds
- * @param {{ download?: (t: object) => Promise<void>, downloadMany?: (ids: string[]) => Promise<void> }} opts
  */
-export function scheduleLibraryOfflineSync(trackIds, opts = {}) {
+export function scheduleLibraryOfflineSync(trackIds) {
   const ids = [...new Set((Array.isArray(trackIds) ? trackIds : [trackIds]).filter(Boolean))];
   if (!ids.length) return;
 
-  // Letras en paralelo suave (máx 3 a la vez)
   const lyricQueue = [...ids];
-  const lyricWorkers = Array.from({ length: Math.min(3, lyricQueue.length) }, async () => {
+  const workers = Array.from({ length: Math.min(2, lyricQueue.length) }, async () => {
     while (lyricQueue.length) {
       const id = lyricQueue.shift();
       const tk = trackById(id);
       if (tk) await ensureLyricsOffline(tk);
     }
   });
-  Promise.all(lyricWorkers).catch(() => {});
-
-  // Audio offline: batch si hay varios; uno a uno si hay download unitario
-  const { download, downloadMany } = opts;
-  if (downloadMany && ids.length > 1) {
-    downloadMany(ids).catch(() => {});
-  } else if (download) {
-    ids.forEach((id) => {
-      const tk = trackById(id);
-      if (tk) download(tk).catch(() => {});
-    });
-  } else if (downloadMany) {
-    downloadMany(ids).catch(() => {});
-  }
+  Promise.all(workers).catch(() => {});
 }

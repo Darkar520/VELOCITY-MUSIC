@@ -33,11 +33,13 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
   // el resaltado vaya a saltos. Aquí leemos currentTime a ~15 Hz mientras la
   // letra está abierta y reproduciendo, para un seguimiento fluido y preciso.
   const [lyricTime, setLyricTime] = useState(0);
+  // ~5 Hz basta para resaltar línea; 15 Hz re-renderizaba todo el player (lag).
   useEffect(() => {
     if (!showLyrics && !desktop) return;
+    if (!playing) return;
     const read = () => { const a = audioRef?.current; if (a) setLyricTime(a.currentTime || 0); };
     read();
-    const id = setInterval(read, 66);
+    const id = setInterval(read, 200);
     return () => clearInterval(id);
   }, [showLyrics, desktop, audioRef, playing, track?.id]);
   // Tiempo efectivo: el de alta frecuencia si la letra está abierta, si no el prop.

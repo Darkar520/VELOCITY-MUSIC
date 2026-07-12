@@ -74,7 +74,7 @@ describe('libraryStore', () => {
 
   it('saveAlbum agrega sin duplicar y unsaveAlbum quita', () => {
     const store = useLibraryStore.getState();
-    const album = { id: 'al1', name: 'Album X' };
+    const album = { albumId: 'al1', name: 'Album X' };
     store.saveAlbum(album);
     store.saveAlbum(album); // duplicado — no debe repetir
     expect(useLibraryStore.getState().savedAlbums).toHaveLength(1);
@@ -82,6 +82,30 @@ describe('libraryStore', () => {
     store.unsaveAlbum('al1');
     expect(useLibraryStore.getState().savedAlbums).toHaveLength(0);
     expect(store.isAlbumSaved('al1')).toBe(false);
+  });
+
+  it('regresión: álbumes se guardan y consultan por albumId (no id)', () => {
+    const store = useLibraryStore.getState();
+    // El adapter usa albumId en toda la app; el store debe respetarlo.
+    const album = { albumId: 'ALB-42', name: 'Vientos', artist: 'X', cover: 'https://c/42.jpg' };
+    store.saveAlbum(album);
+    expect(useLibraryStore.getState().savedAlbums).toHaveLength(1);
+    expect(useLibraryStore.getState().savedAlbums[0].albumId).toBe('ALB-42');
+    // isAlbumSaved debe mirar albumId, no id (regresión del commit c851b7e).
+    expect(store.isAlbumSaved('ALB-42')).toBe(true);
+    expect(store.isAlbumSaved('ALB-99')).toBe(false);
+    // unsaveAlbum debe quitar por albumId aunque el objeto tenga otras claves.
+    store.unsaveAlbum('ALB-42');
+    expect(store.isAlbumSaved('ALB-42')).toBe(false);
+  });
+
+  it('saveAlbum rechaza entradas sin albumId (no debe guardarse nada)', () => {
+    const store = useLibraryStore.getState();
+    // Sin albumId no se persiste (evita álbumes sin clave usable).
+    store.saveAlbum({ id: 'al1' });
+    store.saveAlbum({ name: 'sin id' });
+    store.saveAlbum(null);
+    expect(useLibraryStore.getState().savedAlbums).toEqual([]);
   });
 
   it('savePlaylist / unsavePlaylist / isPlaylistSaved funcionan por playlistId', () => {
@@ -101,7 +125,7 @@ describe('libraryStore', () => {
     store.toggleFav('a');
     store.createPlaylistLocal('p1', 'X');
     store.pushRecent('r1');
-    store.saveAlbum({ id: 'al1' });
+    store.saveAlbum({ albumId: 'al1' });
     store.setHomeRows([{ section: 's1' }]);
     store.setHomeLoading(true);
     store.bumpFeedNonce();
