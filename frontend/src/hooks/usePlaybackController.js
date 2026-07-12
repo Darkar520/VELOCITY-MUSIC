@@ -213,15 +213,20 @@ export function usePlaybackController(deps) {
           return;
         }
       }
+      // Calentar resolve en paralelo (primera pista: menos espera en stream-proxy).
+      api.prefetchStream(sp);
       let url = api.peekStreamUrl(sp, 45);
       if (!url) url = await api.ensureStreamUrl(sp);
       if (getMachine().trackId !== trackId || getMachine().intent !== 'play') return;
       setTrack((prev) => (prev && prev.id === trackId ? { ...prev, url } : prev));
       dispatchAudio({ type: 'STREAM_READY', trackId, url });
-    } catch {
-      if (getMachine().trackId === trackId) {
-        dispatchAudio({ type: 'PLAY_FAILED', reason: 'sign' });
-        showToast?.('No se pudo autorizar el audio. Reintenta.');
+    } catch (err) {
+      if (getMachine().trackId !== trackId) return;
+      dispatchAudio({ type: 'PLAY_FAILED', reason: 'sign' });
+      if (err?.status === 401) {
+        showToast?.('Sesión caducada. Vuelve a iniciar sesión.');
+      } else {
+        showToast?.('No se pudo preparar el audio. Toca de nuevo.');
       }
     }
   };
@@ -381,7 +386,11 @@ export function usePlaybackController(deps) {
     const trackWithQuality = { ...t, url: api.streamUrl(sp) };
     setTrack(trackWithQuality);
     afterPlaySideEffects(t, trackWithQuality, initialQueue, qParam, opts);
-    const peeked = api.peekStreamUrl(sp, 90);
+
+    // Firma + warm resolve YA (TRACK_SET también llama ensureStream; inflight dedup).
+    // Prefetch reduce el cold-start de yt-dlp en la 1ª canción.
+    api.prefetchStream(sp);
+    const peeked = api.peekStreamUrl(sp, 45);
     if (peeked) {
       dispatchAudio({ type: 'STREAM_READY', trackId: t.id, url: peeked });
       return;
@@ -393,10 +402,12 @@ export function usePlaybackController(deps) {
       try {
         localStorage.setItem('velocity.player', JSON.stringify({ track: { ...t, url: signedUrl }, queue: initialQueue, t: 0 }));
       } catch { /* ignore */ }
-    }).catch(() => {
+    }).catch((err) => {
       if (playGenRef.current !== gen) return;
+      // ensureStream del machine puede ya haber tostado; no duplicar si gen cambió.
       dispatchAudio({ type: 'PLAY_FAILED', reason: 'sign' });
-      showToast?.('No se pudo autorizar el stream. Inicia sesión de nuevo.');
+      if (err?.status === 401) showToast?.('Sesión caducada. Vuelve a iniciar sesión.');
+      else showToast?.('No se pudo preparar el audio. Toca de nuevo.');
     });
   }, [
     setPlayingFrom, audioRef, fadeRafRef, fadeSafetyRef, selfPauseRef, pendingFadeRef,

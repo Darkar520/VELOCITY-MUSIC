@@ -50,89 +50,99 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
   const ambientB = dominantColor?.b ?? parseInt(T.accent.slice(5,7),16);
   const ambientRgba = (a) => `rgba(${ambientR},${ambientG},${ambientB},${a})`;
 
-  useEffect(() => { if (!open) setShowLyrics(false); }, [open]);
+  // Al abrir el player: ir a letra en móvil (el usuario quiere verla).
   useEffect(() => {
-    if ((!showLyrics && !desktop) || !track) return;
-    let cancel = false;
-    setLyricState({ status:'loading', synced:[], plain:[] });
-    const base = { artist: track.artist, title: track.title, album: track.album, duration: track.durationSeconds, id: track.id };
+    if (open && !desktop) setShowLyrics(true);
+    if (!open) setShowLyrics(false);
+  }, [open, desktop, track?.id]);
 
-    const applyLyrics = (d, { allowSynced = true } = {}) => {
+  // Cargar letra SIEMPRE que el player esté abierto (no solo al tab Letra).
+  // Un solo flujo ordenado: offline → sync (correcta) → plain. Sin carreras.
+  useEffect(() => {
+    if (!open || !track?.id) return;
+    let cancel = false;
+    const trackId = track.id;
+    setLyricState({ status: 'loading', synced: [], plain: [] });
+
+    const base = {
+      artist: track.artist || '',
+      title: track.title || '',
+      album: track.album,
+      duration: track.durationSeconds,
+      id: track.id,
+    };
+
+    const toPlainLines = (text) =>
+      String(text || '')
+        .split(/\r?\n/)
+        .filter((l, i, a) => l || (i > 0 && i < a.length - 1));
+
+    const commit = (d) => {
       if (cancel || !d) return;
-      const synced = allowSynced ? parseLRC(d.synced) : [];
-      const plain = (d.plain || '').split(/\r?\n/).filter((l, i, a) => l || (i > 0 && i < a.length - 1));
-      setLyricState((prev) => {
-        // No degradar una letra sincronizada válida por una respuesta sin sync.
-        if (prev.status === 'ok' && prev.synced.length && !synced.length) return prev;
-        return { status: 'ok', synced, plain: plain.length ? plain : prev.plain || [], source: d.source };
+      const synced = parseLRC(d.synced);
+      const fromSync = synced.length ? plainFromSyncedLines(synced) : '';
+      const plainText = d.plain || fromSync || '';
+      const plain = toPlainLines(plainText);
+      if (!synced.length && plain.filter((l) => l.trim()).length < 2) {
+        setLyricState({ status: 'none', synced: [], plain: [] });
+        return;
+      }
+      setLyricState({
+        status: 'ok',
+        synced,
+        plain: plain.length ? plain : toPlainLines(fromSync),
+        source: d.source || 'api',
       });
-      // Offline: SOLO biblioteca (Me gusta / playlist / mezcla).
-      // Reproducir sin guardar → letra online, sin escribir IndexedDB.
-      if (inLibrary && track.id && (synced.length || plain.length)) {
-        const lrcRaw = d.synced || null;
-        offline.saveLyrics(track.id, {
-          synced: lrcRaw,
-          plain: d.plain || plain.join('\n'),
+      if (inLibrary && (synced.length || plain.length)) {
+        offline.saveLyrics(trackId, {
+          synced: d.synced || null,
+          plain: plainText || plain.join('\n'),
           source: d.source,
         }).catch(() => {});
       }
     };
 
-    // 1) Caché offline primero (modo sin red o respuesta instantánea).
-    offline.getLyrics(track.id).then((cached) => {
-      if (cancel || !cached) return;
-      if (cached.synced || cached.plain) {
-        applyLyrics({ synced: cached.synced, plain: cached.plain, source: cached.source || 'offline' });
-      }
-    }).catch(() => {});
-
-    // 2) Rápido (YT / lrclib filtrado / ovh)
-    api.lyrics(base)
-      .then((d) => {
+    (async () => {
+      try {
+        const cached = await offline.getLyrics(trackId).catch(() => null);
         if (cancel) return;
-        if (!d) {
-          setLyricState((s) => (s.status === 'ok' ? s : { status: 'none', synced: [], plain: [] }));
-          return;
+        if (cached && (cached.synced || cached.plain)) {
+          commit({
+            synced: cached.synced,
+            plain: cached.plain,
+            source: cached.source || 'offline',
+          });
+          if (cached.synced && parseLRC(cached.synced).length >= 4) return;
         }
-        applyLyrics(d);
-      })
-      .catch(() => {
-        if (!cancel) setLyricState((s) => (s.status === 'ok' ? s : { status: 'none', synced: [], plain: [] }));
-      });
 
-    // 3) Sync largo: SOLO aceptar si la letra coincide con la plain ya mostrada
-    //    (o si aún no había plain). Evita el "salto" a otra canción.
-    api.lyrics({ ...base, sync: true })
-      .then((d) => {
-        if (cancel || !d || !d.synced) return;
-        const synced = parseLRC(d.synced);
-        if (!synced.length) return;
-        const syncedPlain = plainFromSyncedLines(synced);
-        setLyricState((prev) => {
-          const prevPlain = (prev.plain || []).join('\n') || plainFromSyncedLines(prev.synced || []);
-          if (prevPlain && prevPlain.trim().length > 40) {
-            const ratio = lyricsOverlapRatio(prevPlain, syncedPlain || d.plain || '');
-            if (ratio < 0.35) {
-              // Letra sincronizada de OTRA canción → conservar la plain correcta.
-              return prev;
+        let d = await api.lyrics({ ...base, sync: true }).catch(() => null);
+        if (cancel) return;
+        if (d?.synced && parseLRC(d.synced).length) {
+          if (cached?.plain && String(cached.plain).trim().length > 40) {
+            const sp = plainFromSyncedLines(parseLRC(d.synced));
+            if (lyricsOverlapRatio(cached.plain, sp || d.plain || '') < 0.3) {
+              commit({ synced: null, plain: cached.plain, source: cached.source || 'offline' });
+              return;
             }
           }
-          const plain = prev.plain?.length
-            ? prev.plain
-            : (d.plain || syncedPlain || '').split(/\r?\n/);
-          if (inLibrary && track.id) {
-            offline.saveLyrics(track.id, {
-              synced: d.synced,
-              plain: plain.join('\n'),
-              source: 'lrclib',
-            }).catch(() => {});
-          }
-          return { status: 'ok', synced, plain, source: 'lrclib' };
-        });
-      })
-      .catch(() => {});
+          commit(d);
+          return;
+        }
+
+        d = d?.plain ? d : await api.lyrics(base).catch(() => null);
+        if (cancel) return;
+        if (d && (d.synced || d.plain)) {
+          commit(d);
+          return;
+        }
+        if (!cancel) setLyricState({ status: 'none', synced: [], plain: [] });
+      } catch {
+        if (!cancel) setLyricState({ status: 'none', synced: [], plain: [] });
+      }
+    })();
+
     return () => { cancel = true; };
-  }, [showLyrics, desktop, track?.id, inLibrary]);
+  }, [open, track?.id, track?.artist, track?.title, inLibrary]);
 
   const activeLyric = useMemo(() => {
     if (!lyricState.synced || !lyricState.synced.length) return -1;

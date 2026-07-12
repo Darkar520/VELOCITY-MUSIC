@@ -1479,15 +1479,16 @@ export default function App() {
   // pista de la cola en lugar de detener todo. Reduce al máximo los cortes.
   const MAX_PLAY_RETRIES = 6;
   const handleAudioError = () => {
-    // Ignorar errores sintéticos al vaciar src (cambio de pista / clearSrc).
-    // Si no, el empty-load dispara “No se pudo reproducir esta pista”.
+    // Ignorar errores al vaciar src o sin URL real (cambio de pista).
     if (effectCtxRef.current?._suppressAudioError) return;
     const a = audioRef.current;
-    if (a && !(a.currentSrc || a.getAttribute('src'))) return;
+    const rawSrc = (a?.currentSrc || a?.getAttribute?.('src') || a?.src || '').trim();
+    if (!a || !rawSrc || rawSrc === (typeof location !== 'undefined' ? location.href : '')) return;
+    // 401 del proxy llega como error de media; reintentar con firma fresca (abajo).
 
     selfPauseRef.current = false;
     const cur = track?.id;
-    if (!a || !cur) {
+    if (!cur) {
       dispatchAudio({ type: 'PLAY_FAILED', reason: 'no-el' });
       return;
     }

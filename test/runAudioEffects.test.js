@@ -100,13 +100,18 @@ test('hasRealMediaSrc rechaza vacío y location.href', () => {
 
 test('applyMediaSrc escribe src en el DOM de inmediato', () => {
   let reactSrc = null;
-  const el = { src: '', getAttribute: () => '' };
+  let attr = '';
+  const el = {
+    src: '',
+    getAttribute: (k) => (k === 'src' ? attr : null),
+    setAttribute: (k, v) => { if (k === 'src') { attr = v; el.src = v; } },
+  };
   applyMediaSrc(
     { setPlaySrc: (u) => { reactSrc = u; }, audioRef: { current: el } },
     'https://cdn.example/b.mp3',
   );
   assert.equal(reactSrc, 'https://cdn.example/b.mp3');
-  assert.equal(el.src, 'https://cdn.example/b.mp3');
+  assert.equal(attr, 'https://cdn.example/b.mp3');
 });
 
 test('hardStopAudio + epoch invalida schedulePlay de la pista anterior', async () => {

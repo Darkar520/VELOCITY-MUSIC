@@ -112,7 +112,7 @@ export const api = {
     const inflight = this._streamSignInflight.get(key);
     if (inflight) return inflight;
 
-    const p = (async () => {
+    const signOnce = async () => {
       const q = new URLSearchParams();
       if (artist) q.set('artist', artist);
       if (title) q.set('title', title);
@@ -133,6 +133,17 @@ export const api = {
         this._streamSignCache.delete(oldest);
       }
       return url;
+    };
+
+    // Un reintento ante fallo de red / 5xx (no ante 401 de sesión).
+    const p = (async () => {
+      try {
+        return await signOnce();
+      } catch (err) {
+        if (err?.status === 401 || err?.status === 400) throw err;
+        await new Promise((r) => setTimeout(r, 350));
+        return signOnce();
+      }
     })();
 
     this._streamSignInflight.set(key, p);

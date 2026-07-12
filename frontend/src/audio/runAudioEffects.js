@@ -56,22 +56,23 @@ export function hardStopAudio(ctx) {
   if (ctx.selfPauseRef) ctx.selfPauseRef.current = false;
   if (typeof ctx.setPlaySrc === 'function') ctx.setPlaySrc(null);
   if (typeof ctx.setTime === 'function') ctx.setTime(0);
-  // Liberar el flag en el siguiente tick (tras el error sintético si lo hubo).
+  // El error event del <audio> puede llegar un poco después del clear.
   setTimeout(() => {
     if (ctx) ctx._suppressAudioError = false;
-  }, 0);
+  }, 400);
 }
 
 /** Asigna src al DOM de inmediato (React setPlaySrc es async en el siguiente paint). */
 export function applyMediaSrc(ctx, url) {
   if (!ctx || !url) return;
+  ctx._suppressAudioError = false;
   if (typeof ctx.setPlaySrc === 'function') ctx.setPlaySrc(url);
   const a = ctx.audioRef?.current;
   if (!a) return;
   try {
-    const cur = a.getAttribute('src') || '';
-    if (cur === url || a.src === url) return;
-    a.src = url;
+    const attr = a.getAttribute('src') || '';
+    if (attr === url) return;
+    a.setAttribute('src', url);
   } catch { /* ignore */ }
 }
 
