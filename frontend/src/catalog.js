@@ -95,6 +95,9 @@ export function normalizeTrack(t) {
     // dejando pistas sin carátula tras persistir.
     cover: t.artworkUrl || t.cover || '',
     durationSeconds: t.durationSeconds || t.duration || 0,
+    // MusicBrainz enrichment (campo opcional, fresco desde el backend).
+    // null/undefined no rompen el catálogo; se preserva cuando llega.
+    mbid: t.mbid || null,
   };
   n.url = api.streamUrl({
     artist: n.artist, title: n.title, id: n.id,

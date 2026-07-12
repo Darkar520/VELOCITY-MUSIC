@@ -35,7 +35,7 @@ export class ResolveError extends Error {
  *  lanza ResolveError(404) sin fuente reproducible
  */
 export async function resolve(params = {}, ctx = {}) {
-  const { artist: rawArtist, title: rawTitle, stream, quality } = params;
+  const { artist: rawArtist, title: rawTitle, stream, quality, duration } = params;
   const {
     cache,
     mode = 'full',
@@ -43,6 +43,8 @@ export async function resolve(params = {}, ctx = {}) {
     catalogImpl,
     timeoutMs = EXTRACTOR_TIMEOUT_MS,
     forceRefresh = false,
+    mbEnrich = null,         // (artist, title, duration?) => {mbid, year, albumName, ...} | null
+    fallbackChain = true,    // cadena de 3 tiers (YTM → YTM-clean → YT-plan). default ON.
   } = ctx;
 
   const artist = String(rawArtist ?? '').trim();
@@ -78,15 +80,67 @@ export async function resolve(params = {}, ctx = {}) {
 
   // 3) Full_Mode + yt-dlp (2.3, 2.5–2.7, 2.11).
   if (mode === 'full' && typeof extractorImpl === 'function') {
+    const tierBudget = fallbackChain && typeof mbEnrich === 'function' ? 3 : 1;
+    // 3 tiers x ~8-9s cada uno cabe en timeoutMs=30s. Sin fallbackChain se respeta
+    // el comportamiento historico (1 intento, timeoutMs completo).
+    const perTierMs = fallbackChain && typeof mbEnrich === 'function'
+      ? Math.min(9000, Math.floor(timeoutMs / 3))
+      : timeoutMs;
+
     let url = null;
+    let mbData = null;
+
+    // Tier 1: YTM con query original (comportamiento historico).
     try {
-      url = await withTimeout(extractorImpl({ artist, title, videoId: params.videoId, quality }), timeoutMs);
-    } catch {
-      url = null;
+      url = await withTimeout(
+        extractorImpl({ artist, title, videoId: params.videoId, quality, sourcePool: 'ytm' }),
+        perTierMs,
+      );
+    } catch { url = null; }
+
+    // Tier 2 y 3 solo si fallbackChain activo y MB disponible.
+    if (!isUsableUrl(url) && fallbackChain && typeof mbEnrich === 'function') {
+      try { mbData = await withTimeout(mbEnrich({ artist, title, duration }), 3000); }
+      catch { mbData = null; }
+
+      if (mbData) {
+        // Query canonica limpia: artist + title (MB) + album opcional.
+        const cleanArtist = artist;
+        const cleanTitle = title;
+        const cleanQuery = mbData.albumName
+          ? `${cleanArtist} - ${cleanTitle} ${mbData.albumName}`.trim()
+          : `${cleanArtist} - ${cleanTitle}`;
+
+        // Tier 2: YTM con query limpia (mismo pool, query distinta).
+        try {
+          url = await withTimeout(
+            extractorImpl({ artist: cleanArtist, title: cleanTitle, quality, sourcePool: 'ytm', query: cleanQuery }),
+            perTierMs,
+          );
+        } catch { url = null; }
+
+        // Tier 3: YouTube plano, query limpia (covers, lives, fan uploads).
+        if (!isUsableUrl(url)) {
+          try {
+            url = await withTimeout(
+              extractorImpl({ artist: cleanArtist, title: cleanTitle, quality, sourcePool: 'yt', query: cleanQuery }),
+              perTierMs,
+            );
+          } catch { url = null; }
+        }
+      }
     }
+
+    void tierBudget;
     if (isUsableUrl(url)) {
       if (cache) cache.set(key, url);
-      return { status: 302, url, fromCache: false, mode: 'full' };
+      return {
+        status: 302,
+        url,
+        fromCache: false,
+        mode: 'full',
+        ...(mbData ? { mbid: mbData.mbid, mbEnriched: true } : {}),
+      };
     }
     // 4) Degradación ante fallo del extractor (2.8).
     return {

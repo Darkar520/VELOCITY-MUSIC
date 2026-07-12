@@ -9,6 +9,7 @@ import { createRateLimiter } from './middleware/rateLimit.js';
 import { StreamCache } from './services/streamCache.js';
 import { searchTracks, MetadataError } from './services/metadataService.js';
 import { resolve as resolveAudio, ResolveError } from './services/audioResolver.js';
+import { enrichTrack as mbEnrichTrack } from './extractors/musicbrainz.js';
 import { createStreamProxyHandler } from './services/streamProxy.js';
 import { buildStatus } from './services/status.js';
 import { isFullResolutionAllowed } from './services/resolutionMode.js';
@@ -264,6 +265,9 @@ export function createApp(deps = {}) {
 
   // Resolver compartido para /api/resolve y el proxy. `opts.forceRefresh` re-resuelve
   // ignorando la caché (para recuperarse de URLs de audio expiradas/403).
+  // `mbEnrichTrack` se inyecta para activar la cadena de 3 tiers en audioResolver
+  // (YTM → YTM-clean → YT-plan). Si MB está caído, audioResolver lo trata como
+  // null y la cadena se reduce a tier 1 (comportamiento historico).
   const doResolve = (params, opts = {}) =>
     resolveAudio(params, {
       cache,
@@ -272,6 +276,7 @@ export function createApp(deps = {}) {
       catalogImpl,
       timeoutMs: resolveTimeoutMs,
       forceRefresh: !!opts.forceRefresh,
+      mbEnrich: mbEnrichTrack,
     });
 
   // Caché de búsqueda en memoria (resultados, no audio). TTL 5 minutos, máx 200 entradas.
@@ -313,12 +318,49 @@ export function createApp(deps = {}) {
         }
       }
       res.setHeader('X-Cache', 'MISS');
+      // MB enrich fire-and-forget: enriquece primeros 5 resultados con MBID +
+      // año canonico. Throttle 1req/seg => ~5s. Sobrescribe searchCache solo si
+      // la entrada sigue siendo la misma (no re-search en el medio). Usuarios
+      // que repitan la misma query dentro del TTL veran datos enriquecidos.
+      enrichSearchInBackground(cacheKey, deduped);
       return res.json({ results: deduped });
     } catch (err) {
       if (err instanceof MetadataError) return res.status(err.status).json({ error: err.message });
       return res.status(502).json({ error: 'El catálogo de YouTube Music no está disponible.' });
     }
   });
+
+  // ── MB enrich en background ───────────────────────────────────────
+  // No bloquea la respuesta. Si MB cae o no matchea, no tostar nada.
+  function enrichSearchInBackground(cacheKey, originalResults) {
+    const origAt = searchCache.get(cacheKey)?.at;
+    setImmediate(async () => {
+      try {
+        const top = (originalResults || []).slice(0, 5);
+        const enriched = [...originalResults];
+        for (let i = 0; i < top.length; i++) {
+          const tr = top[i];
+          const durSec = tr.durationMs ? Math.round(tr.durationMs / 1000) : null;
+          const e = await mbEnrichTrack({
+            artist: tr.artist, title: tr.title, duration: durSec,
+          });
+          if (e) {
+            enriched[i] = {
+              ...enriched[i],
+              mbid: e.mbid,
+              mbYear: e.year,
+              mbAlbumName: e.albumName,
+            };
+          }
+        }
+        // Solo sobrescribir si la entrada no fue reemplazada por otra busqueda.
+        const cur = searchCache.get(cacheKey);
+        if (cur && cur.at === origAt && cur.results === originalResults) {
+          searchCacheSet(cacheKey, { results: enriched, at: origAt });
+        }
+      } catch {}
+    });
+  }
 
   // ---- Letras (YouTube Music nativo + lrclib filtrado + lyrics.ovh) ----
   // lrclib search devolvía el primer hit y a menudo la letra de OTRA canción.

@@ -105,10 +105,26 @@ export function probeYtDlp() {
  * @returns {Promise<string|null>} URL directa, o null si todo falla.
  */
 export function createYtDlpExtractor({ scFallback } = {}) {
-  return async function extractorImpl({ artist, title, videoId, quality }) {
-    const ytTarget = videoId
-      ? `https://www.youtube.com/watch?v=${videoId}`
-      : `ytsearch1:${artist} - ${title} (Official Audio)`;
+  // sourcePool controla que pool de videos usa yt-dlp para la busqueda:
+  //   'ytm' (default): sesga hacia music results via "(Official Audio)".
+  //     Intenta capturar videos "oficiales" subidos a canales - Topic de YT.
+  //   'yt': sin sesgo "(Official Audio)". Cubre covers, lives, lyric videos,
+  //     uploads de fans, canales no-music. Encuentra videos que YTM no indexa.
+  // query (opcional): texto de busqueda canonicamente limpio (artist - title).
+  //   Si se pasa, sustituye a "${artist} - ${title}". Usado por el fallback
+  //   chain de audioResolver cuando MB aporta titulo/album limpios.
+  return async function extractorImpl({ artist, title, videoId, quality, sourcePool = 'ytm', query = null } = {}) {
+    const searchBase = query || `${artist} - ${title}`;
+    let ytTarget;
+    if (videoId) {
+      ytTarget = `https://www.youtube.com/watch?v=${videoId}`;
+    } else if (sourcePool === 'yt') {
+      // Sin "(Official Audio)": pool mas amplio (covers, lives, uploads).
+      ytTarget = `ytsearch1:${searchBase}`;
+    } else {
+      // 'ytm' default: sesgo hacia music results (comportamiento historico).
+      ytTarget = `ytsearch1:${searchBase} (Official Audio)`;
+    }
     const baseArgs = ['-f', audioFormatSelector(quality), '-g', '--no-playlist',
       '--extractor-retries', '2', '--socket-timeout', '15'];
 
