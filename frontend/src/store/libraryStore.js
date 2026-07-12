@@ -129,15 +129,15 @@ export const useLibraryStore = create((set, get) => ({
 
   // ─── Saved albums ───────────────────────────────────────────
   saveAlbum: (album) => {
-    if (!album || !album.id) return;
-    set((s) => (s.savedAlbums.some((a) => a.id === album.id) ? s : { savedAlbums: [...s.savedAlbums, album] }));
+    if (!album || !album.albumId) return;
+    set((s) => (s.savedAlbums.some((a) => a.albumId === album.albumId) ? s : { savedAlbums: [...s.savedAlbums, album] }));
   },
 
   unsaveAlbum: (albumId) => {
-    set((s) => ({ savedAlbums: s.savedAlbums.filter((a) => a.id !== albumId) }));
+    set((s) => ({ savedAlbums: s.savedAlbums.filter((a) => a.albumId !== albumId) }));
   },
 
-  isAlbumSaved: (albumId) => get().savedAlbums.some((a) => a.id === albumId),
+  isAlbumSaved: (albumId) => get().savedAlbums.some((a) => a.albumId === albumId),
 
   // ─── Saved playlists (mixes guardados) ─────────────────────
   savePlaylist: (playlist) => {
