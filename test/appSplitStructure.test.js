@@ -170,3 +170,21 @@ test('App wires playerStore and libraryStore via bindings (no dual useState mirr
   assert.ok(existsSync(src('store', 'playerStore.js')));
   assert.ok(existsSync(src('store', 'libraryStore.js')));
 });
+
+test('App uses usePlaybackController; no dual machineRef reduce loop', () => {
+  const app = readFileSync(src('App.jsx'), 'utf8');
+  assert.match(app, /usePlaybackController/);
+  assert.doesNotMatch(app, /const machineRef\s*=\s*useRef/);
+  assert.doesNotMatch(app, /audioReduce\s*\(\s*machineRef/);
+  assert.match(app, /dispatchPolicy|dispatchAudio/);
+  const hook = readFileSync(src('hooks', 'usePlaybackController.js'), 'utf8');
+  assert.match(hook, /export function usePlaybackController/);
+  assert.match(hook, /dispatchPolicy/);
+  assert.match(hook, /const play\s*=/);
+  assert.match(hook, /const togglePlay\s*=/);
+  assert.match(hook, /const next\s*=/);
+  assert.match(hook, /const seek\s*=/);
+  const store = readFileSync(src('store', 'playerStore.js'), 'utf8');
+  assert.match(store, /dispatchPolicy/);
+  assert.match(store, /getMachineState/);
+});

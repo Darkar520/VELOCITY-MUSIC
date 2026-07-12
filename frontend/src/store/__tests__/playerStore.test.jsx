@@ -74,6 +74,21 @@ describe('playerStore', () => {
     expect(usePlayerStore.getState().playing).toBe(true);
   });
 
+  it('dispatchPolicy is the unified machine path (syncReact + machine state)', () => {
+    const store = usePlayerStore.getState();
+    expect(typeof store.dispatchPolicy).toBe('function');
+    expect(typeof store.getMachineState).toBe('function');
+    expect(typeof store.patchMachine).toBe('function');
+    const { state, effects } = store.dispatchPolicy({ type: 'TRACK_SET', trackId: 't1', intent: 'play' });
+    expect(state.trackId).toBe('t1');
+    expect(state.intent).toBe('play');
+    expect(Array.isArray(effects)).toBe(true);
+    expect(store.getMachineState().trackId).toBe('t1');
+    // patchMachine is the only mutation path for mirrors (no App machineRef)
+    store.patchMachine({ srcStatus: 'ready' });
+    expect(store.getMachineState().srcStatus).toBe('ready');
+  });
+
   it('cambiar de pista (next/prev simulado via playTrack) resetea time y sessionPosition', () => {
     const store = usePlayerStore.getState();
     store.playTrack(T1, { intent: 'play' });

@@ -17,7 +17,7 @@ import {
   mediaSessionPlaybackState,
   isStreamUrlFresh,
 } from './audioContinuity.js';
-import { initialState as audioInitialState, reduce as audioReduce, selectPlaySync } from './audio/audioMachine.js';
+import { selectPlaySync } from './audio/audioMachine.js';
 import { runAudioEffects, flushPendingSeek } from './audio/runAudioEffects.js';
 import { usePersisted, useViewport, useDominantColor, useHSwipe } from './hooks.js';
 import { useLibrarySync } from './hooks/useLibrarySync.js';
@@ -26,6 +26,7 @@ import { useLibraryActions } from './hooks/useLibraryActions.js';
 import { useDownloads } from './hooks/useDownloads.js';
 import { usePlayerStoreBindings } from './hooks/usePlayerStoreBindings.js';
 import { useLibraryStoreBindings } from './hooks/useLibraryStoreBindings.js';
+import { usePlaybackController } from './hooks/usePlaybackController.js';
 import { useLibraryStore } from './store/libraryStore.js';
 import { usePlayerStore } from './store/playerStore.js';
 import { Icon } from './Icons.jsx';
@@ -468,11 +469,9 @@ export default function App() {
   useEffect(() => { queueRef.current = queue; }, [queue]);
   useEffect(() => { trackRef.current = track; }, [track]);
   useEffect(() => { settingsRef.current = settings; }, [settings]);
-  // ── Audio machine (Fase 2): un solo dispatch; espejos solo para legacy UI ──
-  const machineRef = useRef(audioInitialState());
-  const effectCtxRef = useRef({});
-  const systemPausedRef = useRef(false);       // mirror: focus === 'yielded'
-  const interruptPositionRef = useRef(null);   // mirror: yieldPosition
+  // Espejos de machine (focus/yield) — leen la machine unificada del playerStore.
+  const systemPausedRef = useRef(false);
+  const interruptPositionRef = useRef(null);
   const interruptTrackIdRef = useRef(null);
   const reacquireInFlight = useRef(false);
   const lastTimeRef = useRef(0);
@@ -500,87 +499,22 @@ export default function App() {
     }
   };
 
-  const syncMirrorsFromMachine = (s) => {
-    playingRef.current = s.intent === 'play';
-    systemPausedRef.current = s.focus === 'yielded';
-    interruptPositionRef.current = s.yieldPosition;
-    interruptTrackIdRef.current = s.yieldTrackId;
-    sessionResumeRef.current =
-      s.sessionPosition != null && s.trackId
-        ? { trackId: s.trackId, position: s.sessionPosition }
-        : null;
-  };
-
-  const dispatchAudio = (event) => {
-    const { state, effects } = audioReduce(machineRef.current, event);
-    machineRef.current = state;
-    syncMirrorsFromMachine(state);
-    runAudioEffects(effects, effectCtxRef.current);
-  };
-
-  // Contexto de effects (se rellena cada render; ensureStream usa helpers de más abajo vía ref).
-  const ensureStreamFnRef = useRef(async () => {});
-  effectCtxRef.current = {
-    audioRef,
-    selfPauseRef,
-    playingRef,
-    setPlaySrc,
-    setPlaying,
-    setTime,
-    setLoadingAudio,
-    setMediaInterrupted,
-    setMediaSessionState,
-    vol,
-    showToast,
-    getIntent: () => machineRef.current.intent,
-    ensureStream: (trackId) => { ensureStreamFnRef.current(trackId); },
-    onPlayOk: (a) => {
-      dispatchAudio({ type: 'PLAYING', position: a?.currentTime || 0 });
-    },
-    onPlayFail: (err) => {
-      if (err?.name === 'NotAllowedError') {
-        dispatchAudio({ type: 'USER_PAUSE' });
-        showToast('Toca de nuevo para reproducir');
-        return;
-      }
-      dispatchAudio({ type: 'PLAY_FAILED', reason: err?.name || 'play' });
-    },
-  };
-
-  /** Espejos post-reacquire: alinear machine al dejar de ceder. */
-  const clearYieldedFocus = () => {
-    if (machineRef.current.focus === 'yielded') {
-      machineRef.current = {
-        ...machineRef.current,
-        focus: 'own',
-        yieldPosition: null,
-        yieldTrackId: null,
-      };
-      syncMirrorsFromMachine(machineRef.current);
-    }
-    systemPausedRef.current = false;
-    setMediaInterrupted(false);
-  };
-  // Compat DOM: seek session/yield cuando el elemento ya tiene metadata.
-  const restoreInterruptPosition = (a) => {
-    if (!a || machineRef.current.focus !== 'yielded') return;
-    const saved = machineRef.current.yieldPosition;
-    if (saved == null) return;
-    if ((a.currentTime || 0) >= saved - 1.25) return;
-    try { a.currentTime = saved; setTime(saved); } catch {}
-  };
-  const applySessionResume = (a) => {
-    if (!a || a.readyState < 1) return false;
-    const s = machineRef.current;
-    if (s.sessionPosition == null || !s.trackId) return false;
-    if ((a.currentTime || 0) >= 1.5 && Math.abs((a.currentTime || 0) - s.sessionPosition) < 1.25) return false;
-    if ((a.currentTime || 0) > s.sessionPosition + 1.25) return false;
-    try {
-      a.currentTime = s.sessionPosition;
-      setTime(s.sessionPosition);
-      return true;
-    } catch { return false; }
-  };
+  // ── Playback controller: play/toggle/next/seek + dispatch unificado al store ──
+  const {
+    play, togglePlay, next, prev, seek,
+    dispatchAudio, getMachine, patchMachine, syncMirrorsFromMachine,
+    clearYieldedFocus, restoreInterruptPosition, applySessionResume,
+    fadeInAudio, effectCtxRef, orderIds, nextCover, prevCover,
+    addToQueue, reorderQueue, removeFromQueue, removeFromQueueToast, prefetchNext,
+  } = usePlaybackController({
+    audioRef, selfPauseRef, playingRef, fadeRafRef, fadeSafetyRef, pendingFadeRef,
+    objUrlRef, queueRef, trackRef, radioRef, radioSeedRef, mixSessionRef,
+    nextTrackActionRef, prevTrackActionRef, sessionResumeRef,
+    systemPausedRef, interruptPositionRef, interruptTrackIdRef,
+    quality, backendDown, downloaded, track, playing, time, vol, queue, shuffle,
+    setTrack, setPlaying, setTime, setPlaySrc, setLoadingAudio, setMediaInterrupted,
+    setQueue, setRecent, setPlayingFrom, showToast, recordPlayStat, setMediaSessionState,
+  });
   // Web Audio para normalizar volumen (compresor de rango dinámico). Opt-in.
   // ── AudioContext eliminado: era incompatible con background playback en móvil ──
   // createMediaElementSource secuestra el <audio> permanentemente y el AudioContext
@@ -760,20 +694,20 @@ export default function App() {
     if (!a) return;
     // Mantener srcStatus alineado con playSrc real
     const fresh = Boolean(playSrc && (isStreamUrlFresh(playSrc) || String(playSrc).startsWith('blob:')));
-    if (fresh && machineRef.current.srcStatus !== 'ready') {
-      machineRef.current = { ...machineRef.current, srcStatus: 'ready' };
-    } else if (!playSrc && machineRef.current.srcStatus === 'ready') {
-      machineRef.current = { ...machineRef.current, srcStatus: 'none' };
+    if (fresh && getMachine().srcStatus !== 'ready') {
+      patchMachine({ srcStatus: 'ready' });
+    } else if (!playSrc && getMachine().srcStatus === 'ready') {
+      patchMachine({ srcStatus: 'none' });
     }
     // intent desde React playing (por si UI cambió sin dispatch)
-    if (playing && machineRef.current.intent !== 'play') {
-      machineRef.current = { ...machineRef.current, intent: 'play' };
+    if (playing && getMachine().intent !== 'play') {
+      patchMachine({ intent: 'play' });
       playingRef.current = true;
-    } else if (!playing && machineRef.current.intent === 'play' && !mediaInterrupted) {
+    } else if (!playing && getMachine().intent === 'play' && !mediaInterrupted) {
       // no forzar pause aquí: yield mantiene intent play
     }
 
-    const strategy = selectPlaySync(machineRef.current, { visible: isDocumentVisible() });
+    const strategy = selectPlaySync(getMachine(), { visible: isDocumentVisible() });
     if (strategy === 'noop') return;
     if (strategy === 'pause') {
       selfPauseRef.current = true;
@@ -924,12 +858,12 @@ export default function App() {
         && (a.currentTime || 0) > 0.5
         && !a.paused;
       if (!shouldResumeOnForeground({
-        userWantsPlay: machineRef.current.intent === 'play',
+        userWantsPlay: getMachine().intent === 'play',
         audioEnded: a.ended,
         audioPaused: a.paused,
         volume: a.volume,
         targetVolume: vol,
-        systemPaused: machineRef.current.focus === 'yielded',
+        systemPaused: getMachine().focus === 'yielded',
         timeStuck,
       })) return;
 
@@ -1085,340 +1019,7 @@ export default function App() {
   // Salir del modo selección al navegar.
   useEffect(() => { if (selecting) { setSelecting(false); setSelection(new Set()); } /* eslint-disable-next-line */ }, [tab, view]);
 
-  // ── Acciones de reproducción ──
-  // Fundido de entrada corto para evitar el "clic"/pop al empezar una pista.
-  // Solo se aplica con la página visible: cuando está en segundo plano o la
-  // pantalla bloqueada, requestAnimationFrame se congela, así que ahí ponemos
-  // el volumen directo (sin fundido) para no dejar la música en silencio.
-  const fadeInAudio = () => {
-    const a = audioRef.current;
-    if (!a) return;
-    cancelAnimationFrame(fadeRafRef.current);
-    clearTimeout(fadeSafetyRef.current);
-    const target = vol;
-    // Si la página no está visible, no arriesgamos el fundido (rAF congelado).
-    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
-      a.volume = target;
-      return;
-    }
-    a.volume = 0;
-    const start = performance.now();
-    const dur = 130; // ms — imperceptible pero elimina el pop de inicio
-    const step = (now) => {
-      const p = Math.min(1, (now - start) / dur);
-      a.volume = target * (p * (2 - p)); // ease-out
-      if (p < 1) fadeRafRef.current = requestAnimationFrame(step);
-      else a.volume = target;
-    };
-    fadeRafRef.current = requestAnimationFrame(step);
-    // Red de seguridad: si el rAF se congela (bloqueo de pantalla a mitad del
-    // fundido), garantizar que el volumen llegue al objetivo.
-    fadeSafetyRef.current = setTimeout(() => { cancelAnimationFrame(fadeRafRef.current); if (audioRef.current) audioRef.current.volume = target; }, dur + 350);
-  };
-
-  // Precarga la(s) siguiente(s) pista(s): firma HMAC + resolve backend.
-  // Crítico para background: next()/onEnded debe poder poner playSrc sin red.
-  const prefetchedRef = useRef(new Set());
-  const streamParamsFor = (nt, qParam) => ({
-    artist: nt.artist,
-    title: nt.title,
-    id: nt.id,
-    quality: qParam,
-    stream: (nt.source === 'soundcloud' && nt.stream) ? nt.stream : undefined,
-  });
-
-  // Machine → ensureStream (offline / peek / red)
-  ensureStreamFnRef.current = async (trackId) => {
-    const t = trackById(trackId) || (trackRef.current?.id === trackId ? trackRef.current : null);
-    if (!t) {
-      dispatchAudio({ type: 'PLAY_FAILED', reason: 'no-track' });
-      return;
-    }
-    const qParam = ({ high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' }[quality] || 'high');
-    const sp = streamParamsFor(t, qParam);
-    try {
-      if (downloaded.has(trackId)) {
-        const b = await offline.getBlob(trackId);
-        if (b && machineRef.current.trackId === trackId) {
-          if (objUrlRef.current) { try { URL.revokeObjectURL(objUrlRef.current); } catch {} }
-          const u = URL.createObjectURL(b);
-          objUrlRef.current = u;
-          dispatchAudio({ type: 'STREAM_READY', trackId, url: u });
-          return;
-        }
-      }
-      let url = api.peekStreamUrl(sp, 45);
-      if (!url) url = await api.ensureStreamUrl(sp);
-      if (machineRef.current.trackId !== trackId || machineRef.current.intent !== 'play') return;
-      setTrack((prev) => (prev && prev.id === trackId ? { ...prev, url } : prev));
-      dispatchAudio({ type: 'STREAM_READY', trackId, url });
-    } catch {
-      if (machineRef.current.trackId === trackId) {
-        dispatchAudio({ type: 'PLAY_FAILED', reason: 'sign' });
-        showToast('No se pudo autorizar el audio. Reintenta.');
-      }
-    }
-  };
-  const prefetchNext = (currentId, ids, qParam) => {
-    if (!ids || ids.length < 1) return;
-    const i = ids.indexOf(currentId);
-    if (i === -1) return;
-    // Actual + próximas 3 (pre-firmar mientras la página puede hacer red).
-    for (let n = 0; n <= 3; n++) {
-      const nextId = ids[(i + n) % ids.length];
-      if (!nextId) continue;
-      if (downloaded.has(nextId)) continue;
-      const nt = trackById(nextId);
-      if (!nt) continue;
-      const sp = streamParamsFor(nt, qParam);
-      // Siempre re-warm si la firma está por caducar (peek con margen 5 min).
-      if (api.peekStreamUrl(sp, 300)) {
-        if (n === 0) continue;
-        if (prefetchedRef.current.has(nextId + ':' + qParam)) continue;
-      }
-      prefetchedRef.current.add(nextId + ':' + qParam);
-      api.warmStreamUrl(sp);
-      api.prefetchStream({ artist: nt.artist, title: nt.title, id: nt.id, quality: qParam });
-    }
-    if (prefetchedRef.current.size > 80) {
-      prefetchedRef.current = new Set([...prefetchedRef.current].slice(-40));
-    }
-  };
-
-  // opts.radio=true → inicia una "radio": la cola se llena con canciones
-  // relacionadas a la elegida (tipo Spotify), en vez de una lista fija.
-  const ensureRadio = async (seed, existingIds = []) => {
-    if (!seed || !seed.id) return;
-    radioSeedRef.current = seed.id;
-    try {
-      const raw = await api.radio(seed.id);
-      if (radioSeedRef.current !== seed.id) return; // cambió la semilla mientras cargaba
-      let more = capPerArtist(dedupeByTitle(raw.map(normalizeTrack)), 3)
-        .filter(t => t.id && t.id !== seed.id && !existingIds.includes(t.id));
-      if (!more.length) return;
-      const addIds = more.slice(0, 30).map(t => t.id);
-      setQueue(q => {
-        const base = q && q.length ? q : [seed.id];
-        const merged = [...base];
-        addIds.forEach(id => { if (!merged.includes(id)) merged.push(id); });
-        return merged;
-      });
-    } catch {}
-  };
-
-  // Generación de play: descarta firmas async obsoletas si el usuario ya cambió de pista.
-  const playGenRef = useRef(0);
-
-  const applyOnlineSrc = (t, sp, gen, fallbackTrack) => {
-    const peeked = api.peekStreamUrl(sp, 90);
-    if (peeked) {
-      setTrack({ ...t, url: peeked });
-      dispatchAudio({ type: 'STREAM_READY', trackId: t.id, url: peeked });
-      return;
-    }
-    api.ensureStreamUrl(sp).then((signedUrl) => {
-      if (playGenRef.current !== gen || machineRef.current.trackId !== t.id) return;
-      setTrack({ ...t, url: signedUrl });
-      dispatchAudio({ type: 'STREAM_READY', trackId: t.id, url: signedUrl });
-    }).catch(() => {
-      if (playGenRef.current !== gen) return;
-      if (fallbackTrack?.url && isStreamUrlFresh(fallbackTrack.url)) {
-        dispatchAudio({ type: 'STREAM_READY', trackId: t.id, url: fallbackTrack.url });
-      } else {
-        dispatchAudio({ type: 'PLAY_FAILED', reason: 'sign' });
-      }
-    });
-  };
-
-  const afterPlaySideEffects = (t, trackWithQuality, initialQueue, qParam, opts) => {
-    setRecent(r => [t.id, ...r.filter(x => x !== t.id)].slice(0, 30));
-    recordPlayStat(t);
-    api.recordHistory(t.id).catch(() => {});
-    api.updateNowPlaying({ trackId: t.id, title: t.title, artist: t.artist, cover: t.cover, position: 0, duration: t.durationSeconds || 0, playing: true, deviceName: navigator.userAgent.includes('Mobile') ? 'Móvil' : 'Web', quality: qParam });
-    api.saveTracks([slimTrack(t)]);
-    try { localStorage.setItem('velocity.player', JSON.stringify({ track: trackWithQuality, queue: initialQueue, t: 0 })); } catch {}
-    prefetchNext(t.id, initialQueue, qParam);
-    if (opts.radio) { radioRef.current = true; ensureRadio(t, initialQueue); }
-    else { radioRef.current = false; radioSeedRef.current = null; }
-    if (opts.mixLabel) mixSessionRef.current = { label: opts.mixLabel, used: new Set([opts.mixLabel]) };
-    else if (!opts.keepMix) mixSessionRef.current = { label: null, used: new Set() };
-  };
-
-  const play = (t, list, opts = {}) => {
-    if (!t) return;
-    // Trackear la playlist de origen si se pasó opts.from. Permite mostrar un
-    // botón en el reproductor para volver a la playlist de donde salió la pista.
-    if (opts.from !== undefined) setPlayingFrom(opts.from);
-    // Cover: bestCoverFor elige data: offline > HTTPS del catálogo > la del track.
-    const best = bestCoverFor(t.id, t.cover || t.artworkUrl || '');
-    if (best && best !== t.cover) t = { ...t, cover: best };
-    else if (!t.cover && t.artworkUrl) t = { ...t, cover: t.artworkUrl };
-    cacheTrack(t); saveMeta();
-    // Detener limpiamente la pista anterior para evitar el "clic" al cortar la onda.
-    const a = audioRef.current;
-    const visible = isDocumentVisible();
-    if (a) { try { cancelAnimationFrame(fadeRafRef.current); clearTimeout(fadeSafetyRef.current); selfPauseRef.current = true; a.pause(); } catch {} }
-    // Fade SOLO en visible: si rAF se congela en background, volume queda en 0 = silencio eterno.
-    if (a && shouldFadeIn(visible)) { a.volume = 0; pendingFadeRef.current = true; }
-    else { if (a) a.volume = vol; pendingFadeRef.current = false; }
-    const initialQueue = list && list.length ? list : [t.id];
-    setQueue(initialQueue);
-    const qualityMap = { high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' };
-    const qParam = qualityMap[quality] || 'high';
-    const sp = streamParamsFor(t, qParam);
-    const gen = ++playGenRef.current;
-
-    if (objUrlRef.current) { URL.revokeObjectURL(objUrlRef.current); objUrlRef.current = null; }
-
-    // Política de play/seek/anclas vía machine
-    dispatchAudio({ type: 'TRACK_SET', trackId: t.id, intent: 'play' });
-    setTime(0);
-
-    // ── Offline: blob local (sin red) ──
-    if (downloaded.has(t.id)) {
-      const trackWithQuality = { ...t, url: api.streamUrl(sp) };
-      setTrack(trackWithQuality);
-      offline.getBlob(t.id).then(b => {
-        if (playGenRef.current !== gen || machineRef.current.trackId !== t.id) return;
-        if (b) {
-          const u = URL.createObjectURL(b);
-          objUrlRef.current = u;
-          dispatchAudio({ type: 'STREAM_READY', trackId: t.id, url: u });
-        } else applyOnlineSrc(t, sp, gen, trackWithQuality);
-      }).catch(() => {
-        if (playGenRef.current === gen) applyOnlineSrc(t, sp, gen, { ...t, url: api.streamUrl(sp) });
-      });
-      afterPlaySideEffects(t, { ...t, url: api.streamUrl(sp) }, initialQueue, qParam, opts);
-      return;
-    }
-
-    if (backendDown) {
-      setTrack({ ...t, url: '' });
-      dispatchAudio({ type: 'USER_PAUSE' });
-      setPlaySrc(null);
-      showToast('Sin conexión: esta canción no está descargada');
-      return;
-    }
-
-    // Online: peek o ensure → STREAM_READY (TRACK_SET ya pidió ensureStream; evitamos carrera con gen)
-    const trackWithQuality = { ...t, url: api.streamUrl(sp) };
-    setTrack(trackWithQuality);
-    afterPlaySideEffects(t, trackWithQuality, initialQueue, qParam, opts);
-    const peeked = api.peekStreamUrl(sp, 90);
-    if (peeked) {
-      dispatchAudio({ type: 'STREAM_READY', trackId: t.id, url: peeked });
-      return;
-    }
-    // ensureStream del effect de TRACK_SET también corre; este path es respaldo si falló
-    api.ensureStreamUrl(sp).then((signedUrl) => {
-      if (playGenRef.current !== gen || machineRef.current.trackId !== t.id) return;
-      setTrack({ ...t, url: signedUrl });
-      dispatchAudio({ type: 'STREAM_READY', trackId: t.id, url: signedUrl });
-      try { localStorage.setItem('velocity.player', JSON.stringify({ track: { ...t, url: signedUrl }, queue: initialQueue, t: 0 })); } catch {}
-    }).catch(() => {
-      if (playGenRef.current !== gen) return;
-      dispatchAudio({ type: 'PLAY_FAILED', reason: 'sign' });
-      showToast('No se pudo autorizar el stream. Inicia sesión de nuevo.');
-    });
-  };
-  const togglePlay = () => {
-    if (!track) return;
-    if (machineRef.current.intent === 'play' || playingRef.current || playing) {
-      dispatchAudio({ type: 'USER_PAUSE' });
-      api.updateNowPlaying({
-        trackId: track.id, title: track.title, artist: track.artist, cover: track.cover,
-        position: audioRef.current?.currentTime || time || 0, duration: track.durationSeconds || 0,
-        playing: false, deviceName: navigator.userAgent.includes('Mobile') ? 'Móvil' : 'Web',
-        quality: '',
-      });
-      return;
-    }
-    // Asegurar trackId en machine (p.ej. tras HYDRATE o play previo)
-    if (machineRef.current.trackId !== track.id) {
-      dispatchAudio({ type: 'TRACK_SET', trackId: track.id, intent: 'play' });
-    } else {
-      dispatchAudio({ type: 'USER_PLAY' });
-    }
-    const pos = machineRef.current.sessionPosition ?? machineRef.current.livePosition ?? time ?? 0;
-    api.updateNowPlaying({
-      trackId: track.id, title: track.title, artist: track.artist, cover: track.cover,
-      position: pos, duration: track.durationSeconds || 0,
-      playing: true, deviceName: navigator.userAgent.includes('Mobile') ? 'Móvil' : 'Web',
-      quality: '',
-    });
-  };
-  const orderIds = queue.length ? queue : (track ? [track.id] : []);
-  const next = () => {
-    const cur = trackRef.current || track;
-    const ids = (queueRef.current && queueRef.current.length)
-      ? queueRef.current
-      : (orderIds.length ? orderIds : (cur ? [cur.id] : []));
-    if (!cur || !ids.length) return;
-    if (shuffle && ids.length > 1) {
-      let id; do { id = ids[Math.floor(Math.random() * ids.length)]; } while (id === cur.id && ids.length > 1);
-      const t = trackById(id); if (t) play(t, ids, { keepMix: true }); return;
-    }
-    const i = ids.indexOf(cur.id);
-    if (i === -1) return;
-    const t = trackById(ids[(i + 1) % ids.length]);
-    if (t) play(t, ids, { keepMix: true });
-  };
-  const prev = () => {
-    const cur = trackRef.current || track;
-    const ids = (queueRef.current && queueRef.current.length)
-      ? queueRef.current
-      : (orderIds.length ? orderIds : (cur ? [cur.id] : []));
-    if (!cur || !ids.length) return;
-    // Si llevamos >3s, prev = reiniciar pista actual (comportamiento tipo Spotify).
-    const a = audioRef.current;
-    if (a && (a.currentTime || 0) > 3) {
-      dispatchAudio({ type: 'USER_SEEK', position: 0 });
-      if (machineRef.current.intent === 'play') runAudioEffects([{ type: 'play' }], effectCtxRef.current);
-      return;
-    }
-    const i = ids.indexOf(cur.id);
-    if (i === -1) return;
-    const t = trackById(ids[(i - 1 + ids.length) % ids.length]);
-    if (t) play(t, ids, { keepMix: true });
-  };
-  // Seek del usuario → machine (limpia anclas A10/A12).
-  const seek = (v) => {
-    const pos = Math.max(0, Number(v) || 0);
-    dispatchAudio({ type: 'USER_SEEK', position: pos });
-    if (audioRef.current && audioRef.current.volume < vol && !pendingFadeRef.current) {
-      audioRef.current.volume = vol;
-    }
-  };
-  // Mantener refs de Media Session al día (lock screen next/prev).
-  nextTrackActionRef.current = next;
-  prevTrackActionRef.current = prev;
-  // Carátulas vecinas (para el carrusel tipo Spotify en el reproductor).
-  const _curIdx = orderIds.indexOf(track?.id);
-  const nextCover = orderIds.length > 1 ? (trackById(orderIds[(_curIdx + 1) % orderIds.length]) || {}).cover : null;
-  const prevCover = orderIds.length > 1 ? (trackById(orderIds[(_curIdx - 1 + orderIds.length) % orderIds.length]) || {}).cover : null;
-
-  // ── Cola ──
-  const addToQueue = (id) => {
-    const t = trackById(id); if (!t) return;
-    setQueue(q => {
-      const base = q.length ? [...q] : (track ? [track.id] : []);
-      const without = base.filter(x => x !== id);
-      const ci = track ? without.indexOf(track.id) : -1;
-      if (ci === -1) return [...without, id];          // sin actual: al final
-      without.splice(ci + 1, 0, id);                    // justo después de la actual
-      return without;
-    });
-    if (!track) play(t);
-    showToast('Se reproducirá a continuación');
-  };
-  const reorderQueue = (from, to) => setQueue(q => { const a = [...q]; const [m] = a.splice(from, 1); a.splice(to, 0, m); return a; });
-  const removeFromQueue = (id) => setQueue(q => q.filter(x => x !== id || x === track?.id));
-  // Quitar de la cola con feedback (usado por el swipe a la izquierda).
-  const removeFromQueueToast = (id) => {
-    const inQueue = queue.includes(id) && id !== track?.id;
-    removeFromQueue(id);
-    showToast(inQueue ? 'Eliminada de la cola' : 'No estaba en la cola');
-  };
+  // play/toggle/next/seek/queue viven en usePlaybackController (playerStore.dispatchPolicy).
 
   // ── Descargas offline: extraídas a useDownloads ──
   const { download, downloadMany, removeDownload, clearDownloads, getDownloads } = useDownloads({ quality, showToast, pendingRef, savePending });
@@ -1782,7 +1383,7 @@ export default function App() {
       const el = a();
       if (!el) return;
       if (el.volume < vol * 0.5) el.volume = vol;
-      if (machineRef.current.trackId) {
+      if (getMachine().trackId) {
         dispatchAudio({ type: 'USER_PLAY' });
       } else if (track?.id) {
         dispatchAudio({ type: 'TRACK_SET', trackId: track.id, intent: 'play' });
@@ -1907,7 +1508,7 @@ export default function App() {
       return;
     }
     // A13: sin intención de play → machine limpia, no auto-play.
-    if (machineRef.current.intent !== 'play') {
+    if (getMachine().intent !== 'play') {
       dispatchAudio({ type: 'PLAY_FAILED', reason: 'stale' });
       playErrorRef.current = { id: null, n: 0 };
       return;
@@ -1981,7 +1582,7 @@ export default function App() {
       onPlay={() => {
         selfPauseRef.current = false;
         const el = audioRef.current;
-        if (machineRef.current.intent !== 'play') {
+        if (getMachine().intent !== 'play') {
           selfPauseRef.current = true;
           try { el?.pause(); } catch {}
           selfPauseRef.current = false;
@@ -1999,7 +1600,7 @@ export default function App() {
       onPlaying={() => {
         selfPauseRef.current = false;
         const el = audioRef.current;
-        if (machineRef.current.intent !== 'play') {
+        if (getMachine().intent !== 'play') {
           selfPauseRef.current = true;
           try { el?.pause(); } catch {}
           selfPauseRef.current = false;
@@ -2029,14 +1630,14 @@ export default function App() {
       onPause={() => {
         const a = audioRef.current;
         if (!a) return;
-        if (machineRef.current.intent !== 'play') {
+        if (getMachine().intent !== 'play') {
           setLoadingAudio(false);
           return;
         }
         if (!isExternalPause({
           selfPause: selfPauseRef.current,
           pendingFade: pendingFadeRef.current,
-          userWantsPlay: machineRef.current.intent === 'play',
+          userWantsPlay: getMachine().intent === 'play',
           audioEnded: a.ended,
         })) return;
 

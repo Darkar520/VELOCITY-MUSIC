@@ -18,6 +18,7 @@
  */
 import { create } from 'zustand';
 import { reduce as audioReduce, initialState as initialMachineState } from '../audio/audioMachine.js';
+import { runAudioEffects } from '../audio/runAudioEffects.js';
 
 // ─── Selectores finos (evitan re-renders innecesarios) ──────────────
 export const useTrack = () => (s) => s.track;
@@ -35,8 +36,8 @@ export const useMediaInterrupted = () => (s) => s.mediaInterrupted;
 
 /**
  * Store principal.
- * El adapter de effects se inyecta vía setEffectHandler para desacoplar
- * el store del DOM (regla: el store no toca document, solo state).
+ * El adapter de effects se inyecta vía setEffectHandler / setPolicyEffectCtx.
+ * dispatchPolicy es el ÚNICO camino de política de audio en runtime (App + hooks).
  */
 export const usePlayerStore = create((set, get) => {
   // Estado interno de la máquina — no se expone a componentes directamente.
@@ -46,6 +47,15 @@ export const usePlayerStore = create((set, get) => {
   // Mientras no haya handler, los effects se encolan (caso tests).
   let effectHandler = null;
   const pendingEffects = [];
+  // Contexto completo de App (runAudioEffects): play/pause/seek/ensureStream/toast.
+  // Cuando está presente, es la vía preferida (unifica machine + DOM).
+  let policyEffectCtx = null;
+
+  function applySyncReact(effects) {
+    for (const eff of effects || []) {
+      if (eff.type === 'syncReact' && eff.patch) set(eff.patch);
+    }
+  }
 
   function applyEffects(effects) {
     if (!effects || effects.length === 0) return;
@@ -68,6 +78,27 @@ export const usePlayerStore = create((set, get) => {
     machineState = nextMachine;
     applyEffects(effects);
     return effects;
+  }
+
+  /**
+   * Camino unificado de política: reduce en el store + runAudioEffects con ctx de App.
+   * Si no hay policyEffectCtx, cae a dispatch() (effectHandler / pending).
+   */
+  function dispatchPolicy(event) {
+    const { state: nextMachine, effects } = audioReduce(machineState, event);
+    machineState = nextMachine;
+    applySyncReact(effects);
+    if (policyEffectCtx) {
+      runAudioEffects(effects, policyEffectCtx);
+    } else {
+      // Sin ctx: solo non-syncReact vía effectHandler (tests / audio sync parcial)
+      for (const eff of effects || []) {
+        if (eff.type === 'syncReact') continue;
+        if (effectHandler) effectHandler(eff);
+        else pendingEffects.push(eff);
+      }
+    }
+    return { state: machineState, effects };
   }
 
   return {
@@ -223,9 +254,27 @@ export const usePlayerStore = create((set, get) => {
       }
     },
 
-    /** Test-only: inspeccionar estado interno del machine. */
+    /**
+     * Contexto de runAudioEffects (audioRef, setters, ensureStream).
+     * Lo registra usePlaybackController cada render.
+     */
+    setPolicyEffectCtx: (ctx) => {
+      policyEffectCtx = ctx || null;
+    },
+
+    /** Único dispatch de política en runtime de la app. */
+    dispatchPolicy,
+
+    /** Lectura / parche del machine (espejos srcStatus, clear yield, etc.). */
+    getMachineState: () => machineState,
+    patchMachine: (patch) => {
+      machineState = { ...machineState, ...(typeof patch === 'function' ? patch(machineState) : patch) };
+      return machineState;
+    },
+
+    /** Test-only aliases (compat tests existentes). */
     _getMachineState: () => machineState,
-    _dispatch: dispatch, // expuesto para tests avanzados
+    _dispatch: dispatch,
   };
 });
 

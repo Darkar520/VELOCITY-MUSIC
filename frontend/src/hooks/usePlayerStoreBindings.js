@@ -4,8 +4,9 @@
  * Antes: useState local + useEffect mirror → doble estado y carátulas/UI desfasadas.
  * Ahora: selectores Zustand + setters con soporte de updater function (como useState).
  *
- * La política de audio (audioMachine / dispatchAudio) sigue en App.jsx; aquí solo
- * el estado React-facing (track, playing, time, queue, …).
+ * La política de audio (audioMachine) vive en playerStore.dispatchPolicy;
+ * usePlaybackController orquesta play/toggle/next/seek. Aquí solo el estado
+ * React-facing (track, playing, time, queue, …).
  */
 import { useCallback, useEffect, useRef } from 'react';
 import { usePlayerStore } from '../store/playerStore.js';
