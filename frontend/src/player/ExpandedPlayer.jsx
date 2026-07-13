@@ -96,7 +96,8 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
         plain: plain.length ? plain : toPlainLines(fromSync),
         source: d.source || 'api',
       });
-      if (inLibrary && (synced.length || plain.length)) {
+      // Guardar letras para offline siempre que estén disponibles
+      if (synced.length || plain.length) {
         offline.saveLyrics(trackId, {
           synced: d.synced || null,
           plain: plainText || plain.join('\n'),

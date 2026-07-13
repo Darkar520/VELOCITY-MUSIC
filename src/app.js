@@ -401,25 +401,29 @@ export function createApp(deps = {}) {
       return g || se || null;
     };
 
-    // ── Modo sync: solo lrclib bien emparejado ──
+    // ── Modo sync: lrclib primero + YT Music native como fallback ──
     if (syncOnly) {
       const lrc = await bestLrc(15000);
       if (lrc?.synced) return finish(lrc);
       if (lrc?.plain) return finish({ ...lrc, synced: null });
+      // Fallback: YT Music nativo (sin sync) como última opción
+      const ytSync = (id && typeof lyricsByIdImpl === 'function')
+        ? await withTimeout(lyricsByIdImpl(id), 6000).then((p) => (p && p.trim() ? p.trim() : null)).catch(() => null)
+        : null;
+      if (ytSync) return finish({ source: 'youtube-music', synced: null, plain: ytSync });
       return res.status(404).json({ error: 'Sin letra sincronizada.' });
     }
 
-    // ── Modo rápido: lrclib corto + YT nativo + ovh ──
+    // ── Modo completo: lrclib + YT nativo + ovh + fallbacks ──
     const ytP = (id && typeof lyricsByIdImpl === 'function')
-      ? withTimeout(lyricsByIdImpl(id), 4000).then((p) => (p && p.trim() ? p.trim() : null)).catch(() => null)
+      ? withTimeout(lyricsByIdImpl(id), 6000).then((p) => (p && p.trim() ? p.trim() : null)).catch(() => null)
       : Promise.resolve(null);
 
-    const lrc = await bestLrc(4500);
+    const lrc = await bestLrc(8000);
     if (lrc?.synced) return finish(lrc);
 
     const yt = await ytP;
     if (yt) {
-      // Si lrclib trae plain que no se parece al de YT, ignorarlo.
       if (lrc?.plain && lyricsOverlapRatio(yt, lrc.plain) < 0.35) {
         return finish({ source: 'youtube-music', synced: null, plain: yt });
       }
@@ -427,16 +431,47 @@ export function createApp(deps = {}) {
     }
     if (lrc?.plain) return finish(lrc);
 
+    // Fallback 1: lyrics.ovh
     try {
       const r = await withTimeout(
         fetch(`https://api.lyrics.ovh/v1/${encodeURIComponent(artist)}/${encodeURIComponent(cleanTitle || title)}`, { headers: head }),
-        3500
+        5000
       );
       if (r.ok) {
         const d = await r.json();
         if (d?.lyrics?.trim()) return finish({ source: 'lyrics.ovh', synced: null, plain: d.lyrics.trim() });
       }
     } catch {}
+
+    // Fallback 2: lrclib con búsqueda más amplia (solo track_name)
+    try {
+      const u = new URL('https://lrclib.net/api/search');
+      u.searchParams.set('track_name', cleanTitle || title);
+      u.searchParams.set('artist_name', artist);
+      const r = await withTimeout(fetch(u, { headers: head }), 6000);
+      if (r.ok) {
+        const arr = await r.json();
+        if (Array.isArray(arr) && arr.length) {
+          const picked = pickBestLyricsCandidate(queryMeta, arr, 35);
+          if (picked) { const packed = packFromCandidate(picked.candidate); if (packed) return finish(packed); }
+        }
+      }
+    } catch {}
+
+    // Fallback 3: lrclib solo título (sin artista)
+    try {
+      const u = new URL('https://lrclib.net/api/search');
+      u.searchParams.set('track_name', cleanTitle || title);
+      const r = await withTimeout(fetch(u, { headers: head }), 5000);
+      if (r.ok) {
+        const arr = await r.json();
+        if (Array.isArray(arr) && arr.length) {
+          const picked = pickBestLyricsCandidate(queryMeta, arr, 30);
+          if (picked) { const packed = packFromCandidate(picked.candidate); if (packed) return finish(packed); }
+        }
+      }
+    } catch {}
+
     return res.status(404).json({ error: 'Letra no encontrada.' });
   });
 
