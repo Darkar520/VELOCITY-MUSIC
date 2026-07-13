@@ -1213,9 +1213,11 @@ export default function App() {
     const applyTracks = (meta, tracks, { offline: isOff = false } = {}) => {
       const albumCover = meta.cover || cover || tracks.find((t) => t.cover)?.cover || '';
       const list = (tracks || []).map((t) => {
-        const n = normalizeTrack({ ...t, artworkUrl: t.artworkUrl || t.cover || albumCover });
+        // En vista de álbum: forzar SIEMPRE la portada del álbum, ignorando
+        // artworkUrl propio del track (que YTM a veces es thumbnail de video).
+        const n = normalizeTrack({ ...t, artworkUrl: albumCover, cover: albumCover });
         cacheTrack(n);
-        return n.cover ? n : { ...n, cover: albumCover };
+        return n;
       });
       if (!list.length) return false;
       setDetailData({
@@ -1291,7 +1293,9 @@ export default function App() {
       const albumCover = d.cover || cover || '';
       const tracks = (d.tracks || []).map((t) => normalizeTrack({
         ...t,
-        artworkUrl: t.artworkUrl || t.cover || albumCover,
+        // En vista álbum: forzar portada del álbum, no thumbnail de video
+        artworkUrl: albumCover,
+        cover: albumCover,
       }));
       if (!tracks.length) return false;
       return applyTracks({

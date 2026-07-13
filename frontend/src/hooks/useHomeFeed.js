@@ -14,8 +14,9 @@ import {
 import { useLibraryStore } from '../store/libraryStore.js';
 import { usePlayerStore } from '../store/playerStore.js';
 
-const RADIO_CONCURRENCY = 2;
+const RADIO_CONCURRENCY = 4;
 const MIN_MIX = 4;
+const MIN_MIX_TRACKS = 50;
 
 async function mapPool(items, limit, fn) {
   const out = new Array(items.length);
@@ -129,14 +130,14 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
       const VARY_SFXS = ['', ' hits', ' top songs', ' best', ' popular'];
       const vSfx = VARY_SFXS[vary()];
 
-      const mixFromSeed = async (seed, limit = 50) => {
+      const mixFromSeed = async (seed, limit = MIN_MIX_TRACKS) => {
         if (!seed?.id) return null;
         try {
           const rel = await api.radio(seed.id, limit);
           const tracks = capPerArtist(
             dedupeByTitle([seed, ...rel.map(normalizeTrack)]),
             8,
-          ).filter((t) => t.id).slice(0, limit);
+          ).filter((t) => t.id).slice(0, MIN_MIX_TRACKS);
           return tracks.length >= MIN_MIX
             ? { label: seed.artist || seed.title || 'Mezcla', tracks }
             : null;
@@ -145,37 +146,37 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
 
       const mixFromSearch = async (label, q) => {
         try {
-          const raw = await api.search((q || label) + vSfx);
-          const tracks = dedupeByTitle(raw.map(normalizeTrack)).filter((t) => t.id).slice(0, 50);
+          const raw = await api.search((q || label) + vSfx, undefined, 50);
+          const tracks = dedupeByTitle(raw.map(normalizeTrack)).filter((t) => t.id).slice(0, MIN_MIX_TRACKS);
           return tracks.length >= MIN_MIX ? { label, tracks } : null;
         } catch { return null; }
       };
 
       const mixFromQueryDeep = async (label, q) => {
         try {
-          const raw = await api.search(q + vSfx);
+          const raw = await api.search(q + vSfx, undefined, 50);
           const base = raw.map(normalizeTrack).find((t) => t.id);
           if (!base) return null;
-          const m = await mixFromSeed(base, 50);
+          const m = await mixFromSeed(base, MIN_MIX_TRACKS);
           return m ? { ...m, label } : null;
         } catch { return null; }
       };
 
-      const buildDiscoveryMixes = async (baseTracks, max = 5) => {
+      const buildDiscoveryMixes = async (baseTracks, max = 6) => {
         const bases = pick((baseTracks || []).filter(Boolean), max);
         if (!bases.length) return [];
         const known = new Set([...recentIds, ...favIds, ...dlIds, ...bases.map((s) => s.id)]);
         const mixes = clean(await mapPool(bases, RADIO_CONCURRENCY, async (s) => {
           try {
-            const rel = await api.radio(s.id, 40);
+            const rel = await api.radio(s.id, 50);
             let tracks = capPerArtist(dedupeByTitle(rel.map(normalizeTrack)), 3)
               .filter((t) => t.id && !known.has(t.id))
-              .slice(0, 40);
+              .slice(0, MIN_MIX_TRACKS);
             if (tracks.length < MIN_MIX) return null;
             return { label: `Como ${s.artist || s.title}`, tracks };
           } catch { return null; }
         }));
-        return ensureManyMixes(mixes, { min: 3, max: 8, prefix: 'Hallazgo' });
+        return ensureManyMixes(mixes, { min: 3, max: 10, prefix: 'Hallazgo' });
       };
 
       const sections = [];
@@ -234,22 +235,22 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
 
       // ═══ 3) HECHO PARA TI — varios radios de semillas ═══
       if (hasHistory && seeds.length && alive()) {
-        const made = clean(await mapPool(seeds.slice(0, 8), RADIO_CONCURRENCY, (s) => mixFromSeed(s, 50)));
+        const made = clean(await mapPool(seeds.slice(0, 10), RADIO_CONCURRENCY, (s) => mixFromSeed(s, MIN_MIX_TRACKS)));
         pushRich('Hecho para ti', made, { prefix: 'Para ti' });
       }
 
       // ═══ 4) BÚSQUEDAS ═══
       if (searches.length && alive()) {
         const used = new Set(seeds.map(artistKey));
-        const searchMixes = clean(await mapPool(searches.slice(0, 8), RADIO_CONCURRENCY, async (term) => {
+        const searchMixes = clean(await mapPool(searches.slice(0, 10), RADIO_CONCURRENCY, async (term) => {
           try {
-            const raw = await api.search(term);
+            const raw = await api.search(term, undefined, 50);
             const base = raw.map(normalizeTrack).find((t) => t.id);
             if (!base) return null;
             const ak = artistKey(base);
             if (ak && used.has(ak)) return null;
             if (ak) used.add(ak);
-            const m = await mixFromSeed(base, 50);
+            const m = await mixFromSeed(base, MIN_MIX_TRACKS);
             return m ? { ...m, label: cap1(base.artist || term) } : null;
           } catch { return null; }
         }));
@@ -267,26 +268,26 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
           if (!a || seenA.has(a)) continue;
           seenA.add(a);
           fresh.push(t);
-          if (fresh.length >= 8) break;
+          if (fresh.length >= 10) break;
         }
         if (fresh.length) {
-          const mixes = clean(await mapPool(fresh.slice(0, 6), RADIO_CONCURRENCY, (s) => mixFromSeed(s, 50)));
+          const mixes = clean(await mapPool(fresh.slice(0, 8), RADIO_CONCURRENCY, (s) => mixFromSeed(s, MIN_MIX_TRACKS)));
           pushRich('Tu momento actual', mixes, { prefix: 'Ahora' });
         }
       }
 
       // ═══ 6) PORQUE TE GUSTA ═══
       if (seeds.length && alive()) {
-        const bs = pick(seeds, 6);
-        const mixes = clean(await mapPool(bs, RADIO_CONCURRENCY, (s) => mixFromSeed(s, 50)));
+        const bs = pick(seeds, 8);
+        const mixes = clean(await mapPool(bs, RADIO_CONCURRENCY, (s) => mixFromSeed(s, MIN_MIX_TRACKS)));
         pushRich('Porque te gusta', mixes, { prefix: 'Porque' });
       }
 
       // ═══ 7) FAVORITOS EXPANDIDOS — un mix por fav seed ═══
       if (favIds.length && alive()) {
-        const favSeeds = favIds.slice(0, 8).map(trackById).filter(Boolean);
+        const favSeeds = favIds.slice(0, 10).map(trackById).filter(Boolean);
         const mixes = clean(await mapPool(favSeeds, RADIO_CONCURRENCY, async (t) => {
-          const m = await mixFromSeed(t, 50);
+          const m = await mixFromSeed(t, MIN_MIX_TRACKS);
           return m ? { ...m, label: `Más ${t.artist || t.title}` } : null;
         }));
         // + locales por artista
@@ -305,9 +306,9 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
             return null;
           })
           .filter(Boolean)
-          .slice(0, 6);
+          .slice(0, 8);
         const mixes = clean(await mapPool(plSeeds, RADIO_CONCURRENCY, async ({ playlist, seed }) => {
-          const m = await mixFromSeed(seed, 50);
+          const m = await mixFromSeed(seed, MIN_MIX_TRACKS);
           return m ? { ...m, label: 'Como ' + (playlist.name || 'tu playlist') } : null;
         }));
         pushRich('Más como tus playlists', mixes, { prefix: 'Playlist+' });
@@ -317,17 +318,17 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
       if (alive()) {
         const discSeeds = pick(dedupeByTitle([
           ...seeds,
-          ...favIds.slice(0, 10).map(trackById).filter(Boolean),
-          ...recentIds.slice(0, 10).map(trackById).filter(Boolean),
-        ]), 6);
-        const disc = await buildDiscoveryMixes(discSeeds, 6);
+          ...favIds.slice(0, 12).map(trackById).filter(Boolean),
+          ...recentIds.slice(0, 12).map(trackById).filter(Boolean),
+        ]), 8);
+        const disc = await buildDiscoveryMixes(discSeeds, 8);
         pushRich('Descubrimiento para ti', disc, { prefix: 'Descubre' });
       }
 
       // ═══ 10) GÉNEROS a fondo (multi) ═══
       if (prefs.length && alive()) {
         const genreMixes = clean(await mapPool(
-          prefs.slice(0, 8),
+          prefs.slice(0, 10),
           RADIO_CONCURRENCY,
           (p) => mixFromQueryDeep(p.label, p.q),
         ));
@@ -342,8 +343,8 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
           if (!k) continue;
           if (!byArtist.has(k)) byArtist.set(k, t);
         }
-        const topArtists = [...byArtist.values()].slice(0, 8);
-        const artistMixes = clean(await mapPool(topArtists, RADIO_CONCURRENCY, (s) => mixFromSeed(s, 50)));
+        const topArtists = [...byArtist.values()].slice(0, 10);
+        const artistMixes = clean(await mapPool(topArtists, RADIO_CONCURRENCY, (s) => mixFromSeed(s, MIN_MIX_TRACKS)));
         pushRich('Artistas de tu universo', artistMixes, { prefix: 'Artista' });
       }
 
@@ -364,12 +365,12 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
         const dnaMixes = clean(await mapPool(clusters, 1, async (cluster, idx) => {
           try {
             const rels = await mapPool(cluster, RADIO_CONCURRENCY, (s) =>
-              api.radio(s.id, 40).catch(() => []),
+              api.radio(s.id, 50).catch(() => []),
             );
             const tracks = capPerArtist(
               dedupeByTitle([...cluster, ...rels.flat().map(normalizeTrack)]),
               3,
-            ).filter((t) => t.id).slice(0, 50);
+            ).filter((t) => t.id).slice(0, MIN_MIX_TRACKS);
             if (tracks.length < 8) return null;
             const labels = ['Tu DNA musical', 'Tu firma sonora', 'Núcleo de gustos', 'Esencia personal'];
             return { label: labels[idx] || `DNA ${idx + 1}`, tracks };
@@ -380,9 +381,9 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
 
       // ═══ 13) MÁS PROFUNDIDAD — varios ángulos ═══
       if (alive()) {
-        const altA = pick(ranked.slice(0, 40), 5);
-        const altB = pick(seeds, 5);
-        const altC = pick(favIds.map(trackById).filter(Boolean), 5);
+        const altA = pick(ranked.slice(0, 50), 6);
+        const altB = pick(seeds, 6);
+        const altC = pick(favIds.map(trackById).filter(Boolean), 6);
         const deepMixes = [];
         for (const [label, group] of [
           ['Nuevos hallazgos de tu onda', altA],
@@ -390,13 +391,13 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
           ['Más allá de tus likes', altC],
         ]) {
           if (!group.length) continue;
-          const m = await buildDiscoveryMixes(group, 2);
+          const m = await buildDiscoveryMixes(group, 3);
           if (m[0]) deepMixes.push({ ...m[0], label });
           if (m[1]) deepMixes.push({ ...m[1], label: label + ' · extra' });
         }
         if (prefs.length) {
           const more = clean(await mapPool(
-            pick(prefs, 4),
+            pick(prefs, 5),
             RADIO_CONCURRENCY,
             (p) => mixFromQueryDeep('Más ' + p.label, p.q),
           ));

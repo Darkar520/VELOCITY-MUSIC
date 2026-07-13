@@ -52,9 +52,10 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
   const ambientB = dominantColor?.b ?? parseInt(T.accent.slice(5,7),16);
   const ambientRgba = (a) => `rgba(${ambientR},${ambientG},${ambientB},${a})`;
 
-  // Al abrir el player: ir a letra en móvil (el usuario quiere verla).
+  // Al abrir el player: mostrar la carátula por defecto.
+  // El usuario cambia a letras manualmente con el toggle.
   useEffect(() => {
-    if (open && !desktop) setShowLyrics(true);
+    if (open) setShowLyrics(false);
     if (!open) setShowLyrics(false);
   }, [open, desktop, track?.id]);
 
