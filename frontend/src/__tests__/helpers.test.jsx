@@ -17,10 +17,9 @@ describe('fmt', () => {
     expect(fmt(65.9)).toBe('1:05');
     expect(fmt(60.5)).toBe('1:00');
   });
-  it('no devuelve negativos para valores negativos', () => {
-    // Bug real: fmt(-5) devuelve '-1:-5'. Debería devolver '0:00'.
-    // Documentado pero NO fixear en este PR (el código fuente está retrocedido).
-    expect(fmt(-5)).toBe('-1:-5'); // bug conocido
+  it('devuelve 0:00 para valores negativos (bug fixeado)', () => {
+    expect(fmt(-5)).toBe('0:00');
+    expect(fmt(-100)).toBe('0:00');
   });
 });
 

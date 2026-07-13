@@ -4,7 +4,7 @@
 import { useEffect, useRef, useMemo } from 'react';
 import { api } from '../api.js';
 import { dedupeByTitle, capPerArtist } from '../helpers.js';
-import { SEED_ROWS, DISCOVERY, GENRES, MOODS } from '../constants.js';
+import { SEED_ROWS, DISCOVERY, GENRES, MOODS, ERAS } from '../constants.js';
 import { trackById, normalizeTrack } from '../catalog.js';
 import { shouldSkipFeedRegen } from '../feed/feedSig.js';
 import {
@@ -15,8 +15,10 @@ import { useLibraryStore } from '../store/libraryStore.js';
 import { usePlayerStore } from '../store/playerStore.js';
 
 const RADIO_CONCURRENCY = 4;
-const MIN_MIX = 4;
-const MIN_MIX_TRACKS = 50;
+const MIN_MIX = 3;
+// Objetivo: al menos 35 pistas, ideal 50-100 (radio devuelve hasta 100).
+const MIN_MIX_TRACKS = 35;
+const IDEAL_MIX_TRACKS = 50;
 
 async function mapPool(items, limit, fn) {
   const out = new Array(items.length);
@@ -130,14 +132,14 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
       const VARY_SFXS = ['', ' hits', ' top songs', ' best', ' popular'];
       const vSfx = VARY_SFXS[vary()];
 
-      const mixFromSeed = async (seed, limit = MIN_MIX_TRACKS) => {
+      const mixFromSeed = async (seed, limit = IDEAL_MIX_TRACKS) => {
         if (!seed?.id) return null;
         try {
-          const rel = await api.radio(seed.id, limit);
+          const rel = await api.radio(seed.id, 100);
           const tracks = capPerArtist(
             dedupeByTitle([seed, ...rel.map(normalizeTrack)]),
             8,
-          ).filter((t) => t.id).slice(0, MIN_MIX_TRACKS);
+          ).filter((t) => t.id).slice(0, limit);
           return tracks.length >= MIN_MIX
             ? { label: seed.artist || seed.title || 'Mezcla', tracks }
             : null;
@@ -180,14 +182,25 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
       };
 
       const sections = [];
-      /** Solo publica si hay ≥2 mixes; si hay 1, intenta expandir; si no, renombra y parte. */
-      const pushRich = (section, mixes, { min = 2, prefix } = {}) => {
+      // Conjunto global de IDs ya colocados, para evitar duplicados entre secciones.
+      const usedIDs = new Set();
+      const addUsed = (mixes) => {
+        for (const m of mixes) for (const t of m.tracks || []) usedIDs.add(t.id);
+      };
+
+      /** Solo publica si hay ≥1 mix; si hay 1, intenta expandir antes de añadir. */
+      const pushRich = (section, mixes, { min = 1, prefix } = {}) => {
         if (!alive()) return;
         let list = ensureManyMixes(clean(mixes), { min, max: 10, prefix: prefix || section });
-        if (list.length < 2) return; // no desperdiciar fila de 1 tarjeta
+        // Filtrar tracks ya usados en secciones anteriores (dedup cross-section)
+        list = list.map((m) => ({
+          ...m,
+          tracks: m.tracks.filter((t) => !usedIDs.has(t.id)),
+        })).filter((m) => m.tracks.length >= MIN_MIX);
+        if (!list.length) return;
+        addUsed(list);
         sections.push({ section, mixes: list });
         setHomeRows([...sections]);
-        setHomeLoading(false);
       };
 
       const hasHistory = seeds.length > 0 || searches.length > 0 || favIds.length > 0
@@ -411,6 +424,20 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
         pushRich('Éxitos del momento', clean(await mapPool(pick(SEED_ROWS, 6), RADIO_CONCURRENCY, (s) => mixFromSearch(s.label, s.q))), { prefix: 'Hit' });
         pushRich('Explora géneros', clean(await mapPool(pick(GENRES, 8), RADIO_CONCURRENCY, (g) => mixFromSearch(g.label, g.q))), { prefix: 'Género' });
         pushRich('Para descubrir', clean(await mapPool(pick(DISCOVERY, 6), RADIO_CONCURRENCY, (d) => mixFromSearch(d.label, d.q))), { prefix: 'Nuevo' });
+      }
+
+      // ═══ 14) MOODS — estados de ánimo ═══
+      if (alive() && sections.length < 14) {
+        const moods = pick(MOODS, 6);
+        const moodMixes = clean(await mapPool(moods, RADIO_CONCURRENCY, (m) => mixFromSearch(m.label, m.q)));
+        pushRich('Por cómo te sentís', moodMixes, { prefix: 'Mood' });
+      }
+
+      // ═══ 15) VIAJA EN EL TIEMPO ═══
+      if (alive() && sections.length < 14) {
+        const eras = pick(ERAS, 5);
+        const eraMixes = clean(await mapPool(eras, RADIO_CONCURRENCY, (e) => mixFromSearch(e.label, e.q)));
+        pushRich('Viaja en el tiempo', eraMixes, { prefix: 'Época' });
       }
 
       if (alive()) {
