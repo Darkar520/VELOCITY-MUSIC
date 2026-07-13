@@ -203,9 +203,12 @@ export function reduce(state, event) {
           state: 'playing',
           position: seekTo,
         });
+        // Bug fix: NO setear loadingAudio:false aquí. El spinner debe seguir
+        // visible hasta que play() realmente resuelva (onPlayOk en schedulePlay).
+        // Si play() falla silenciosamente, el usuario ve "cargado pero en 0s".
         push(effects, {
           type: 'syncReact',
-          patch: { playing: true, loadingAudio: false },
+          patch: { playing: true },
         });
       }
       break;

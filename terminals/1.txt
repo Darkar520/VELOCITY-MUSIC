@@ -1,0 +1,22 @@
+---
+pid: 13904
+cwd: "C:\Users\irisp\OneDrive\Escritorio\VELOCITY MUSIC"
+command: "cd \"C:\\Users\\irisp\\OneDrive\\Escritorio\\VELOCITY MUSIC\"; node --test 2>&1 | Select-Object -Last 15"
+started_at: 2026-07-12T01:09:28.833Z
+running_for_ms: 70008    
+---
+✔ retentionService.run — error en una operación no detiene las demás (3.6627ms)
+✔ syncService.getLibrary — usuario sin datos devuelve arrays vacíos (3.6803ms)
+✔ syncService.pushLibrary — favorites > 5000 → error 422 (3.3539ms)
+✔ historyRepo PG — record acepta userAgent (3.265ms)
+✔ healthService.check — pool null → db n/a (0.6484ms)
+✔ healthService.check — pool que responde rápido → db green (0.5702ms)
+✔ healthService.check — pool que lanza → db red (0.508ms)
+ℹ tests 213
+ℹ suites 0
+ℹ pass 213
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 18136.1747

@@ -129,7 +129,7 @@ describe('playerStore', () => {
     const s = usePlayerStore.getState();
     expect(s._getMachineState().srcStatus).toBe('ready');
     expect(s.playing).toBe(true);
-    expect(s.loadingAudio).toBe(false);
+    expect(s.loadingAudio).toBe(true); // STREAM_READY ya no oculta el spinner
 
     // effects aplicados: ensureStream, seek, play, mediaSession, setSrc
     const types = seenEffects.map((e) => e.type);

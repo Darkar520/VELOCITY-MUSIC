@@ -73,6 +73,7 @@ export function applyMediaSrc(ctx, url) {
     const attr = a.getAttribute('src') || '';
     if (attr === url) return;
     a.setAttribute('src', url);
+    a.load();
   } catch { /* ignore */ }
 }
 
@@ -220,11 +221,13 @@ function schedulePlay(ctx, seekHint) {
     }
   };
 
-  // setSrc de React es async: reintentos cortos (epoch los invalida al cambiar pista)
+  // setSrc de React es async: reintentos cortos (epoch los invalida al cambiar pista).
+  // Bug fix: añadido intento a 800ms para dar tiempo al browser a cargar el source.
   setTimeout(attempt, 0);
   setTimeout(attempt, 50);
   setTimeout(attempt, 150);
   setTimeout(attempt, 400);
+  setTimeout(attempt, 800);
 }
 
 /** Aplicar seek pendiente cuando llega metadata (onLoadedMetadata / onCanPlay). */

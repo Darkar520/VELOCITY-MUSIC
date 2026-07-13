@@ -109,7 +109,16 @@ export function useAudioElementSync(audioRef) {
     };
 
     const onCanPlay = () => {
-      usePlayerStore.getState().setLoadingAudio(false);
+      // Bug fix: solo ocultar el spinner si el audio realmente está
+      // reproduciendo o si no hay intención de play. Si intent='play'
+      // pero el audio no está sonando aún, mantener el spinner visible
+      // hasta que onPlayOk lo oculte. Antes esto disparaba
+      // setLoadingAudio(false) prematuramente: el browser decía
+      // "puedo reproducir" pero play() aún no había resuelto.
+      const machine = usePlayerStore.getState().getMachineState();
+      if (machine.intent !== 'play') {
+        usePlayerStore.getState().setLoadingAudio(false);
+      }
     };
 
     audio.addEventListener('timeupdate', onTimeUpdate);
