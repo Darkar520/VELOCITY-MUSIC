@@ -9,7 +9,7 @@ import { trackById, normalizeTrack } from '../catalog.js';
 import { shouldSkipFeedRegen } from '../feed/feedSig.js';
 import {
   shuffle, pick, artistKey, tracksFromIds, ensureManyMixes,
-  offlineMixes, favArtistMixes, recentSliceMixes, playlistMixes, mixesByArtist,
+  offlineMixes, favArtistMixes, recentSliceMixes,
 } from '../feed/mixBuilders.js';
 import { useLibraryStore } from '../store/libraryStore.js';
 import { usePlayerStore } from '../store/playerStore.js';
@@ -164,6 +164,37 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
         } catch { return null; }
       };
 
+      // Expande una playlist a ≥50 canciones mezclando sus tracks propios + radio.
+      // Si ya tiene ≥ IDEAL_MIX_TRACKS no hace red extra (fast path).
+      const expandedPlaylistMix = async (pl) => {
+        const base = tracksFromIds(pl.trackIds || [], 120);
+        if (!base.length) return null;
+        const label = pl.name || 'Playlist';
+        // Fast-path: ya tiene suficientes canciones
+        if (base.length >= IDEAL_MIX_TRACKS) {
+          return { label, tracks: capPerArtist(dedupeByTitle(base), 10).slice(0, IDEAL_MIX_TRACKS) };
+        }
+        // Elegir semillas diversas (máx 4, una por artista distinto)
+        const seeds4 = [];
+        const seenArt = new Set();
+        for (const t of base) {
+          const ak = artistKey(t);
+          if (!ak || seenArt.has(ak)) continue;
+          seenArt.add(ak);
+          seeds4.push(t);
+          if (seeds4.length >= 4) break;
+        }
+        // Radio paralelo
+        const radioResults = await mapPool(seeds4, RADIO_CONCURRENCY, (s) =>
+          api.radio(s.id, 50).catch(() => []),
+        );
+        const expanded = capPerArtist(
+          dedupeByTitle([...base, ...radioResults.flat().map(normalizeTrack)]),
+          8,
+        ).filter((t) => t.id).slice(0, IDEAL_MIX_TRACKS);
+        return expanded.length >= MIN_MIX ? { label, tracks: expanded } : null;
+      };
+
       const buildDiscoveryMixes = async (baseTracks, max = 6) => {
         const bases = pick((baseTracks || []).filter(Boolean), max);
         if (!bases.length) return [];
@@ -220,22 +251,25 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
         const favMix = favArtistMixes(favIds);
         if (favMix.length) pushRich('De tus Me gusta', favMix, { prefix: 'Like' });
       }
-      {
-        const plm = playlistMixes(pls);
+      if (pls.length && alive()) {
+        const plm = clean(await mapPool(pls.slice(0, 12), RADIO_CONCURRENCY, expandedPlaylistMix));
         if (plm.length >= 2) pushRich('Desde tus playlists', plm, { prefix: 'Playlist' });
         else if (plm.length === 1) {
-          const expanded = ensureManyMixes(plm, { min: 2, prefix: plm[0].label || 'Playlist' });
-          if (expanded.length >= 2) pushRich('Desde tus playlists', expanded, { prefix: 'Playlist' });
+          const ex = ensureManyMixes(plm, { min: 2, prefix: plm[0].label || 'Playlist' });
+          if (ex.length >= 2) pushRich('Desde tus playlists', ex, { prefix: 'Playlist' });
         }
       }
-      {
-        const saved = playlistMixes(
-          (savedPls || []).map((p) => ({
-            name: p.name,
-            trackIds: p.trackIds || [],
-          })),
-        );
+      if (savedPls.length && alive()) {
+        const saved = clean(await mapPool(
+          (savedPls || []).slice(0, 12).map((p) => ({ name: p.name, trackIds: p.trackIds || [] })),
+          RADIO_CONCURRENCY,
+          expandedPlaylistMix,
+        ));
         if (saved.length >= 2) pushRich('Playlists que guardaste', saved, { prefix: 'Guardada' });
+        else if (saved.length === 1) {
+          const ex = ensureManyMixes(saved, { min: 2, prefix: saved[0].label || 'Guardada' });
+          if (ex.length >= 2) pushRich('Playlists que guardaste', ex, { prefix: 'Guardada' });
+        }
       }
       {
         const off = offlineMixes(dlIds);
