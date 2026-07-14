@@ -29,10 +29,15 @@ function buildPoolConfig() {
 
   const tlsOptions = {
     // Supabase, Neon y Render requieren SSL. Deshabilitar en localhost o con PGSSL=0.
-    // Con DATABASE_URL que apunte a localhost, también se desactiva SSL.
+    // Bug fix: si PGHOST no está seteado, default es localhost → SSL off.
+    // Antes solo checaba process.env.PGHOST === 'localhost', pero si no se setea,
+    // era undefined y SSL se activaba incorrectamente.
     ssl: (process.env.PGSSL === '0' ||
+          !process.env.PGHOST ||
           process.env.PGHOST === 'localhost' ||
-          (process.env.DATABASE_URL || '').includes('@localhost:'))
+          process.env.PGHOST === '127.0.0.1' ||
+          (process.env.DATABASE_URL || '').includes('@localhost:') ||
+          (process.env.DATABASE_URL || '').includes('@127.0.0.1:'))
       ? false
       : { rejectUnauthorized: false },
     // Supabase cierra idle connections en ~60 s → nosotros cerramos a los 45 s.
