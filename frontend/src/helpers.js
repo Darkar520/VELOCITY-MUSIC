@@ -4,7 +4,7 @@
 
 // Formatea segundos a m:ss
 export const fmt = (s) => {
-  if (!s || isNaN(s)) return '0:00';
+  if (!s || isNaN(s) || s < 0) return '0:00';
   return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 };
 
