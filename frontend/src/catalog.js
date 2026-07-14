@@ -79,8 +79,8 @@ export function saveMeta() {
 
 // Invalidación de caché: si subimos la versión, descartamos metadata/feed viejos
 // (p.ej. pistas de radio cacheadas sin carátula por un bug previo) una sola vez.
-// v11: multi-mix por sección + fix miniplayer store mirror.
-const CACHE_VERSION = '11';
+// v12: playlists expandidas a 50 canciones via radio multi-semilla.
+const CACHE_VERSION = '12';
 try {
   if (localStorage.getItem('velocity.cacheVer') !== CACHE_VERSION) {
     localStorage.removeItem('velocity.meta');
