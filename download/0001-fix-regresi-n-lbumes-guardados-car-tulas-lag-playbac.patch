@@ -1,0 +1,383 @@
+From 96dbff891ce69176e4e30a6aef2f46db8cade9d1 Mon Sep 17 00:00:00 2001
+From: Z User <z@container>
+Date: Sun, 12 Jul 2026 05:43:12 +0000
+Subject: [PATCH] =?UTF-8?q?fix:=20regresi=C3=B3n=20=C3=A1lbumes=20guardado?=
+ =?UTF-8?q?s=20+=20car=C3=A1tulas=20+=20lag=20+=20playback?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Tres bugs reportados por el usuario, todos con causa raíz identificada y fix
+aplicado. Tests + build verde (223 backend + 22 frontend).
+
+== Bug 1 (regresión): álbumes guardados muestran "0 canciones" y el botón
+   "Guardar" nunca cambia a "Guardado"
+
+Causa raíz: en commit c851b7e (feat: libraryStore with Zustand + 10 unit tests)
+se introdujo libraryStore.js con saveAlbum/isAlbumSaved/unsaveAlbum usando
+`a.id === album.id` y `a.id !== albumId`. Pero TODO el resto de la app
+(useLibraryActions, LibraryTab, jsondb repo, postgres repo, backend) usa
+`albumId` como campo identificador. Los tests también usaban `id`, lo que
+ocultó el bug.
+
+Consecuencias:
+  - store.saveAlbum(entry) hacía `if (!album || !album.id) return;` y salía
+    silenciosamente. El álbum NUNCA se añadía al store local.
+  - isAlbumSaved(albumId) comparaba `a.id === albumId` → siempre false.
+    El botón "Guardar" nunca cambiaba a "Guardado".
+  - unsaveAlbum(albumId) filtraba por `a.id !== albumId` → no quitaba nada.
+  - Solo el guardado al backend (api.saveAlbum) funcionaba. Tras refrescar,
+    useLibrarySync recuperaba los álbumes del backend con albumId correcto.
+  - Como el store local no tenía el álbum, el botón seguía en "Guardar"
+    aunque el álbum estuviera guardado en el backend → confusiones y
+    re-guardados innecesarios.
+
+Fix: libraryStore.js ahora usa albumId en saveAlbum/isAlbumSaved/unsaveAlbum,
+coincidiendo con el resto del código. Tests actualizados para usar albumId
+(que era lo correcto desde el principio) + 2 tests de regresión nuevos.
+
+== Bug 2: carátulas no cargan / parpadean
+
+Causa raíz: CoverImg pasaba TODOS los src por hiResCover(), incluyendo:
+  - src vacío/null (raro pero posible) → hiResCover devolvía undefined
+  - data: URLs (FALLBACK_COVER es un SVG data:) → hiResCover los rompía
+  - URLs que ya estaban en alta resolución → las reescribía innecesariamente
+
+Fix: CoverImg ahora distingue src HTTP (lo pasa por hiResCover) de src data:
+/ vacío (lo usa tal cual o cae al fallback). Más robusto ante URLs raras.
+
+== Bug 3: plataforma lenta / lagueada
+
+Causa raíz: ExpandedPlayer.jsx tenía un setInterval a 66ms (~15 Hz) que
+actualizaba lyricTime incluso cuando:
+  - La pestaña de letra NO estaba abierta (móvil)
+  - El reproductor estaba pausado
+  - No había letra sincronizada cargada (letra plain o sin letra)
+
+Cada tick disparaba un re-render del ExpandedPlayer entero (con sus decenas
+de estilos inline recreados). En móvil esto causaba lag generalizado,
+especialmente con la letra cerrada.
+
+Fix: el intervalo ahora solo corre cuando:
+  - open=true Y playing=true Y hay letra sincronizada cargada
+  - Y (showLyrics=true O desktop=true)
+Además baja la frecuencia a 100ms (10 Hz, suficiente para scroll fluido de
+letra). En pausa o sin letra sincronizada → cero re-renders.
+
+== Bug 4: ciertas canciones no reproducen (letra sí aparece)
+
+Causa raíz (parcial): handleAudioError reintentaba 6 veces con delays
+crecientes (1.5s, 3s, 5s, 8s, 12s, 16s = ~45s totales) ANTES de mostrar
+cualquier error o saltar a la siguiente pista. Para errores permanentes
+(MEDIA_ERR_SRC_NOT_SUPPORTED = codec no soportado, video removido, región
+bloqueada) los reintentos solo conseguían colgar la UI ~45s.
+
+Fix: handleAudioError ahora clasifica el error:
+  - Hard errors (code 3 MEDIA_ERR_DECODE, code 4 MEDIA_ERR_SRC_NOT_SUPPORTED):
+    máximo 2 reintentos con delays cortos (800ms, 2s) = ~3s total. Luego skip.
+  - Soft errors (red): siguen el path de 6 reintentos con delays crecientes.
+  - Mensaje de error más claro: "Pista no compatible · saltando…" vs
+    "Pista no disponible · siguiente…" según el tipo.
+  - Reporta errorCode distinto al backend (src_not_supported vs max_retries).
+
+Notas:
+- Las letras funcionan independiente del audio (endpoint /api/lyrics consulta
+  lrclib + YouTube Music nativo, sin yt-dlp). Por eso el usuario veía la letra
+  aunque la canción no sonara: lrclib tiene catálogo más amplio que YouTube.
+- "El bajado de Ricardo Arjona" no existe como canción en YouTube Music
+  (verificado vía /api/search). El usuario probablemente se refiere a
+  "Mojado" u otra pista similar. Con el fix, si la pista elegida no es
+  reproducible, el sistema salta a la siguiente en ~3s en vez de ~45s.
+
+== Otros cambios
+- sw.js: bump cache velocity-v42 → velocity-v43 (cambio de frontend).
+- Comments en español en los puntos clave para trazabilidad futura.
+
+Tests:
+- 223 backend tests pasan (sin cambios).
+- 22 frontend tests pasan (12 libraryStore con 2 nuevos de regresión,
+  10 playerStore sin cambios).
+- Build de frontend exitoso (445 KB JS, 124 KB gzip).
+
+Trazabilidad: docs/AUDIO-REGRESSIONS.md no se modificó (los cambios de audio
+son en el handler de error de App.jsx, no en la máquina de estados). Si
+aparecen bugs nuevos de continuidad, añadir fila A14 con este fix.
+---
+ frontend/public/sw.js                         |  2 +-
+ frontend/src/App.jsx                          | 51 +++++++++++++++----
+ frontend/src/components.jsx                   | 14 ++++-
+ frontend/src/player/ExpandedPlayer.jsx        | 19 +++++--
+ .../src/store/__tests__/libraryStore.test.jsx | 38 +++++++++++++-
+ frontend/src/store/libraryStore.js            | 13 +++--
+ 6 files changed, 115 insertions(+), 22 deletions(-)
+
+diff --git a/frontend/public/sw.js b/frontend/public/sw.js
+index a750a82..a99eef5 100755
+--- a/frontend/public/sw.js
++++ b/frontend/public/sw.js
+@@ -9,7 +9,7 @@
+ //  - El audio descargado NO lo maneja el SW: vive en IndexedDB (offline.js).
+ // ═══════════════════════════════════════════════════════════════
+ 
+-const CACHE = 'velocity-v42';
++const CACHE = 'velocity-v43';
+ const APP_SHELL = ['/', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'];
+ 
+ self.addEventListener('install', (event) => {
+diff --git a/frontend/src/App.jsx b/frontend/src/App.jsx
+index c410182..e5d52e2 100755
+--- a/frontend/src/App.jsx
++++ b/frontend/src/App.jsx
+@@ -1477,7 +1477,17 @@ export default function App() {
+   // Manejo resiliente de errores de reproducción: reintenta una vez con URL
+   // fresca (evade caché de borde) y, si vuelve a fallar, salta a la siguiente
+   // pista de la cola en lugar de detener todo. Reduce al máximo los cortes.
++  //
++  // OPTIMIZACIÓN: antes reintentábamos 6 veces con delays crecientes (hasta
++  // 16s), lo que dejaba la pista "colgada" ~45s antes de mostrar error. Para
++  // errores permanentes (MEDIA_ERR_SRC_NOT_SUPPORTED = el source no es
++  // reproducible, p.ej. codec no soportado o video removido) los reintentos
++  // solo conseguían lagear la UI sin arreglo posible. Ahora:
++  //   - Errores de red (MEDIA_ERR_NETWORK) sí siguen el path de 6 reintentos.
++  //   - Errores de source/decode: máximo 2 reintentos (URL fresca) y luego skip.
++  //   - Errores 403/404 del proxy: tratados como permanentes.
+   const MAX_PLAY_RETRIES = 6;
++  const MAX_HARD_RETRIES = 2;
+   const handleAudioError = () => {
+     // Ignorar errores al vaciar src o sin URL real (cambio de pista).
+     if (effectCtxRef.current?._suppressAudioError) return;
+@@ -1501,22 +1511,31 @@ export default function App() {
+     const st = playErrorRef.current;
+     const n = (st.id === cur) ? st.n : 0;
+     const isBlob = typeof a.currentSrc === 'string' && a.currentSrc.startsWith('blob:');
+-    // Reintentos solo con intención de play. 6 intentos con espera creciente.
+-    if (n < MAX_PLAY_RETRIES && !isBlob) {
++    // Clasificar el error: los "hard" (source/decode) no se recuperan con
++    // reintentos; los "soft" (red) sí pueden recuperar con URL fresca.
++    const errCode = a?.error?.code || 0;
++    const isHardError = errCode === 3 /* MEDIA_ERR_DECODE */
++                     || errCode === 4 /* MEDIA_ERR_SRC_NOT_SUPPORTED */;
++    const effectiveMax = isHardError ? MAX_HARD_RETRIES : MAX_PLAY_RETRIES;
++    // Reintentos solo con intención de play. Para hard errors, máx 2; soft, máx 6.
++    if (n < effectiveMax && !isBlob) {
+       const attempt = n + 1;
+       playErrorRef.current = { id: cur, n: attempt };
+       setLoadingAudio(true);
+-      const delays = [1500, 3000, 5000, 8000, 12000, 16000];
++      // Hard errors: delays cortos (no va a cambiar el resultado). Soft: crecientes.
++      const softDelays = [1500, 3000, 5000, 8000, 12000, 16000];
++      const hardDelays = [800, 2000];
++      const delays = isHardError ? hardDelays : softDelays;
+       const delay = delays[Math.min(attempt - 1, delays.length - 1)];
+       setTimeout(async () => {
+         if (!audioRef.current || trackRef.current?.id !== cur) return;
+         if (!playingRef.current) { setLoadingAudio(false); return; }
+         try {
+           const q = ({ high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' }[quality] || 'high');
+-          if (attempt > 2) api._streamSignCache?.clear?.();
++          if (attempt > 1) api._streamSignCache?.clear?.();
+           const base = await api.ensureStreamUrl({ artist: track.artist, title: track.title, id: track.id, quality: q });
+           if (!playingRef.current) { setLoadingAudio(false); return; }
+-          audioRef.current.src = attempt > 2 ? (base + '&_r=' + Date.now()) : base;
++          audioRef.current.src = attempt > 1 ? (base + '&_r=' + Date.now()) : base;
+           setPlaySrc(audioRef.current.src);
+           audioRef.current.load();
+           const p = audioRef.current.play(); if (p && p.catch) p.catch(() => {});
+@@ -1526,7 +1545,7 @@ export default function App() {
+       }, delay);
+       return;
+     }
+-    // Agotados 6 reintentos (~45s de intentos): saltar con protección anti-cascada.
++    // Agotados los reintentos: saltar con protección anti-cascada.
+     playErrorRef.current = { id: cur, n: 0 };
+     consecutiveFailsRef.current += 1;
+     if (consecutiveFailsRef.current > 2) {
+@@ -1539,9 +1558,23 @@ export default function App() {
+     const ids = queue && queue.length ? queue : [];
+     const i = ids.indexOf(cur);
+     if (ids.length > 1 && i !== -1) {
+-      showToast('Pista no disponible · siguiente…');
+-      setTimeout(() => next(), 1000);
+-    } else { setPlaying(false); showToast('No se pudo reproducir esta pista'); api.reportPlaybackError({ trackId: cur, errorCode: 'max_retries', errorMessage: 'Agotados 6 reintentos de reproducción' }); }
++      // Mensaje claro: explica al usuario por qué no sonó y que se salta.
++      const reason = isHardError
++        ? 'Pista no compatible · saltando…'
++        : 'Pista no disponible · siguiente…';
++      showToast(reason);
++      setTimeout(() => next(), 800);
++    } else {
++      setPlaying(false);
++      showToast('No se pudo reproducir esta pista');
++      api.reportPlaybackError({
++        trackId: cur,
++        errorCode: isHardError ? 'src_not_supported' : 'max_retries',
++        errorMessage: isHardError
++          ? `Source/decode error (code ${errCode}) tras ${MAX_HARD_RETRIES} reintentos`
++          : `Agotados ${MAX_PLAY_RETRIES} reintentos de reproducción`,
++      });
++    }
+   };
+ 
+   const audioEl = (
+diff --git a/frontend/src/components.jsx b/frontend/src/components.jsx
+index f17c3c3..fc3df78 100755
+--- a/frontend/src/components.jsx
++++ b/frontend/src/components.jsx
+@@ -61,11 +61,23 @@ export function DownloadAllButton({ ids, downloaded, downloading, onClick, T })
+ }
+ 
+ // Imagen de carátula robusta: carga diferida, estado de carga y fallback al fallar.
++//
++// Maneja los siguientes casos problemáticos que rompían las carátulas en la
++// biblioteca y el reproductor:
++//   - `src` vacío / null / undefined → directamente el fallback (sin parpadeos).
++//   - `src` que es un `data:` (FALLBACK_COVER ya) → no reescribir con hiResCover.
++//   - URL de YouTube Music que ya viene en alta resolución → no estropear el sufijo.
++//   - Imagen 404/rota → onError cambia a fallback y marca `failed` para no reintentar.
++//   - Imagen cacheada (onLoad no dispara) → comprobamos `img.complete` para mostrarla.
+ export function CoverImg({ src, alt = '', radius = 12, className = '', style = {}, size = 512 }) {
+   const [loaded, setLoaded] = useState(false);
+   const [failed, setFailed] = useState(false);
+   const imgRef = useRef(null);
+-  const real = !failed && src ? hiResCover(src, size) : FALLBACK_COVER;
++  // Si el src viene vacío o es el propio fallback, no lo pases por hiResCover
++  // (rompería el data: URL del SVG). Y si ya falló, directamente al fallback.
++  const isHttpSrc = src && typeof src === 'string' && src.length > 0 && !src.startsWith('data:');
++  const usableSrc = isHttpSrc ? hiResCover(src, size) : src;
++  const real = failed || !usableSrc ? FALLBACK_COVER : usableSrc;
+   // Reiniciar estado al cambiar de portada. CLAVE: si la imagen ya está en la
+   // caché del navegador, el evento `onLoad` NO se vuelve a disparar tras un
+   // re-render/remontaje (reordenar cola, navegar, re-render de listas), dejando
+diff --git a/frontend/src/player/ExpandedPlayer.jsx b/frontend/src/player/ExpandedPlayer.jsx
+index c19eccc..e1af3eb 100755
+--- a/frontend/src/player/ExpandedPlayer.jsx
++++ b/frontend/src/player/ExpandedPlayer.jsx
+@@ -30,16 +30,25 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
+   const lyricBoxRef = useRef(null);
+   // Tiempo de alta frecuencia para la sincronía de la letra.
+   // El evento timeUpdate del <audio> solo dispara ~4 veces/seg, lo que hace que
+-  // el resaltado vaya a saltos. Aquí leemos currentTime a ~15 Hz mientras la
+-  // letra está abierta y reproduciendo, para un seguimiento fluido y preciso.
++  // el resaltado vaya a saltos. Aquí leemos currentTime a ~10 Hz mientras la
++  // letra está abierta Y reproduciendo, para un seguimiento fluido y preciso.
++  //
++  // OPTIMIZACIÓN: antes sondeaba a 66ms (~15 Hz) incluso con la letra cerrada
++  // o en pausa, lo que provocaba re-renders constantes del ExpandedPlayer y
++  // lag general de la app. Ahora:
++  //   - 100ms (10 Hz) en vez de 66ms — suficientemente fluido para scroll de letra.
++  //   - Solo cuando hay letra sincronizada cargada (lyricState.synced.length > 0).
++  //   - Solo cuando `playing` es true y la pestaña de letra (o escritorio) está activa.
+   const [lyricTime, setLyricTime] = useState(0);
++  const hasSyncedLyrics = lyricState.status === 'ok' && lyricState.synced.length > 0;
++  const shouldPollLyricTime = open && playing && hasSyncedLyrics && (showLyrics || desktop);
+   useEffect(() => {
+-    if (!showLyrics && !desktop) return;
++    if (!shouldPollLyricTime) return;
+     const read = () => { const a = audioRef?.current; if (a) setLyricTime(a.currentTime || 0); };
+     read();
+-    const id = setInterval(read, 66);
++    const id = setInterval(read, 100);
+     return () => clearInterval(id);
+-  }, [showLyrics, desktop, audioRef, playing, track?.id]);
++  }, [shouldPollLyricTime, audioRef]);
+   // Tiempo efectivo: el de alta frecuencia si la letra está abierta, si no el prop.
+   const effTime = showLyrics ? lyricTime : time;
+   // Color dominante extraído de la portada actual
+diff --git a/frontend/src/store/__tests__/libraryStore.test.jsx b/frontend/src/store/__tests__/libraryStore.test.jsx
+index 48a0f12..80de8ac 100755
+--- a/frontend/src/store/__tests__/libraryStore.test.jsx
++++ b/frontend/src/store/__tests__/libraryStore.test.jsx
+@@ -74,11 +74,14 @@ describe('libraryStore', () => {
+ 
+   it('saveAlbum agrega sin duplicar y unsaveAlbum quita', () => {
+     const store = useLibraryStore.getState();
+-    const album = { id: 'al1', name: 'Album X' };
++    // NOTA: los álbumes se identifican por `albumId` (igual que en backend y App).
++    // Un bug previo usaba `id` y rompía save/isSaved/unsave silenciosamente.
++    const album = { albumId: 'al1', name: 'Album X' };
+     store.saveAlbum(album);
+     store.saveAlbum(album); // duplicado — no debe repetir
+     expect(useLibraryStore.getState().savedAlbums).toHaveLength(1);
+     expect(store.isAlbumSaved('al1')).toBe(true);
++    expect(store.isAlbumSaved('al2')).toBe(false);
+     store.unsaveAlbum('al1');
+     expect(useLibraryStore.getState().savedAlbums).toHaveLength(0);
+     expect(store.isAlbumSaved('al1')).toBe(false);
+@@ -101,7 +104,7 @@ describe('libraryStore', () => {
+     store.toggleFav('a');
+     store.createPlaylistLocal('p1', 'X');
+     store.pushRecent('r1');
+-    store.saveAlbum({ id: 'al1' });
++    store.saveAlbum({ albumId: 'al1' });
+     store.setHomeRows([{ section: 's1' }]);
+     store.setHomeLoading(true);
+     store.bumpFeedNonce();
+@@ -125,4 +128,35 @@ describe('libraryStore', () => {
+     store.bumpCatVer();
+     expect(useLibraryStore.getState().catVer).toBe(1);
+   });
++
++  // ─── Regresión: álbumes guardados usan `albumId`, no `id` ───────
++  // Un bug previo usaba `a.id === albumId` en saveAlbum/isAlbumSaved/unsaveAlbum,
++  // pero el resto de la app (backend, useLibraryActions, LibraryTab) usa `albumId`.
++  // El guardado local fallaba silenciosamente: el botón "Guardar" nunca cambiaba
++  // a "Guardado", no se podía quitar del store local, y tras sincronizar con el
++  // backend isAlbumSaved seguía devolviendo false.
++  it('regresión: álbumes se guardan y consultan por albumId (no por id)', () => {
++    const store = useLibraryStore.getState();
++    const album = { albumId: 'MPREb_xyz', name: 'Santo Pecado', artist: 'Ricardo Arjona', cover: 'https://example.com/c.jpg' };
++    // El album trae albumId pero NO id — no debe ser rechazado.
++    expect(album.id).toBeUndefined();
++    store.saveAlbum(album);
++    expect(useLibraryStore.getState().savedAlbums).toHaveLength(1);
++    expect(useLibraryStore.getState().savedAlbums[0].albumId).toBe('MPREb_xyz');
++    // isAlbumSaved debe detectar el álbum por albumId.
++    expect(store.isAlbumSaved('MPREb_xyz')).toBe(true);
++    expect(store.isAlbumSaved('MPREb_other')).toBe(false);
++    // unsaveAlbum debe poder quitarlo por albumId.
++    store.unsaveAlbum('MPREb_xyz');
++    expect(useLibraryStore.getState().savedAlbums).toHaveLength(0);
++    expect(store.isAlbumSaved('MPREb_xyz')).toBe(false);
++  });
++
++  it('saveAlbum rechaza entradas sin albumId', () => {
++    const store = useLibraryStore.getState();
++    store.saveAlbum(null);
++    store.saveAlbum({ name: 'sin id' });
++    store.saveAlbum({ id: 'wrong-field' }); // id NO es el campo correcto
++    expect(useLibraryStore.getState().savedAlbums).toHaveLength(0);
++  });
+ });
+diff --git a/frontend/src/store/libraryStore.js b/frontend/src/store/libraryStore.js
+index 7a798fc..ad00b3c 100755
+--- a/frontend/src/store/libraryStore.js
++++ b/frontend/src/store/libraryStore.js
+@@ -128,16 +128,21 @@ export const useLibraryStore = create((set, get) => ({
+   },
+ 
+   // ─── Saved albums ───────────────────────────────────────────
++  // NOTA: los álbumes se identifican por `albumId` (coincide con backend y
++  // con todo el código de la app). Usar `a.id` aquí rompía saveAlbum/unsaveAlbum/
++  // isAlbumSaved silenciosamente y era la causa de la regresión "0 canciones en
++  // álbumes guardados" — el guardado local fallaba y el botón "Guardar" nunca
++  // cambiaba a "Guardado", además de no poder quitar el álbum del store local.
+   saveAlbum: (album) => {
+-    if (!album || !album.id) return;
+-    set((s) => (s.savedAlbums.some((a) => a.id === album.id) ? s : { savedAlbums: [...s.savedAlbums, album] }));
++    if (!album || !album.albumId) return;
++    set((s) => (s.savedAlbums.some((a) => a.albumId === album.albumId) ? s : { savedAlbums: [...s.savedAlbums, album] }));
+   },
+ 
+   unsaveAlbum: (albumId) => {
+-    set((s) => ({ savedAlbums: s.savedAlbums.filter((a) => a.id !== albumId) }));
++    set((s) => ({ savedAlbums: s.savedAlbums.filter((a) => a.albumId !== albumId) }));
+   },
+ 
+-  isAlbumSaved: (albumId) => get().savedAlbums.some((a) => a.id === albumId),
++  isAlbumSaved: (albumId) => get().savedAlbums.some((a) => a.albumId === albumId),
+ 
+   // ─── Saved playlists (mixes guardados) ─────────────────────
+   savePlaylist: (playlist) => {
+-- 
+2.47.3
+

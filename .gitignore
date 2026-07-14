@@ -40,3 +40,6 @@ desktop.ini
 
 # ── Artefactos de desarrollo interno (Kiro specs) ─────────────
 .kiro/
+
+# ── Skills / sesión local ─────────────────────────────────────
+skills/

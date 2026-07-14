@@ -1,0 +1,388 @@
+     1→import React, { useState, useEffect, useRef, useMemo } from 'react';
+     2→import { api } from '../api.js';
+     3→import * as offline from '../offline.js';
+     4→import { fmt, hex2rgba, grad, hiResCover, dedupeByTitle, capPerArtist, slimTrack, parseLRC, lyricsOverlapRatio, plainFromSyncedLines, tintedVars } from '../helpers.js';
+     5→import { usePersisted, useViewport, useDominantColor, useHSwipe } from '../hooks.js';
+     6→import { FALLBACK_COVER } from '../constants.js';
+     7→import { Icon } from '../Icons.jsx';
+     8→import { EQViz, Spinner, ProgressRing, DownloadAllButton, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider, SettingCard, ToggleRow, ColorField } from '../components.jsx';
+     9→import { cacheTrack, cacheTracks, trackById, allCached, loadMeta, loadPlayerState, saveMeta, normalizeTrack } from '../catalog.js';
+    10→import { CoverSwipe } from './CoverSwipe.jsx';
+    11→import { DeviceChip } from './DeviceChip.jsx';
+    12→
+    13→export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next, prev, time, dur, seek,
+    14→  vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved, toggleFav, T, quality, glow, compact, desktop, onAdd, onMenu, loadingAudio, onQueue, outputs, sinkId, setOutput, lyricOffset = 0, setLyricOffset, audioRef, nextCover, prevCover, inLibrary = false }) {
+    15→  const [showLyrics, setShowLyrics] = useState(false);
+    16→  // iOS no permite controlar el volumen por software (solo botones físicos).
+    17→  const isIOS = typeof navigator !== 'undefined' && /iphone|ipad|ipod/i.test(navigator.userAgent) && !/crios|fxios/i.test(navigator.userAgent);
+    18→  // Deslizar hacia abajo para minimizar (solo móvil, si el panel está arriba del todo).
+    19→  const swipeStartY = useRef(null);
+    20→  const swipeScrollTop = useRef(0);
+    21→  const onPanelTouchStart = (e) => { swipeStartY.current = e.touches[0].clientY; swipeScrollTop.current = e.currentTarget.scrollTop || 0; };
+    22→  const onPanelTouchEnd = (e) => {
+    23→    if (swipeStartY.current == null) return;
+    24→    const dy = e.changedTouches[0].clientY - swipeStartY.current;
+    25→    const startedAtTop = swipeScrollTop.current <= 4;
+    26→    swipeStartY.current = null;
+    27→    if (!desktop && startedAtTop && dy > 90) onClose();
+    28→  };
+    29→  const [lyricState, setLyricState] = useState({ status:'idle', synced:[], plain:[] });
+    30→  const lyricBoxRef = useRef(null);
+    31→  // Tiempo de alta frecuencia para la sincronía de la letra.
+    32→  // El evento timeUpdate del <audio> solo dispara ~4 veces/seg, lo que hace que
+    33→  // el resaltado vaya a saltos. Aquí leemos currentTime a ~15 Hz mientras la
+    34→  // letra está abierta y reproduciendo, para un seguimiento fluido y preciso.
+    35→  const [lyricTime, setLyricTime] = useState(0);
+    36→  useEffect(() => {
+    37→    if (!showLyrics && !desktop) return;
+    38→    const read = () => { const a = audioRef?.current; if (a) setLyricTime(a.currentTime || 0); };
+    39→    read();
+    40→    const id = setInterval(read, 66);
+    41→    return () => clearInterval(id);
+    42→  }, [showLyrics, desktop, audioRef, playing, track?.id]);
+    43→  // Tiempo efectivo: el de alta frecuencia si la letra está abierta, si no el prop.
+    44→  const effTime = showLyrics ? lyricTime : time;
+    45→  // Color dominante extraído de la portada actual
+    46→  const dominantColor = useDominantColor(track?.cover);
+    47→  const ambientHex = dominantColor?.hex || T.accent;
+    48→  const ambientR = dominantColor?.r ?? parseInt(T.accent.slice(1,3),16);
+    49→  const ambientG = dominantColor?.g ?? parseInt(T.accent.slice(3,5),16);
+    50→  const ambientB = dominantColor?.b ?? parseInt(T.accent.slice(5,7),16);
+    51→  const ambientRgba = (a) => `rgba(${ambientR},${ambientG},${ambientB},${a})`;
+    52→
+    53→  // Al abrir el player: ir a letra en móvil (el usuario quiere verla).
+    54→  useEffect(() => {
+    55→    if (open && !desktop) setShowLyrics(true);
+    56→    if (!open) setShowLyrics(false);
+    57→  }, [open, desktop, track?.id]);
+    58→
+    59→  // Cargar letra SIEMPRE que el player esté abierto (no solo al tab Letra).
+    60→  // Un solo flujo ordenado: offline → sync (correcta) → plain. Sin carreras.
+    61→  useEffect(() => {
+    62→    if (!open || !track?.id) return;
+    63→    let cancel = false;
+    64→    const trackId = track.id;
+    65→    setLyricState({ status: 'loading', synced: [], plain: [] });
+    66→
+    67→    const base = {
+    68→      artist: track.artist || '',
+    69→      title: track.title || '',
+    70→      album: track.album,
+    71→      duration: track.durationSeconds,
+    72→      id: track.id,
+    73→    };
+    74→
+    75→    const toPlainLines = (text) =>
+    76→      String(text || '')
+    77→        .split(/\r?\n/)
+    78→        .filter((l, i, a) => l || (i > 0 && i < a.length - 1));
+    79→
+    80→    const commit = (d) => {
+    81→      if (cancel || !d) return;
+    82→      const synced = parseLRC(d.synced);
+    83→      const fromSync = synced.length ? plainFromSyncedLines(synced) : '';
+    84→      const plainText = d.plain || fromSync || '';
+    85→      const plain = toPlainLines(plainText);
+    86→      if (!synced.length && plain.filter((l) => l.trim()).length < 2) {
+    87→        setLyricState({ status: 'none', synced: [], plain: [] });
+    88→        return;
+    89→      }
+    90→      setLyricState({
+    91→        status: 'ok',
+    92→        synced,
+    93→        plain: plain.length ? plain : toPlainLines(fromSync),
+    94→        source: d.source || 'api',
+    95→      });
+    96→      if (inLibrary && (synced.length || plain.length)) {
+    97→        offline.saveLyrics(trackId, {
+    98→          synced: d.synced || null,
+    99→          plain: plainText || plain.join('\n'),
+   100→          source: d.source,
+   101→        }).catch(() => {});
+   102→      }
+   103→    };
+   104→
+   105→    (async () => {
+   106→      try {
+   107→        const cached = await offline.getLyrics(trackId).catch(() => null);
+   108→        if (cancel) return;
+   109→        if (cached && (cached.synced || cached.plain)) {
+   110→          commit({
+   111→            synced: cached.synced,
+   112→            plain: cached.plain,
+   113→            source: cached.source || 'offline',
+   114→          });
+   115→          if (cached.synced && parseLRC(cached.synced).length >= 4) return;
+   116→        }
+   117→
+   118→        let d = await api.lyrics({ ...base, sync: true }).catch(() => null);
+   119→        if (cancel) return;
+   120→        if (d?.synced && parseLRC(d.synced).length) {
+   121→          if (cached?.plain && String(cached.plain).trim().length > 40) {
+   122→            const sp = plainFromSyncedLines(parseLRC(d.synced));
+   123→            if (lyricsOverlapRatio(cached.plain, sp || d.plain || '') < 0.3) {
+   124→              commit({ synced: null, plain: cached.plain, source: cached.source || 'offline' });
+   125→              return;
+   126→            }
+   127→          }
+   128→          commit(d);
+   129→          return;
+   130→        }
+   131→
+   132→        d = d?.plain ? d : await api.lyrics(base).catch(() => null);
+   133→        if (cancel) return;
+   134→        if (d && (d.synced || d.plain)) {
+   135→          commit(d);
+   136→          return;
+   137→        }
+   138→        if (!cancel) setLyricState({ status: 'none', synced: [], plain: [] });
+   139→      } catch {
+   140→        if (!cancel) setLyricState({ status: 'none', synced: [], plain: [] });
+   141→      }
+   142→    })();
+   143→
+   144→    return () => { cancel = true; };
+   145→  }, [open, track?.id, track?.artist, track?.title, inLibrary]);
+   146→
+   147→  const activeLyric = useMemo(() => {
+   148→    if (!lyricState.synced || !lyricState.synced.length) return -1;
+   149→    let idx = -1;
+   150→    for (let i = 0; i < lyricState.synced.length; i++) { if (lyricState.synced[i].t <= effTime + lyricOffset) idx = i; else break; }
+   151→    return idx;
+   152→  }, [lyricState, effTime, lyricOffset]);
+   153→
+   154→  useEffect(() => {
+   155→    if (activeLyric < 0 || !lyricBoxRef.current) return;
+   156→    const box = lyricBoxRef.current;
+   157→    const el = box.querySelector(`[data-li="${activeLyric}"]`);
+   158→    if (el) {
+   159→      // Scroll SOLO dentro de la caja de letra (no del panel completo),
+   160→      // centrando la línea activa. Evita saltos bruscos de toda la UI.
+   161→      const target = el.offsetTop - box.clientHeight / 2 + el.clientHeight / 2;
+   162→      box.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+   163→    }
+   164→  }, [activeLyric]);
+   165→
+   166→  if (!track) return null;
+   167→  const pct = dur > 0 ? (time / dur) * 100 : 0;
+   168→  const glowF = glow / 100;
+   169→  const art = desktop ? 'clamp(170px, 32vh, 300px)' : 'min(80vw, 360px)';
+   170→  const pad = compact ? 'calc(env(safe-area-inset-top, 14px) + 18px) 22px calc(env(safe-area-inset-bottom, 16px) + 26px)' : '52px 26px 36px';
+   171→
+   172→  const panelBg = desktop
+   173→    ? `radial-gradient(130% 85% at 50% 0%, ${ambientRgba(.18 + glowF * .25)}, transparent 62%), var(--surf-0)`
+   174→    : `radial-gradient(130% 80% at 50% 0%, ${ambientRgba(.16 + glowF * .28)}, transparent 60%), var(--bg-0)`;
+   175→
+   176→  const panelStyle = desktop ? {
+   177→    position:'fixed', top:'50%', left:'50%', transform:`translate(-50%,-50%) scale(${open?1:.95})`,
+   178→    width:'min(440px, 92vw)', maxHeight:'94vh', background: panelBg,
+   179→    border:'1px solid var(--line)', borderRadius:30, boxShadow:'0 40px 110px #000e',
+   180→    opacity: open?1:0, pointerEvents: open?'auto':'none',
+   181→    transition:'transform .42s cubic-bezier(.22,1,.36,1), opacity .3s ease, background 1.4s ease',
+   182→    zIndex:90, display:'flex', flexDirection:'column', padding:'22px 26px 26px', overflow:'hidden',
+   183→  } : {
+   184→    position:'absolute', inset:0, width:'100%', background: panelBg,
+   185→    transform: open ? 'translateY(0)' : 'translateY(100%)', opacity: open ? 1 : 0,
+   186→    transition:'transform .46s cubic-bezier(.22,1,.36,1), opacity .3s ease, background 1.4s ease',
+   187→    zIndex:90, display:'flex', flexDirection:'column', padding:pad, overflowY:'auto',
+   188→    boxSizing:'border-box', touchAction:'pan-y',
+   189→  };
+   190→
+   191→  // ─────────── LAYOUT DESKTOP (estilo Spotify, pantalla completa) ───────────
+   192→  if (desktop) {
+   193→    const dArt = 'min(46vh, 440px)';
+   194→    const Transport = (
+   195→      <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:26 }}>
+   196→        <button aria-label="Aleatorio" onClick={() => setShuffle(s=>!s)} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer', opacity: shuffle ? 1 : .4 }}><Icon.Shuf c={shuffle ? T.accent : 'var(--txt-1)'} sz={19} /></button>
+   197→        <button aria-label="Anterior" onClick={prev} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer' }}><Icon.Prev c="var(--txt-0)" sz={26} /></button>
+   198→        <button aria-label={playing?'Pausar':'Reproducir'} onClick={togglePlay} className="btn-tap" style={{ width:60, height:60, borderRadius:'50%', background:grad(T), border:'none', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', boxShadow:`0 0 ${20+glowF*26}px ${hex2rgba(T.accent,.55)}, 0 8px 24px #000a` }}>{loadingAudio ? <Spinner c="#04060a" sz={24} /> : (playing ? <Icon.Pause c="#04060a" sz={26} /> : <Icon.Play c="#04060a" sz={26} />)}</button>
+   199→        <button aria-label="Siguiente" onClick={next} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer' }}><Icon.Next c="var(--txt-0)" sz={26} /></button>
+   200→        <button aria-label="Repetir" onClick={() => setRepeat(r=>!r)} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer', opacity: repeat ? 1 : .4 }}><Icon.Rep c={repeat ? T.accent : 'var(--txt-1)'} sz={19} /></button>
+   201→      </div>
+   202→    );
+   203→    return (
+   204→      <div style={{ position:'fixed', inset:0, zIndex:90, opacity: open?1:0, pointerEvents: open?'auto':'none', transition:'opacity .38s ease', display:'flex', flexDirection:'column', background:`radial-gradient(120% 90% at 50% -10%, ${ambientRgba(.28 + glowF*.22)}, transparent 58%), var(--bg-0)`, fontFamily:'Inter,sans-serif' }}>
+   205→        {/* Barra superior */}
+   206→        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'20px 32px', flexShrink:0 }}>
+   207→          <button aria-label="Minimizar" onClick={onClose} className="btn-tap glass" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:42, height:42, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}><Icon.ChevD c="var(--txt-1)" sz={20} /></button>
+   208→          <div style={{ textAlign:'center' }}>
+   209→            <div style={{ fontSize:9.5, fontWeight:900, letterSpacing:3, color:'var(--txt-2)', textTransform:'uppercase' }}>Reproduciendo desde</div>
+   210→            <div style={{ fontSize:13, fontWeight:800, color:'var(--txt-0)', marginTop:3 }}>{track.album || track.artist}</div>
+   211→          </div>
+   212→          <button aria-label="Cola de reproducción" onClick={onQueue} className="btn-tap glass" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:42, height:42, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}><Icon.Queue c={T.accent} sz={19} /></button>
+   213→        </div>
+   214→
+   215→        {/* Cuerpo: portada + letra (bloque centrado con ancho máximo) */}
+   216→        <div style={{ flex:1, minHeight:0, display:'grid', gridTemplateColumns:'minmax(0,1fr) minmax(0,1fr)', gap:'clamp(24px,4vw,56px)', padding:'0 clamp(20px,4vw,48px)', alignItems:'center', justifyContent:'center', width:'100%', maxWidth:1120, margin:'0 auto' }}>
+   217→          {/* Columna izquierda: portada + info */}
+   218→          <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', minWidth:0 }}>
+   219→            <CoverSwipe next={next} prev={prev} playing={playing} glowF={glowF} ambientRgba={ambientRgba} art={dArt} track={track} loadingAudio={loadingAudio} nextCover={nextCover} prevCover={prevCover} />
+   220→            <div style={{ width:dArt, maxWidth:'100%', display:'flex', alignItems:'center', gap:14, marginTop:6 }}>
+   221→              <div style={{ flex:1, minWidth:0 }}>
+   222→                <div style={{ fontSize:26, fontWeight:900, color:'var(--txt-0)', letterSpacing:-.6, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title}</div>
+   223→                <div style={{ fontSize:15, color:T.accent, marginTop:5, fontWeight:700, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.artist}</div>
+   224→              </div>
+   225→              <button aria-label="Me gusta" onClick={() => toggleFav(track.id)} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer', padding:6, flexShrink:0 }}><Icon.Heart c={T.accent} filled={faved} sz={26} /></button>
+   226→              {onAdd && <button aria-label="Añadir" onClick={() => onAdd(track.id)} className="btn-tap" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:42, height:42, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}><Icon.Plus c="var(--txt-1)" sz={20} /></button>}
+   227→            </div>
+   228→          </div>
+   229→
+   230→          {/* Columna derecha: letra */}
+   231→          <div style={{ height:'min(72vh, 620px)', display:'flex', flexDirection:'column', minWidth:0, background:'linear-gradient(180deg, var(--surf-0), transparent)', border:'1px solid var(--line-soft)', borderRadius:24, overflow:'hidden' }}>
+   232→            <div style={{ display:'flex', alignItems:'center', gap:9, padding:'18px 24px 12px', flexShrink:0 }}>
+   233→              <Icon.Mic c={T.accent} sz={18} /><span style={{ fontSize:14, fontWeight:900, color:'var(--txt-0)' }}>Letra</span>
+   234→              {lyricState.status==='ok' && lyricState.synced.length>0 && setLyricOffset && (
+   235→                <div style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:8 }}>
+   236→                  <button aria-label="Atrasar letra" onClick={() => setLyricOffset(o => Math.round((o - 0.5) * 10) / 10)} className="press" style={{ width:26, height:26, borderRadius:'50%', background:'var(--surf-1)', border:'1px solid var(--line)', color:'var(--txt-0)', fontSize:14, fontWeight:800, cursor:'pointer' }}>−</button>
+   237→                  <span style={{ fontSize:10, color:'var(--txt-2)', fontWeight:700, minWidth:60, textAlign:'center' }}>{lyricOffset>0?'+':''}{lyricOffset.toFixed(1)}s</span>
+   238→                  <button aria-label="Adelantar letra" onClick={() => setLyricOffset(o => Math.round((o + 0.5) * 10) / 10)} className="press" style={{ width:26, height:26, borderRadius:'50%', background:'var(--surf-1)', border:'1px solid var(--line)', color:'var(--txt-0)', fontSize:14, fontWeight:800, cursor:'pointer' }}>+</button>
+   239→                </div>
+   240→              )}
+   241→            </div>
+   242→            <div ref={lyricBoxRef} style={{ flex:1, overflowY:'auto', padding:'6px 28px 28px' }}>
+   243→              {lyricState.status === 'loading' && <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:10, paddingTop:'30%', color:'var(--txt-2)' }}><Spinner c={T.accent} sz={22} /><span style={{ fontSize:13 }}>Buscando letra…</span></div>}
+   244→              {lyricState.status === 'none' && <div style={{ fontSize:14, color:'var(--txt-2)', paddingTop:'34%', textAlign:'center' }}>Letra no disponible para esta pista.</div>}
+   245→              {lyricState.status === 'ok' && lyricState.synced.length > 0 && (<>
+   246→                {lyricState.synced.map((l, i) => (
+   247→                  <div key={i} data-li={i} onClick={() => seek(l.t)} style={{ fontSize: i===activeLyric ? 26 : 20, fontWeight: i===activeLyric ? 800 : 700, color: i===activeLyric ? 'var(--txt-0)' : (i < activeLyric ? 'var(--txt-2)' : 'var(--txt-1)'), margin:'14px 0', lineHeight:1.35, transition:'all .25s ease', cursor:'pointer', opacity: i===activeLyric ? 1 : .55 }}>{l.text || '♪'}</div>
+   248→                ))}
+   249→                <div style={{ fontSize:10, color:'var(--txt-3)', marginTop:14 }}>Letra sincronizada · {lyricState.source}</div>
+   250→              </>)}
+   251→              {lyricState.status === 'ok' && lyricState.synced.length === 0 && (<>
+   252→                {lyricState.plain.map((line, i) => <div key={i} style={{ fontSize:19, fontWeight:700, color:'var(--txt-1)', margin:'11px 0', lineHeight:1.5 }}>{line || '♪'}</div>)}
+   253→                <div style={{ fontSize:10, color:'var(--txt-3)', marginTop:14 }}>Letra · {lyricState.source}</div>
+   254→              </>)}
+   255→            </div>
+   256→          </div>
+   257→        </div>
+   258→
+   259→        {/* Barra inferior de control */}
+   260→        <div style={{ flexShrink:0, padding:'14px clamp(24px,5vw,64px) 26px', display:'flex', flexDirection:'column', gap:12 }}>
+   261→          <div style={{ display:'flex', alignItems:'center', gap:14 }}>
+   262→            <span style={{ fontSize:11, color:'var(--txt-2)', fontFamily:'monospace', fontWeight:700, width:40, textAlign:'right' }}>{fmt(time)}</span>
+   263→            <div style={{ position:'relative', flex:1, height:16, display:'flex', alignItems:'center' }}>
+   264→              <div style={{ position:'absolute', left:0, right:0, height:5, background:'var(--surf-2)', borderRadius:99 }} />
+   265→              <div style={{ position:'absolute', left:0, top:'50%', transform:'translateY(-50%)', height:5, width:`${pct}%`, background:grad(T,90), borderRadius:99, boxShadow:`0 0 10px ${hex2rgba(T.accent,.6)}`, transition:'width .12s linear' }} />
+   266→              <input type="range" min="0" max={dur||100} step="0.1" value={time} aria-label="Progreso" onChange={e => seek(+e.target.value)} style={{ position:'absolute', inset:0, width:'100%', height:'100%', margin:0, opacity:0, cursor:'pointer' }} />
+   267→            </div>
+   268→            <span style={{ fontSize:11, color:'var(--txt-2)', fontFamily:'monospace', fontWeight:700, width:40 }}>{fmt(dur)}</span>
+   269→          </div>
+   270→          <div style={{ display:'grid', gridTemplateColumns:'1fr auto 1fr', alignItems:'center', gap:16 }}>
+   271→            <div style={{ display:'flex', alignItems:'center', gap:12, minWidth:0 }}>
+   272→              <img src={track.cover ? hiResCover(track.cover, 128) : FALLBACK_COVER} alt="" referrerPolicy="no-referrer" onError={e => { e.currentTarget.onerror = null; e.currentTarget.src = FALLBACK_COVER; }} style={{ width:52, height:52, borderRadius:12, objectFit:'cover', flexShrink:0, boxShadow:`0 4px 14px ${hex2rgba(T.accent,.3)}` }} />
+   273→              <div style={{ minWidth:0 }}>
+   274→                <div style={{ fontSize:13, fontWeight:800, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title}</div>
+   275→                <div style={{ fontSize:11, color:'var(--txt-2)', marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.artist}</div>
+   276→              </div>
+   277→            </div>
+   278→            {Transport}
+   279→            <div style={{ display:'flex', alignItems:'center', justifyContent:'flex-end', gap:12, minWidth:0 }}>
+   280→              <DeviceChip outputs={outputs} sinkId={sinkId} setOutput={setOutput} T={T} />
+   281→              {!isIOS && <div style={{ display:'flex', alignItems:'center', gap:8, width:150 }}><Icon.Vol c="var(--txt-2)" sz={17} /><div style={{ flex:1 }}><RangeSlider value={vol} min={0} max={1} step={0.01} onChange={setVol} accent={T.accent} ariaLabel="Volumen" /></div></div>}
+   282→            </div>
+   283→          </div>
+   284→        </div>
+   285→      </div>
+   286→    );
+   287→  }
+   288→
+   289→  return (
+   290→    <>
+   291→      {desktop && <div onClick={onClose} style={{ position:'fixed', inset:0, background:'#04060ad9', backdropFilter:'blur(10px)', WebkitBackdropFilter:'blur(10px)', opacity: open?1:0, pointerEvents: open?'auto':'none', transition:'opacity .3s ease', zIndex:89 }} />}
+   292→      <div style={panelStyle} onTouchStart={!desktop ? onPanelTouchStart : undefined} onTouchEnd={!desktop ? onPanelTouchEnd : undefined}>
+   293→        {!desktop && <div style={{ width:44, height:5, borderRadius:99, background:'var(--surf-2)', margin:'0 auto 12px', flexShrink:0 }} />}
+   294→        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16, flexShrink:0 }}>
+   295→          <button aria-label="Cerrar" onClick={onClose} className="btn-tap glass" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:38, height:38, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}><Icon.ChevD c="var(--txt-1)" sz={18} /></button>
+   296→          <div style={{ textAlign:'center', flex:1, minWidth:0 }}>
+   297→            <div style={{ fontSize:9, fontWeight:900, letterSpacing:3, color:'var(--txt-2)', textTransform:'uppercase' }}>Reproduciendo desde</div>
+   298→            <div style={{ fontSize:12, fontWeight:700, color:'var(--txt-0)', marginTop:3, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.album || track.artist}</div>
+   299→          </div>
+   300→          <div style={{ width:38, height:38, flexShrink:0 }} />
+   301→        </div>
+   302→
+   303→        <div style={{ display:'flex', gap:6, background:'var(--surf-1)', borderRadius:12, padding:4, marginBottom:16, flexShrink:0, alignSelf:'center' }}>
+   304→          {[['Portada',false],['Letra',true]].map(([lbl,val]) => (
+   305→            <button key={lbl} onClick={() => setShowLyrics(val)} className="press" style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 16px', borderRadius:9, border:'none', cursor:'pointer', background: showLyrics===val ? grad(T) : 'transparent', color: showLyrics===val ? '#04060a' : 'var(--txt-2)', fontSize:11, fontWeight:800 }}>
+   306→              {val ? <Icon.Mic c={showLyrics===val?'#04060a':'var(--txt-2)'} sz={14} /> : <Icon.Play c={showLyrics===val?'#04060a':'var(--txt-2)'} sz={13} />}{lbl}
+   307→            </button>
+   308→          ))}
+   309→        </div>
+   310→
+   311→        {!showLyrics ? (
+   312→          <CoverSwipe next={next} prev={prev} playing={playing} glowF={glowF} ambientRgba={ambientRgba} art={art} track={track} loadingAudio={loadingAudio} nextCover={nextCover} prevCover={prevCover} />
+   313→        ) : (
+   314→          <div ref={lyricBoxRef} style={{ position:'relative', height:art, overflowY:'auto', marginBottom:22, padding:'16px 6px', textAlign:'center', flexShrink:0 }}>
+   315→            {lyricState.status === 'loading' && <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:10, paddingTop:'28%', color:'var(--txt-2)' }}><Spinner c={T.accent} sz={22} /><span style={{ fontSize:13 }}>Buscando letra…</span></div>}
+   316→            {lyricState.status === 'none' && <div style={{ fontSize:13, color:'var(--txt-2)', paddingTop:'30%' }}>Letra no disponible para esta pista.</div>}
+   317→            {lyricState.status === 'ok' && lyricState.synced.length > 0 && (<>
+   318→              {lyricState.synced.map((l, i) => (
+   319→                <div key={i} data-li={i} style={{ fontSize: i===activeLyric ? 17 : 14.5, fontWeight: i===activeLyric ? 800 : 600, color: i===activeLyric ? T.accent : (i < activeLyric ? 'var(--txt-2)' : 'var(--txt-1)'), margin:'9px 0', lineHeight:1.4, transition:'all .25s ease' }}>{l.text || '♪'}</div>
+   320→              ))}
+   321→              {setLyricOffset && (
+   322→                <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:12, marginTop:16 }}>
+   323→                  <button aria-label="Atrasar letra" onClick={() => setLyricOffset(o => Math.round((o - 0.5) * 10) / 10)} className="press" style={{ width:30, height:30, borderRadius:'50%', background:'var(--surf-1)', border:'1px solid var(--line)', color:'var(--txt-0)', fontSize:16, fontWeight:800, cursor:'pointer' }}>−</button>
+   324→                  <span style={{ fontSize:10.5, color:'var(--txt-2)', fontWeight:700, minWidth:90, textAlign:'center' }}>Sincronía {lyricOffset>0?'+':''}{lyricOffset.toFixed(1)}s</span>
+   325→                  <button aria-label="Adelantar letra" onClick={() => setLyricOffset(o => Math.round((o + 0.5) * 10) / 10)} className="press" style={{ width:30, height:30, borderRadius:'50%', background:'var(--surf-1)', border:'1px solid var(--line)', color:'var(--txt-0)', fontSize:16, fontWeight:800, cursor:'pointer' }}>+</button>
+   326→                </div>
+   327→              )}
+   328→              <div style={{ fontSize:9.5, color:'var(--txt-3)', marginTop:8 }}>Letra sincronizada · {lyricState.source}</div>
+   329→            </>)}
+   330→            {lyricState.status === 'ok' && lyricState.synced.length === 0 && (<>
+   331→              {lyricState.plain.map((line, i) => <div key={i} style={{ fontSize:14.5, fontWeight:600, color:'var(--txt-0)', margin:'7px 0', lineHeight:1.5 }}>{line || '♪'}</div>)}
+   332→              <div style={{ fontSize:9.5, color:'var(--txt-3)', marginTop:14 }}>Letra · {lyricState.source}</div>
+   333→            </>)}
+   334→          </div>
+   335→        )}
+   336→
+   337→        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16, flexShrink:0 }}>
+   338→          <div style={{ minWidth:0, flex:1 }}>
+   339→            <div style={{ fontSize:21, fontWeight:900, color:'var(--txt-0)', letterSpacing:-.5, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title}</div>
+   340→            <div style={{ fontSize:13, color:T.accent, marginTop:5, fontWeight:700 }}>{track.artist}</div>
+   341→          </div>
+   342→          <button aria-label={faved?'Quitar de Me gusta':'Añadir a Me gusta'} onClick={() => toggleFav(track.id)} className="btn-tap" style={{ background: faved ? hex2rgba(T.accent,.14) : 'var(--surf-1)', border:`1px solid ${faved ? hex2rgba(T.accent,.4) : 'var(--line)'}`, borderRadius:'50%', width:38, height:38, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', marginRight:10, flexShrink:0 }}><Icon.Heart c={faved ? T.accent : 'var(--txt-1)'} filled={faved} sz={18} /></button>
+   343→          {onAdd && <button aria-label="Añadir" onClick={() => onAdd(track.id)} className="btn-tap" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:38, height:38, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', marginRight:10, flexShrink:0 }}><Icon.Plus c="var(--txt-1)" sz={18} /></button>}
+   344→          {onMenu && <button aria-label="Más" onClick={() => onMenu(track.id)} className="btn-tap" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:38, height:38, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}><Icon.Dots c="var(--txt-1)" sz={18} /></button>}
+   345→        </div>
+   346→
+   347→        <div style={{ marginBottom:18, flexShrink:0 }}>
+   348→          <div style={{ position:'relative', height:16, display:'flex', alignItems:'center', marginBottom:4 }}>
+   349→            <div style={{ position:'absolute', left:0, right:0, height:5, background:'var(--surf-2)', borderRadius:99 }} />
+   350→            <div style={{ position:'absolute', left:0, top:'50%', transform:'translateY(-50%)', height:5, width:`${pct}%`, background:grad(T,90), borderRadius:99, boxShadow:`0 0 10px ${hex2rgba(T.accent,.6)}`, transition:'width .12s linear' }} />
+   351→            <input type="range" min="0" max={dur||100} step="0.1" value={time} aria-label="Progreso" onChange={e => seek(+e.target.value)} style={{ position:'absolute', inset:0, width:'100%', height:'100%', margin:0 }} />
+   352→          </div>
+   353→          <div style={{ display:'flex', justifyContent:'space-between', fontSize:10, color:'var(--txt-2)', fontWeight:700, fontFamily:'monospace' }}><span>{fmt(time)}</span><span>{fmt(dur)}</span></div>
+   354→        </div>
+   355→
+   356→        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:18, flexShrink:0 }}>
+   357→          <button aria-label="Aleatorio" onClick={() => setShuffle(s=>!s)} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer', opacity: shuffle ? 1 : .3 }}><Icon.Shuf c={shuffle ? T.accent : 'var(--txt-1)'} sz={18} /></button>
+   358→          <button aria-label="Anterior" onClick={prev} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer' }}><Icon.Prev c="var(--txt-0)" sz={24} /></button>
+   359→          <button aria-label={playing?'Pausar':'Reproducir'} onClick={togglePlay} className="btn-tap" style={{ width:64, height:64, borderRadius:'50%', background:grad(T), border:'none', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', boxShadow:`0 0 ${20+glowF*26}px ${hex2rgba(T.accent,.55)}, 0 8px 24px #000a` }}>{loadingAudio ? <Spinner c="#04060a" sz={26} /> : (playing ? <Icon.Pause c="#04060a" sz={26} /> : <Icon.Play c="#04060a" sz={26} />)}</button>
+   360→          <button aria-label="Siguiente" onClick={next} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer' }}><Icon.Next c="var(--txt-0)" sz={24} /></button>
+   361→          <button aria-label="Repetir" onClick={() => setRepeat(r=>!r)} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer', opacity: repeat ? 1 : .3 }}><Icon.Rep c={repeat ? T.accent : 'var(--txt-1)'} sz={18} /></button>
+   362→        </div>
+   363→
+   364→        <div className="glass" style={{ display:'flex', alignItems:'center', gap:13, background:'var(--surf-0)', border:'1px solid var(--line-soft)', borderRadius:16, padding:'12px 16px', flexShrink:0 }}>
+   365→          <Icon.Vol c="var(--txt-2)" sz={16} />
+   366→          {isIOS ? (
+   367→            <div style={{ flex:1, fontSize:11, color:'var(--txt-2)' }}>Usa los botones de volumen del teléfono</div>
+   368→          ) : (
+   369→            <div style={{ flex:1 }}><RangeSlider value={vol} min={0} max={1} step={0.01} onChange={setVol} accent={T.accent} ariaLabel="Volumen" /></div>
+   370→          )}
+   371→          {!isIOS && <span style={{ fontSize:10, color:'var(--txt-2)', fontFamily:'monospace', fontWeight:700, width:34, textAlign:'right' }}>{Math.round(vol*100)}%</span>}
+   372→        </div>
+   373→
+   374→        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:10, marginTop:12, flexShrink:0 }}>
+   375→          <DeviceChip outputs={outputs} sinkId={sinkId} setOutput={setOutput} T={T} />
+   376→          <button aria-label="Cola de reproducción" onClick={onQueue} className="press" style={{ display:'flex', alignItems:'center', gap:8, background:'var(--surf-1)', border:'1px solid var(--line-soft)', borderRadius:99, padding:'8px 14px', cursor:'pointer', color:'var(--txt-1)', fontSize:11.5, fontWeight:700 }}>
+   377→            <Icon.Queue c={T.accent} sz={16} /> En cola
+   378→          </button>
+   379→        </div>
+   380→      </div>
+   381→    </>
+   382→  );
+   383→}
+   384→
+   385→// ═══════════════════════════════════════════════════════════════
+   386→// DETAIL VIEW — artista / álbum (metadatos reales de YouTube Music)
+   387→
+   388→
