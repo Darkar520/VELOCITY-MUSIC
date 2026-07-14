@@ -16,8 +16,8 @@ import { usePlayerStore } from '../store/playerStore.js';
 
 const RADIO_CONCURRENCY = 4;
 const MIN_MIX = 3;
-// Objetivo: al menos 35 pistas, ideal 50-100 (radio devuelve hasta 100).
-const MIN_MIX_TRACKS = 35;
+// Bug fix: mínimo 50 pistas por mix (antes 35). El usuario quiere listas largas.
+const MIN_MIX_TRACKS = 50;
 const IDEAL_MIX_TRACKS = 50;
 
 async function mapPool(items, limit, fn) {
@@ -149,7 +149,7 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
       const mixFromSearch = async (label, q) => {
         try {
           const raw = await api.search((q || label) + vSfx, undefined, 50);
-          const tracks = dedupeByTitle(raw.map(normalizeTrack)).filter((t) => t.id).slice(0, MIN_MIX_TRACKS);
+          const tracks = dedupeByTitle(raw.map(normalizeTrack)).filter((t) => t.id).slice(0, IDEAL_MIX_TRACKS);
           return tracks.length >= MIN_MIX ? { label, tracks } : null;
         } catch { return null; }
       };

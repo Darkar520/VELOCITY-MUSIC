@@ -46,7 +46,7 @@ export function mixesByArtist(tracks, { maxMixes = 8, minTracks = 4, labelFn } =
 }
 
 /** Parte en chunks de tamaño fijo (para listas largas sin artistas claros). */
-export function mixesByChunks(tracks, { size = 12, maxMixes = 6, prefix = 'Mix' } = {}) {
+export function mixesByChunks(tracks, { size = 50, maxMixes = 6, prefix = 'Mix' } = {}) {
   const list = dedupeByTitle(tracks || []);
   if (!list.length) return [];
   const out = [];
@@ -76,7 +76,7 @@ export function ensureManyMixes(mixes, { min = 3, max = 8, prefix = 'Selección'
     const all = clean[0].tracks || [];
     const byArt = mixesByArtist(all, { maxMixes: max, minTracks: 3, labelFn: (g) => g.name });
     if (byArt.length >= min) return byArt;
-    const chunks = mixesByChunks(all, { size: 10, maxMixes: max, prefix });
+    const chunks = mixesByChunks(all, { size: 50, maxMixes: max, prefix });
     if (chunks.length >= 2) return chunks;
     // último recurso: rebanar en 2 aunque queden cortos
     if (all.length >= 8) {
@@ -110,7 +110,7 @@ export function offlineMixes(downloadedIds) {
   if (mixes.length < 3) {
     mixes = [
       ...mixes,
-      ...mixesByChunks(tracks, { size: 12, maxMixes: 6, prefix: 'Descargas' }),
+      ...mixesByChunks(tracks, { size: 50, maxMixes: 6, prefix: 'Descargas' }),
     ];
   }
   // dedupe labels
@@ -132,15 +132,15 @@ export function favArtistMixes(favIds) {
   });
 }
 
-/** Historial reciente → varios slices temporales. */
+/** Historial reciente → varios slices temporales. Bug fix: todos los slices ahora son de 50 canciones. */
 export function recentSliceMixes(recentIds) {
-  const tracks = tracksFromIds(recentIds, 60);
+  const tracks = tracksFromIds(recentIds, 100);
   if (tracks.length < 4) return [];
   const slices = [
-    { label: 'Hoy en bucle', tracks: tracks.slice(0, 15) },
-    { label: 'Esta semana', tracks: tracks.slice(0, 30) },
-    { label: 'Tu rotación', tracks: tracks.slice(10, 40) },
-    { label: 'Más atrás', tracks: tracks.slice(20, 50) },
+    { label: 'Hoy en bucle', tracks: tracks.slice(0, 50) },
+    { label: 'Esta semana', tracks: tracks.slice(0, 50) },
+    { label: 'Tu rotación', tracks: tracks.slice(10, 60) },
+    { label: 'Más atrás', tracks: tracks.slice(20, 70) },
   ].filter((m) => m.tracks.length >= 4);
   const byArt = mixesByArtist(tracks, { maxMixes: 4, minTracks: 3, labelFn: (g) => `Reciente · ${g.name}` });
   return ensureManyMixes([...slices, ...byArt], { min: 3, max: 8, prefix: 'Reciente' });
@@ -156,3 +156,4 @@ export function playlistMixes(playlists) {
     .filter(Boolean)
     .slice(0, 10);
 }
+
