@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { fmt, hex2rgba, grad, hiResCover, dedupeByTitle, capPerArtist, slimTrack, parseLRC, lyricsOverlapRatio, plainFromSyncedLines, tintedVars } from '../helpers.js';
+import { bestCoverFor } from '../catalog.js';
 import { usePersisted, useViewport, useDominantColor, useHSwipe } from '../hooks.js';
 import { Icon } from '../Icons.jsx';
 import { EQViz, Spinner, ProgressRing, DownloadAllButton, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider, SettingCard, ToggleRow, ColorField } from '../components.jsx';
@@ -60,7 +61,7 @@ export function CoverSwipe({ next, prev, playing, glowF, ambientRgba, art, track
         <div onTransitionEnd={onTransitionEnd} style={{ position:'absolute', inset:0, transform:`translateX(${groupTx}px)`, transition, willChange:'transform' }}>
           {prevCover && <div style={{ position:'absolute', top:0, left:'-104%', width:'100%', height:'100%' }}>{coverFace(prevCover)}</div>}
           <div style={{ position:'absolute', inset:0 }}>
-            {coverFace(track.cover, track.title, 900)}
+            {coverFace(bestCoverFor(track.id, track.cover), track.title, 900)}
             {loadingAudio && <div style={{ position:'absolute', inset:0, borderRadius:28, display:'flex', alignItems:'center', justifyContent:'center', background:'#0006' }}><Spinner c="#fff" sz={32} /></div>}
           </div>
           {nextCover && <div style={{ position:'absolute', top:0, left:'104%', width:'100%', height:'100%' }}>{coverFace(nextCover)}</div>}

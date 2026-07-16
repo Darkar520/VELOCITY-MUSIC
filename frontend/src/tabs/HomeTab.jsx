@@ -81,7 +81,7 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
       {track && (
         <div onClick={() => play(track)} style={{ position:'relative', background:`linear-gradient(135deg, ${hex2rgba(T.accent,.22)}, ${hex2rgba(T.accent2,.06)}), var(--surf-0)`, border:`1px solid ${hex2rgba(T.accent,.28)}`, borderRadius:22, padding:'15px 17px', marginBottom:24, display:'flex', alignItems:'center', gap:14, overflow:'hidden', boxShadow:`0 12px 34px ${hex2rgba(T.accent,.14)}`, cursor:'pointer' }}>
           <div style={{ position:'absolute', top:-30, right:-20, width:120, height:120, borderRadius:'50%', background:grad(T), filter:'blur(40px)', opacity:.35, pointerEvents:'none' }} />
-          <img src={track.cover ? hiResCover(track.cover, 128) : FALLBACK_COVER} alt="" referrerPolicy="no-referrer" onError={e => { e.currentTarget.onerror = null; e.currentTarget.src = FALLBACK_COVER; }} style={{ width:56, height:56, borderRadius:14, objectFit:'cover', boxShadow:`0 0 22px ${hex2rgba(T.accent,.5)}`, position:'relative' }} />
+          <CoverImg src={track.cover} alt="" radius={14} size={128} style={{ width:56, height:56, boxShadow:`0 0 22px ${hex2rgba(T.accent,.5)}` }} />
           <div style={{ flex:1, minWidth:0, position:'relative' }}>
             <div style={{ fontSize:9, fontWeight:900, letterSpacing:2, color:T.accent, textTransform:'uppercase', marginBottom:5 }}>{playing ? '◉ Reproduciendo' : 'Última pista'}</div>
             <div style={{ fontSize:15.5, fontWeight:800, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title}</div>

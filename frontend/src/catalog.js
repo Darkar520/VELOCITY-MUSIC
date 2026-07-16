@@ -7,7 +7,7 @@ import { FALLBACK_COVER } from './constants.js';
 
 const _catalog = new Map();
 
-const hasCover = (c) => !!c && c !== FALLBACK_COVER;
+export const hasCover = (c) => !!c && c !== FALLBACK_COVER;
 const isDataUrl = (c) => typeof c === 'string' && c.startsWith('data:');
 // Miniaturas de video de YouTube (i.ytimg.com) son captures del video,
 // NO artwork oficial del album. Preferimos siempre la portada canonica

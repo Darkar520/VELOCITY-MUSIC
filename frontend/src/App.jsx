@@ -1827,7 +1827,7 @@ export default function App() {
       {expandedPlayer}{addModal}{trackMenu}{queuePanel}{selectionBar}{updateBanner}{offlineBanner}{importModal}{importBanner}{importResultModal}
       {remotePlaying && remotePlaying.trackId && remotePlaying.trackId !== track?.id && (
         <div className="fade-up" style={{ position:'fixed', bottom:80, left:12, right:12, zIndex:80, background:'var(--surf-0)', border:`1px solid ${hex2rgba(T.accent,.3)}`, borderRadius:16, padding:'12px 14px', display:'flex', alignItems:'center', gap:12, boxShadow:'0 8px 24px #000a' }}>
-          <img src={remotePlaying.cover ? hiResCover(remotePlaying.cover, 64) : FALLBACK_COVER} alt="" referrerPolicy="no-referrer" onError={e => { e.currentTarget.onerror = null; e.currentTarget.src = FALLBACK_COVER; }} style={{ width:44, height:44, borderRadius:10, objectFit:'cover', flexShrink:0 }} />
+          <CoverImg src={remotePlaying.cover} alt="" radius={10} size={64} style={{ width:44, height:44, flexShrink:0 }} />
           <div style={{ flex:1, minWidth:0 }}>
             <div style={{ fontSize:11, fontWeight:800, color:T.accent }}>Reproduciendo en {remotePlaying.deviceName || 'otro dispositivo'}</div>
             <div style={{ fontSize:13, fontWeight:700, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{remotePlaying.title}</div>

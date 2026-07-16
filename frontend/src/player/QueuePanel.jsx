@@ -8,7 +8,7 @@
  */
 import React, { useState } from 'react';
 import { hex2rgba } from '../helpers.js';
-import { trackById } from '../catalog.js';
+import { trackById, bestCoverFor } from '../catalog.js';
 import { Icon } from '../Icons.jsx';
 import { CoverImg } from '../components.jsx';
 import { usePlayerStore } from '../store/playerStore.js';
@@ -48,7 +48,7 @@ export function QueuePanel({ open, onClose, play, T }) {
                 onDrop={() => setDrag(null)}
                 style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 8px', borderRadius:14, marginBottom:3, background: isCur ? hex2rgba(T.accent,.12) : (drag===i ? 'var(--surf-2)' : 'transparent'), border:`1px solid ${isCur ? hex2rgba(T.accent,.3) : 'transparent'}`, opacity: drag===i ? .85 : 1, transform: drag===i ? 'scale(1.02)' : 'none', boxShadow: drag===i ? '0 8px 24px #000a' : 'none', transition:'background .2s ease, transform .15s ease, box-shadow .2s ease', cursor: drag===i ? 'grabbing' : 'default' }}>
                 <span style={{ cursor:'grab', display:'flex', flexShrink:0 }}><Icon.Grip c="var(--txt-3)" sz={16} /></span>
-                <CoverImg src={t.cover} alt="" radius={9} style={{ width:40, height:40, flexShrink:0 }} />
+                <CoverImg src={bestCoverFor(id)} alt="" radius={9} style={{ width:40, height:40, flexShrink:0 }} />
                 <div onClick={() => play(t, ids)} style={{ flex:1, minWidth:0, cursor:'pointer' }}>
                   <div style={{ fontSize:12.5, fontWeight:700, color: isCur ? T.accent : 'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{t.title}{isCur ? ' · ▶' : ''}</div>
                   <div style={{ fontSize:10, color:'var(--txt-2)', marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{t.artist}</div>

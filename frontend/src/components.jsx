@@ -207,18 +207,7 @@ export function MixCard({ mix, T, onPlay, onOpen }) {
     <div className="card-hover media-card" style={{ flexShrink:0, width:150 }}>
       <div onClick={onOpen} style={{ position:'relative', width:150, height:150, borderRadius:16, overflow:'hidden', marginBottom:9, cursor:'pointer', boxShadow:'0 8px 22px #0007' }}>
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gridTemplateRows:'1fr 1fr', width:'100%', height:'100%', gap:1 }}>
-          {covers.map((c, i) => <img key={i} src={hiResCover(c)} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer"
-            onError={e => {
-              const img = e.currentTarget;
-              if (img.src.startsWith('/img?u=')) {
-                // Proxy falló → intentar URL directa como fallback
-                const raw = new URL(img.src).searchParams.get('u');
-                if (raw && img.src !== raw) { img.onerror = () => { img.onerror = null; img.src = FALLBACK_COVER; }; img.src = raw; return; }
-              }
-              img.onerror = null;
-              img.src = FALLBACK_COVER;
-            }}
-            style={{ width:'100%', height:'100%', objectFit:'cover', display:'block' }} />)}
+          {covers.map((c, i) => <CoverImg key={i} src={c} alt="" radius={0} style={{ width:'100%', height:'100%' }} />)}
         </div>
         <div style={{ position:'absolute', inset:0, background:'linear-gradient(180deg, transparent 40%, #000c)', pointerEvents:'none' }} />
         <div style={{ position:'absolute', top:8, left:10, fontSize:8.5, fontWeight:900, letterSpacing:1.5, color:'#fff', textTransform:'uppercase', opacity:.9, textShadow:'0 1px 3px #000' }}>Mezcla</div>

@@ -273,7 +273,7 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
           </div>
           <div style={{ display:'grid', gridTemplateColumns:'1fr auto 1fr', alignItems:'center', gap:16 }}>
             <div style={{ display:'flex', alignItems:'center', gap:12, minWidth:0 }}>
-              <img src={track.cover ? hiResCover(track.cover, 128) : FALLBACK_COVER} alt="" referrerPolicy="no-referrer" onError={e => { e.currentTarget.onerror = null; e.currentTarget.src = FALLBACK_COVER; }} style={{ width:52, height:52, borderRadius:12, objectFit:'cover', flexShrink:0, boxShadow:`0 4px 14px ${hex2rgba(T.accent,.3)}` }} />
+              <CoverImg src={track.cover} alt="" radius={12} size={128} style={{ width:52, height:52, flexShrink:0, boxShadow:`0 4px 14px ${hex2rgba(T.accent,.3)}` }} />
               <div style={{ minWidth:0 }}>
                 <div style={{ fontSize:13, fontWeight:800, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title}</div>
                 <div style={{ fontSize:11, color:'var(--txt-2)', marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.artist}</div>
