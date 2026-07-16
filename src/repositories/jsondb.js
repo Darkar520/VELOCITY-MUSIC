@@ -385,7 +385,13 @@ export function createJsonTrackMetaRepo() {
       if (!Array.isArray(tracks)) return;
       let changed = false;
       for (const t of tracks.slice(0, 500)) {
-        if (t && t.id) { store.tracks[t.id] = { ...store.tracks[t.id], ...slim(t) }; changed = true; }
+        if (t && t.id) {
+          const prev = store.tracks[t.id];
+          const newCover = t.cover || '';
+          const cover = newCover !== '' ? newCover : (prev && prev.cover) || '';
+          store.tracks[t.id] = { ...prev, ...slim(t), cover };
+          changed = true;
+        }
       }
       // Evicción simple si se supera el tope (elimina las primeras claves).
       const keys = Object.keys(store.tracks);

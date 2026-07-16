@@ -118,7 +118,8 @@ export function createPgTrackMetaRepo(query) {
            ON CONFLICT (id) DO UPDATE SET
              title=EXCLUDED.title, artist=EXCLUDED.artist, artist_id=EXCLUDED.artist_id,
              album=EXCLUDED.album, album_id=EXCLUDED.album_id, genre=EXCLUDED.genre,
-             cover=EXCLUDED.cover, duration_seconds=EXCLUDED.duration_seconds, updated_at=now()`,
+             cover=CASE WHEN EXCLUDED.cover IS NOT NULL AND EXCLUDED.cover <> '' THEN EXCLUDED.cover ELSE track_meta.cover END,
+             duration_seconds=EXCLUDED.duration_seconds, updated_at=now()`,
           [t.id, t.title || '', t.artist || '', t.artistId || null, t.album || '', t.albumId || null, t.genre || '', t.cover || '', t.durationSeconds || t.duration || 0],
         );
       }

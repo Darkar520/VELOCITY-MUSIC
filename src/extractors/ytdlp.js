@@ -119,8 +119,8 @@ export function createYtDlpExtractor({ scFallback } = {}) {
       // Backoff exponencial antes de cada cliente (excepto el primero).
       if (i > 0) await sleep(backoffMs(i));
 
-      // Añadir User-Agent correspondiente al cliente.
-      const ua = CLIENT_UA[clientName];
+      // Añadir User-Agent correspondiente al cliente (solo web/mweb para no romper firmas internas).
+      const ua = (clientName === 'web' || clientName === 'mweb') ? CLIENT_UA[clientName] : null;
       const uaArgs = ua ? ['--user-agent', ua] : [];
 
       const url = await runForUrl([...baseArgs, ...clientArgs, ...uaArgs, ytTarget]);
@@ -191,8 +191,13 @@ function runYtDlp(args, { mode = 'url', timeoutMs = 30000 } = {}) {
         timer = setTimeout(() => finish(empty), timeoutMs);   // mata el proceso colgado
         proc.stdout.on('data', (d) => { out += d.toString(); });
         proc.on('close', (code) => {
-          if (mode === 'lines') finish(out.trim() ? out.trim().split('\n') : []);
-          else finish(code === 0 && out.trim() ? out.trim().split('\n')[0] : null);
+          if (mode === 'lines') {
+            finish(out.trim() ? out.trim().split('\n') : []);
+          } else {
+            const lines = out.trim() ? out.trim().split('\n') : [];
+            const url = lines.find((l) => l.startsWith('http://') || l.startsWith('https://'));
+            finish(url || null);
+          }
         });
         proc.on('error', () => finish(empty));
       } catch { finish(empty); }

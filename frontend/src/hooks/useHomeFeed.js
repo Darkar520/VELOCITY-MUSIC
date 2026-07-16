@@ -164,6 +164,21 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
         } catch { return null; }
       };
 
+      // Expande cualquier mix para que tenga un mínimo de 50 canciones usando radio.
+      const expandMixTo50 = async (mix) => {
+        if (!mix || !mix.tracks || !mix.tracks.length) return mix;
+        if (mix.tracks.length >= IDEAL_MIX_TRACKS) return mix;
+        try {
+          const seed = mix.tracks[0];
+          const rel = await api.radio(seed.id, 100);
+          const expandedTracks = capPerArtist(
+            dedupeByTitle([...mix.tracks, ...rel.map(normalizeTrack)]),
+            8,
+          ).filter((t) => t.id).slice(0, IDEAL_MIX_TRACKS);
+          return { ...mix, tracks: expandedTracks };
+        } catch { return mix; }
+      };
+
       // Expande una playlist a ≥50 canciones mezclando sus tracks propios + radio.
       // Si ya tiene ≥ IDEAL_MIX_TRACKS no hace red extra (fast path).
       const expandedPlaylistMix = async (pl) => {
@@ -239,7 +254,8 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
 
       // ═══ 1) RECIENTES (arriba del feed, varios mixes) ═══
       {
-        const rMixes = recentSliceMixes(recentIds);
+        const rawRMixes = recentSliceMixes(recentIds);
+        const rMixes = clean(await mapPool(rawRMixes, RADIO_CONCURRENCY, expandMixTo50));
         if (rMixes.length >= 2) pushRich('Escuchado recientemente', rMixes, { prefix: 'Reciente' });
         else if (rMixes.length === 1 && (rMixes[0].tracks || []).length >= 8) {
           pushRich('Escuchado recientemente', rMixes, { min: 2, prefix: 'Reciente' });
@@ -248,7 +264,8 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
 
       // ═══ 2) BIBLIOTECA LOCAL multi-mix ═══
       {
-        const favMix = favArtistMixes(favIds);
+        const rawFavMix = favArtistMixes(favIds);
+        const favMix = clean(await mapPool(rawFavMix, RADIO_CONCURRENCY, expandMixTo50));
         if (favMix.length) pushRich('De tus Me gusta', favMix, { prefix: 'Like' });
       }
       if (pls.length && alive()) {
@@ -272,7 +289,8 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
         }
       }
       {
-        const off = offlineMixes(dlIds);
+        const rawOff = offlineMixes(dlIds);
+        const off = clean(await mapPool(rawOff, RADIO_CONCURRENCY, expandMixTo50));
         if (off.length >= 2) pushRich('Listas para offline', off, { prefix: 'Offline' });
         else if (off.length === 1) {
           const expanded = ensureManyMixes(off, { min: 2, prefix: 'Offline' });

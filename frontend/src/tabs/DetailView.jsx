@@ -70,7 +70,7 @@ export function DetailView({ view, T, play, addToTarget, onMenu, goArtist, goAlb
         <Back />
         <div style={{ display:'flex', alignItems:'flex-end', gap:18, marginBottom:24 }}>
           <div style={{ width:128, height:128, borderRadius:18, overflow:'hidden', flexShrink:0, boxShadow:`0 16px 40px ${hex2rgba(T.accent,.3)}`, display:'grid', gridTemplateColumns:'1fr 1fr', gridTemplateRows:'1fr 1fr', gap:1, background:'var(--surf-2)' }}>
-            {covers.map((c, i) => <img key={i} src={hiResCover(c)} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" style={{ width:'100%', height:'100%', objectFit:'cover', display:'block' }} />)}
+            {covers.map((c, i) => <img key={i} src={hiResCover(c)} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={e => { e.currentTarget.onerror = null; e.currentTarget.src = FALLBACK_COVER; }} style={{ width:'100%', height:'100%', objectFit:'cover', display:'block' }} />)}
           </div>
           <div style={{ minWidth:0 }}>
             <div style={{ fontSize:9, fontWeight:900, letterSpacing:2.5, color:T.accent, textTransform:'uppercase' }}>Mezcla</div>
