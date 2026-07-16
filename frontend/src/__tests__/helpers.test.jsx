@@ -48,17 +48,22 @@ describe('grad', () => {
 });
 
 describe('hiResCover', () => {
-  it('reemplaza =wXXX-hXXX con el tamaño pedido', () => {
+  it('reemplaza =wXXX-hXXX y rutea por proxy /img', () => {
     const url = 'https://lh3.googleusercontent.com/abc=w1200-h1200';
-    expect(hiResCover(url, 512)).toBe('https://lh3.googleusercontent.com/abc=w512-h512');
+    const result = hiResCover(url, 512);
+    expect(result).toContain('/img?u=');
+    expect(result).toContain('w512-h512');
   });
-  it('reemplaza =sXXX', () => {
+  it('reemplaza =sXXX y rutea por proxy', () => {
     const url = 'https://lh3.googleusercontent.com/abc=s1200';
-    expect(hiResCover(url, 300)).toBe('https://lh3.googleusercontent.com/abc=s300');
+    const result = hiResCover(url, 300);
+    expect(result).toContain('/img?u=');
+    expect(result).toContain('s300');
   });
-  it('reemplaza patrón iTunes XXXxXXXbb.jpg', () => {
+  it('reemplaza patrón iTunes y rutea por proxy', () => {
     const url = 'https://island-abc.mzstatic.com/image/1200x1200bb.jpg';
     const result = hiResCover(url, 256);
+    expect(result).toContain('/img?u=');
     expect(result).toContain('256x256bb.jpg');
   });
   it('clampa tamaño entre 64 y 1200', () => {
@@ -66,7 +71,7 @@ describe('hiResCover', () => {
     expect(hiResCover(url, 10)).toContain('w64-h64');
     expect(hiResCover(url, 9999)).toContain('w1200-h1200');
   });
-  it('no modifica URLs sin patrón conocido', () => {
+  it('no modifica URLs sin patrón conocido (hosts no-proxy)', () => {
     const url = 'https://example.com/cover.jpg';
     expect(hiResCover(url, 512)).toBe(url);
   });
@@ -75,13 +80,21 @@ describe('hiResCover', () => {
     expect(hiResCover('', 512)).toBe('');
     expect(hiResCover(undefined, 512)).toBeUndefined();
   });
-  it('no aplica a data: URLs', () => {
+  it('no aplica a data: URLs (van directo)', () => {
     const data = 'data:image/png;base64,abc123';
     expect(hiResCover(data, 512)).toBe(data);
   });
   it('usa 512 como tamaño default', () => {
     const url = 'https://lh3.googleusercontent.com/abc=w1200-h1200';
     expect(hiResCover(url)).toContain('w512-h512');
+  });
+  it('rutea por proxy imágenes de ytimg.com', () => {
+    expect(hiResCover('https://i.ytimg.com/vi/abc/hqdefault.jpg', 512))
+      .toContain('/img?u=');
+  });
+  it('no rutea por proxy URLs de otros hosts', () => {
+    const url = 'https://cdn.other.com/cover.jpg';
+    expect(hiResCover(url, 512)).toBe(url);
   });
 });
 

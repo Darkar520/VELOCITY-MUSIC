@@ -171,9 +171,11 @@ test('Frontend helpers: hiResCover respeta el size solicitado', () => {
   const url = 'https://yt3.googleusercontent.com/abc=w120-h120-l90-rj';
   const r512 = hiResCover(url, 512);
   const r900 = hiResCover(url, 900);
-  assert.ok(r512.includes('512'), 'debe pedir tamaño 512');
-  assert.ok(r900.includes('900'), 'debe pedir tamaño 900');
+  // Ahora rutea por proxy /img → contiene el tamaño en la URL interna
+  assert.ok(r512.includes('w512-h512'), 'debe pedir tamaño 512');
+  assert.ok(r900.includes('w900-h900'), 'debe pedir tamaño 900');
   assert.notEqual(r512, r900, '512 y 900 deben ser URLs distintas');
+  assert.ok(r512.startsWith('/img?u='), 'debe rutear por proxy');
 });
 
 test('Frontend helpers: hiResCover maneja URL sin patrón de tamaño (devuelve original)', () => {

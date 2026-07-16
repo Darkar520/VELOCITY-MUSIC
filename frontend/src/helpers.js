@@ -20,13 +20,27 @@ export const grad = (T, ang = 135) => `linear-gradient(${ang}deg, ${T.accent}, $
 // Ajusta la portada de YouTube Music/iTunes al tamaño pedido (por defecto 512px).
 // Pedir el tamaño real de render (en vez de 1200px siempre) acelera mucho la
 // carga, sobre todo en miniaturas de listas.
+// Hosts de imágenes que deben pasar por el proxy /img del backend para
+// resolver CORS, mejorar caching (SW) y evitar fallos intermitentes del CDN.
+const PROXY_HOSTS = /(^|\.)(googleusercontent\.com|ggpht\.com|ytimg\.com|mzstatic\.com)$/i;
+
+const needsProxy = (url) => {
+  try { return PROXY_HOSTS.test(new URL(url).hostname); } catch { return false; }
+};
+
 export const hiResCover = (url, size = 512) => {
   if (!url || typeof url !== 'string') return url;
+  // data: y blob: URLs van directo (no necesitan proxy ni resize)
+  if (url.startsWith('data:') || url.startsWith('blob:')) return url;
   const s = Math.max(64, Math.min(1200, Math.round(size)));
-  if (/=w\d+-h\d+/.test(url)) return url.replace(/=w\d+-h\d+/, `=w${s}-h${s}`);
-  if (/=s\d+/.test(url)) return url.replace(/=s\d+/, `=s${s}`);
-  if (/\d+x\d+bb\.(jpg|png)/i.test(url)) return url.replace(/\d+x\d+bb\.(jpg|png)/i, `${s}x${s}bb.$1`);
-  return url;
+  let rewritten = url;
+  if (/=w\d+-h\d+/.test(url)) rewritten = url.replace(/=w\d+-h\d+/, `=w${s}-h${s}`);
+  else if (/=s\d+/.test(url)) rewritten = url.replace(/=s\d+/, `=s${s}`);
+  else if (/\d+x\d+bb\.(jpg|png)/i.test(url)) rewritten = url.replace(/\d+x\d+bb\.(jpg|png)/i, `${s}x${s}bb.$1`);
+  // Pasar por el proxy del backend: resuelve CORS, cachea 30 días, y permite
+  // que el service worker las sirva offline.
+  if (needsProxy(rewritten)) return `/img?u=${encodeURIComponent(rewritten)}`;
+  return rewritten;
 };
 
 // Quita duplicados por artista+título (misma canción, distintas subidas).
