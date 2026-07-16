@@ -136,17 +136,15 @@ test('Frontend catalog: normalizeTrack YouTube no incluye param stream', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // CATALOG — saveMeta/loadMeta persistencia
 // ─────────────────────────────────────────────────────────────────────────────
-test('Frontend catalog: saveMeta no persiste covers data:/blob: (cuota localStorage)', () => {
+test('Frontend catalog: saveMeta no persiste pistas con cover data:/blob: ni vacíos', () => {
   const id = 'test-save-' + Date.now();
   cacheTrack({ id, title: 'T', artist: 'A', cover: 'data:image/jpeg;base64,/9j/ABC' });
   saveMeta();
   const stored = JSON.parse(localStorage.getItem('velocity.meta') || '[]');
   const entry = stored.find(t => t && t.id === id);
-  // La entrada puede no estar (catálogo grande, slice(-500)), pero si está,
-  // su cover debe ser vacío (no la data URL pesada).
-  if (entry) {
-    assert.equal(entry.cover, '', 'data: URL debe borrarse al persistir (cuota localStorage)');
-  }
+  // Las pistas con data:/blob: o sin cover HTTPS NO deben persistirse.
+  // Así en el próximo arranque se rehidratan desde la API con carátulas reales.
+  assert.equal(entry, undefined, 'pistas con data: no deben persistirse en localStorage');
 });
 
 test('Frontend catalog: saveMeta preserva covers HTTPS (no los borra)', () => {

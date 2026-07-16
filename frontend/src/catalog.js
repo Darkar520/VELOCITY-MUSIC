@@ -67,11 +67,12 @@ export function loadPlayerState() {
 
 export function saveMeta() {
   try {
-    // No persistir carátulas pesadas (data:/blob:) en localStorage: rebasarían
-    // la cuota. Las descargadas se rehidratan desde IndexedDB en cada arranque.
-    const arr = [..._catalog.values()].slice(-500).map(t =>
-      (t && typeof t.cover === 'string' && (t.cover.startsWith('data:') || t.cover.startsWith('blob:')))
-        ? { ...t, cover: '' } : t
+    // Solo persistir pistas con carátula real (HTTPS). Las pistas con data:/blob:
+    // (offline IDB) o sin carátula se omiten: al reiniciar se rehidratan desde
+    // la API, que devuelve URLs HTTPS frescas. Esto evita que covers vacíos
+    // envenenen el catálogo y causen que los mixes del feed muestren ♪.
+    const arr = [..._catalog.values()].slice(-500).filter(t =>
+      t && typeof t.cover === 'string' && t.cover.startsWith('https://')
     );
     localStorage.setItem('velocity.meta', JSON.stringify(arr));
   } catch {}
