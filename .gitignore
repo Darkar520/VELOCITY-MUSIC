@@ -43,3 +43,9 @@ desktop.ini
 
 # ── Skills / sesión local ─────────────────────────────────────
 skills/
+
+# ── Basura y scratch ──────────────────────────────────────────
+tool-results/
+upload/
+download/
+scratch/

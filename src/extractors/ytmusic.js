@@ -24,10 +24,15 @@ async function getClient() {
   if (_client) return _client;
   if (!_initPromise) {
     _initPromise = (async () => {
-      const c = new YTMusic();
-      await c.initialize();
-      _client = c;
-      return c;
+      try {
+        const c = new YTMusic();
+        await c.initialize();
+        _client = c;
+        return c;
+      } catch (err) {
+        _initPromise = null;
+        throw err;
+      }
     })();
   }
   return _initPromise;
@@ -507,3 +512,6 @@ export async function searchAllYTMusic(query, limit = 20) {
 }
 
 export function createYTMusicSearchAll() { return (query, limit) => searchAllYTMusic(query, limit); }
+
+// Eager initialization on module load.
+getClientSafe().catch(() => {});
