@@ -16,6 +16,7 @@ import {
   shouldPreExtendQueue,
   mediaSessionPlaybackState,
   isStreamUrlFresh,
+  isAudioPipelineDead,
 } from './audioContinuity.js';
 import { selectPlaySync } from './audio/audioMachine.js';
 import { runAudioEffects, flushPendingSeek } from './audio/runAudioEffects.js';
@@ -476,7 +477,10 @@ export default function App() {
   const reacquireInFlight = useRef(false);
   const lastTimeRef = useRef(0);
   const stuckCheckRef = useRef(null);
-  const bgYieldedRef = useRef(false);
+  // Detección de pipeline muerto en background (A14): último currentTime visto
+  // y cuándo avanzó por última vez. Nunca dispara play() — solo diagnostica.
+  const bgLastCtRef = useRef(0);
+  const bgLastProgressRef = useRef(Date.now());
 
   const nextTrackActionRef = useRef(() => {});
   const prevTrackActionRef = useRef(() => {});
@@ -730,49 +734,19 @@ export default function App() {
     }
   }, [playing, track, playSrc, vol, mediaInterrupted]);
 
-  // Reanudacion agresiva en segundo plano: cuando Chrome pausa el <audio>
-  // en background, intenta play() varias veces con delays crecientes antes
-  // de ceder. Sin esto, el diseno "cooperativo" (EXTERNAL_PAUSE → yield)
-  // le dice al OS que pausamos, Chrome suspende la pestana y se acaba la
-  // reproduccion.
-  const bgTimersRef = useRef([]);
-  const scheduleBackgroundResume = () => {
-    if (isDocumentVisible()) return;
-    const a = audioRef.current;
-    if (!a || !playingRef.current || a.ended) return;
-    bgYieldedRef.current = true;
-    const delays = [200, 600, 1400, 3200, 7000];
-    bgTimersRef.current.forEach(clearTimeout);
-    bgTimersRef.current = [];
-    delays.forEach((ms, i) => {
-      bgTimersRef.current.push(setTimeout(() => {
-        const el = audioRef.current;
-        if (!el || el.ended) return;
-        if (!playingRef.current) return;
-        if (el.volume < vol * 0.6) el.volume = vol;
-        try { el.currentTime = interruptPositionRef.current ?? el.currentTime; } catch {}
-        try {
-          const p = el.play();
-          if (p && p.catch) p.catch(() => {});
-        } catch {}
-        if (i === delays.length - 1) {
-          // Ultimo intento fallo: ceder el foco (comportamiento original)
-          const pos = el.currentTime || 0;
-          bgTimersRef.current.push(setTimeout(() => {
-            dispatchAudio({
-              type: 'EXTERNAL_PAUSE',
-              hidden: true,
-              selfPause: false,
-              position: Number.isFinite(pos) ? pos : undefined,
-            });
-            bgYieldedRef.current = false;
-          }, 1200));
-        }
-      }, ms));
-    });
-  };
-
-  useEffect(() => () => { bgTimersRef.current.forEach(clearTimeout); }, []);
+  // ── Estrategia de continuidad en background (A14, anti-zombie) ──
+  // Lo que SÍ funciona en Chrome 125+ sin mentir al usuario:
+  //  1. Media Session activa y HONESTA: 'playing' solo mientras el elemento
+  //     realmente suena; handlers play/pause/next/prev siempre vivos. Es lo
+  //     que mantiene la pestaña exenta de throttling agresivo.
+  //  2. NO pausar el elemento al ocultarse (DOC_HIDDEN no toca el <audio>).
+  //  3. Wake Lock mientras está visible (abajo).
+  //  4. Si Chrome corta el pipeline igualmente: DETECTAR (isAudioPipelineDead
+  //     en el stuckCheck de abajo) → PIPELINE_DEAD → yield honesto con ancla,
+  //     y reanudar en DOC_VISIBLE. Jamás play() oculto tras yield (A7) ni
+  //     reportar 'playing' cuando no hay salida (zombie A14).
+  //  NO usar: AudioContext/MediaElementSource (secuestra el <audio> y mata
+  //  background en móvil), bucles de play() ocultos, ni keepalives sintéticos.
 
   // ── Wake Lock API: previene que la CPU/screen se suspenda mientras reproduce ──
   // En algunos dispositivos Android agresivos, el navegador puede suspender
@@ -912,7 +886,6 @@ export default function App() {
         timeStuck,
       })) return;
 
-      bgYieldedRef.current = false;
       dispatchAudio({
         type: 'DOC_VISIBLE',
         currentTime: a.currentTime || 0,
@@ -950,12 +923,38 @@ export default function App() {
     window.addEventListener('focus', onFocus);
     window.addEventListener('pageshow', onPageShow);
 
-    // Solo en foreground: zombie / pause residual (nunca pelear en background).
+    // Foreground: zombie / pause residual (reacquire suave).
+    // Background: SOLO detección de pipeline muerto (A14) — nunca play()
+    // oculto tras yield (A7). La reanudación real ocurre vía DOC_VISIBLE.
     stuckCheckRef.current = setInterval(() => {
-      if (!isDocumentVisible()) return;
       const a = audioRef.current;
-      if (!a || !playingRef.current || a.ended) { lastTimeRef.current = 0; return; }
+      if (!a || !playingRef.current || a.ended) { lastTimeRef.current = 0; bgLastCtRef.current = 0; return; }
       const ct = a.currentTime || 0;
+
+      if (!isDocumentVisible()) {
+        // Si ya cedimos (yield), la recuperación es trabajo de DOC_VISIBLE.
+        if (systemPausedRef.current) { bgLastCtRef.current = ct; return; }
+        if (ct > (bgLastCtRef.current || 0) + 0.05) {
+          // Reloj avanzando: pipeline sano (Media Session sigue honesta).
+          bgLastProgressRef.current = Date.now();
+        } else if (isAudioPipelineDead({
+          userWantsPlay: true,
+          yieldedFocus: false,
+          selfPause: selfPauseRef.current,
+          ended: a.ended,
+          paused: a.paused,
+          currentTime: ct,
+          readyState: a.readyState || 0,
+          stallMs: Date.now() - bgLastProgressRef.current,
+        })) {
+          // Zombie confirmado: pausar, anclar y decir la verdad al OS.
+          dispatchAudio({ type: 'PIPELINE_DEAD', hidden: true, position: ct });
+        }
+        bgLastCtRef.current = ct;
+        lastTimeRef.current = ct;
+        return;
+      }
+
       if (a.paused || systemPausedRef.current) {
         tryResume();
       } else if (lastTimeRef.current > 0 && Math.abs(ct - lastTimeRef.current) < 0.05 && ct > 0.5) {
@@ -971,38 +970,6 @@ export default function App() {
       window.removeEventListener('pageshow', onPageShow);
       if (stuckCheckRef.current) { clearInterval(stuckCheckRef.current); stuckCheckRef.current = null; }
     };
-  }, [vol]);
-
-  // ── Watchdog de segundo plano: si el audio se pausa en background y el
-  // usuario quiere musica, reintenta play() periodicamente. Complementa
-  // scheduleBackgroundResume (que hace reintentos agresivos al inicio).
-  const bgWatchdogRef = useRef(null);
-  useEffect(() => {
-    const iv = setInterval(() => {
-      if (isDocumentVisible()) return;
-      const a = audioRef.current;
-      if (!a || a.ended) return;
-      if (!playingRef.current) return;
-      if (a.paused && !bgYieldedRef.current) {
-        if (a.volume < vol * 0.6) a.volume = vol;
-        try { a.play().catch(() => {}); } catch {}
-      }
-      // Mantener posicion en Media Session aunque este pausado
-      if (('mediaSession' in navigator) && navigator.mediaSession.setPositionState) {
-        try {
-          const d = a.duration > 0 && isFinite(a.duration) ? a.duration : 0;
-          if (d > 0) {
-            navigator.mediaSession.setPositionState({
-              duration: d,
-              position: Math.min(Math.max(0, a.currentTime || 0), d),
-              playbackRate: 1,
-            });
-          }
-        } catch {}
-      }
-    }, 10000);
-    bgWatchdogRef.current = iv;
-    return () => { clearInterval(iv); };
   }, [vol]);
 
   // ── Precargar la(s) siguiente(s) pista(s) al cambiar la actual o la cola ──
@@ -1728,7 +1695,6 @@ export default function App() {
       }}
       onPlay={() => {
         selfPauseRef.current = false;
-        bgYieldedRef.current = false;
         const el = audioRef.current;
         if (getMachine().intent !== 'play') {
           selfPauseRef.current = true;
@@ -1747,7 +1713,7 @@ export default function App() {
       }}
       onPlaying={() => {
         selfPauseRef.current = false;
-        bgYieldedRef.current = false;
+        bgLastProgressRef.current = Date.now();
         if (getMachine().intent !== 'play') {
           selfPauseRef.current = true;
           try { el?.pause(); } catch {}
@@ -1793,21 +1759,14 @@ export default function App() {
           audioEnded: a.ended,
         })) return;
 
-        // En background: intentar reanudar agresivamente en vez de ceder
-        // inmediatamente. Chrome pausa el audio en segundo plano pero podemos
-        // hacer play() de vuelta varias veces antes de rendirnos.
-        if (!isDocumentVisible() && !bgYieldedRef.current) {
-          scheduleBackgroundResume();
-          return;
-        }
-
+        // Pause externo: la machine decide (yield honesto en background,
+        // soft-kick en foreground). Nada de re-play oculto aquí (A7/A14).
         dispatchAudio({
           type: 'EXTERNAL_PAUSE',
           hidden: !isDocumentVisible(),
           selfPause: selfPauseRef.current,
           position: a.currentTime || 0,
         });
-        bgYieldedRef.current = false;
       }}
       onError={handleAudioError}
       onEnded={() => {

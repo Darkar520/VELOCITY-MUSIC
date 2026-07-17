@@ -75,7 +75,7 @@ test('UI modules do not import audioMachine / re-own yield policy', () => {
       const body = readFileSync(join(dir, name), 'utf8');
       assert.doesNotMatch(
         body,
-        /audioMachine|audioReduce|EXTERNAL_PAUSE|yieldAudioFocus/,
+        /audioMachine|audioReduce|EXTERNAL_PAUSE|PIPELINE_DEAD|yieldAudioFocus/,
         `${d}/${name} must not own audio policy`,
       );
     }

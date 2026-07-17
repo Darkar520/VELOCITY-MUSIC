@@ -30,12 +30,13 @@ actualiza la tabla si introduces un cambio.
 | A11 | Next en notificación/lock no cambia de canción | `playSyncStrategy` hacía `noop` si hidden aunque el usuario pidiera next | soft-play si `playing && !yieldedFocus` aunque hidden; handlers MS vía refs | Bloquear todo `play()` con `document.hidden` |
 | A12 | Reabro la app: UI en 0:50 pausado, play reinicia a 0:00 | `resumeRef` se aplicaba una vez y se perdía al re-firmar URL; play no seek-eaba | `sessionResumeRef` {trackId,position}; apply en metadata/canplay/play/togglePlay | Borrar resume al primer metadata; no seek al play |
 | A13 | Reabro: UI “sonando” sin audio; pause → loading infinito | URL firmada caducada → `error` → `handleAudioError` llama `play()` → `onPlay` fuerza `playing=true` | No restaurar URL stale; error sin auto-play si `!playingRef`; togglePlay re-firma; onPlay no promueve playing | Restaurar `track.url` caducado; recovery con play automático |
+| A14 | Notificación "playing" pero silencio total en background (zombie) | `mediaSessionPlaybackState` mintió `'playing'` cuando el elemento estaba yielded/pausado + `scheduleBackgroundResume` + watchdog hacían play() oculto que resolvía pero Chrome descartaba la salida de audio | MS honesto (paused al yield), `isAudioPipelineDead` → `PIPELINE_DEAD` → yield con ancla; recovery solo en `DOC_VISIBLE` | `play()` oculto tras yield; watchdog que asume play()=audible; mentir al OS sobre playbackState |
 
-## Política actual (código) — máquina de estados (2026-07-11)
+## Política actual (código) — máquina de estados (2026-07-17)
 
 | Capa | Archivo | Rol |
 |------|---------|-----|
-| Predicados | `frontend/src/audioContinuity.js` | Reglas puras A7–A13 |
+| Predicados | `frontend/src/audioContinuity.js` | Reglas puras A7–A14 (incluye `isAudioPipelineDead`) |
 | **Reduce** | `frontend/src/audio/audioMachine.js` | `reduce(state, event) → { state, effects }` |
 | Effects | `frontend/src/audio/runAudioEffects.js` | Solo DOM/React/red (sin política) |
 | Adapter | `App.jsx` | `dispatchAudio` + espejos; **no** ifs de yield/seek sueltos |
@@ -52,6 +53,7 @@ evento → dispatchAudio → reduce → runAudioEffects
 6. **URL (A13)**: no montar `playSrc` caducado; `PLAY_FAILED` sin intent → clearSrc, no play.
 7. **Visible + intent play** → `DOC_VISIBLE` (seek ancla si yield, play).
 8. **SW**: invalidar shell al cambiar audio (`velocity-vN`).
+9. **Zombie (A14)**: `isAudioPipelineDead` (stall + buffer + readyState) en background → `PIPELINE_DEAD` → yield honesto; recovery solo en visible.
 
 ### Por qué Brave “iba bien” y Chrome no
 

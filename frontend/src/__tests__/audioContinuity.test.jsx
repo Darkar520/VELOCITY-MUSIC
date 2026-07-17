@@ -14,6 +14,7 @@ import {
   shouldSuspendPreloads,
   shouldPreExtendQueue,
   mediaSessionPlaybackState,
+  isAudioPipelineDead,
 } from '../audioContinuity.js';
 
 describe('playSyncStrategy', () => {
@@ -162,11 +163,51 @@ describe('mediaSessionPlaybackState', () => {
   it('!userWantsPlay → paused', () => {
     expect(mediaSessionPlaybackState({ userWantsPlay: false, yieldedFocus: false })).toBe('paused');
   });
-  it('yielded → still playing (never tell OS we paused)', () => {
-    expect(mediaSessionPlaybackState({ userWantsPlay: true, yieldedFocus: true })).toBe('playing');
+  it('yielded → paused (MS honesto: el elemento está pausado; mentir = zombie A14)', () => {
+    expect(mediaSessionPlaybackState({ userWantsPlay: true, yieldedFocus: true })).toBe('paused');
   });
   it('playing → playing', () => {
     expect(mediaSessionPlaybackState({ userWantsPlay: true, yieldedFocus: false })).toBe('playing');
+  });
+});
+
+describe('isAudioPipelineDead (A14)', () => {
+  it('!paused + buffer + reloj congelado ≥ minStallMs → true (zombie)', () => {
+    expect(isAudioPipelineDead({
+      userWantsPlay: true, yieldedFocus: false, paused: false,
+      currentTime: 90, readyState: 4, stallMs: 5000,
+    })).toBe(true);
+  });
+  it('pause externo (paused=true sin selfPause) → true', () => {
+    expect(isAudioPipelineDead({
+      userWantsPlay: true, yieldedFocus: false, paused: true,
+      currentTime: 90, readyState: 4, stallMs: 0,
+    })).toBe(true);
+  });
+  it('reloj avanzando (stallMs < min) → false', () => {
+    expect(isAudioPipelineDead({
+      userWantsPlay: true, yieldedFocus: false, paused: false,
+      currentTime: 90, readyState: 4, stallMs: 1000,
+    })).toBe(false);
+  });
+  it('sin buffer (readyState < 3) → false (hambre de red, no zombie)', () => {
+    expect(isAudioPipelineDead({
+      userWantsPlay: true, yieldedFocus: false, paused: false,
+      currentTime: 90, readyState: 2, stallMs: 60000,
+    })).toBe(false);
+  });
+  it('pista arrancando (currentTime ≈ 0) → false', () => {
+    expect(isAudioPipelineDead({
+      userWantsPlay: true, yieldedFocus: false, paused: false,
+      currentTime: 0.2, readyState: 4, stallMs: 60000,
+    })).toBe(false);
+  });
+  it('estados honestos (pausa usuario / yielded / ended / selfPause) → false', () => {
+    const base = { userWantsPlay: true, yieldedFocus: false, paused: true, currentTime: 90, readyState: 4, stallMs: 60000 };
+    expect(isAudioPipelineDead({ ...base, userWantsPlay: false })).toBe(false);
+    expect(isAudioPipelineDead({ ...base, yieldedFocus: true })).toBe(false);
+    expect(isAudioPipelineDead({ ...base, ended: true })).toBe(false);
+    expect(isAudioPipelineDead({ ...base, selfPause: true })).toBe(false);
   });
 });
 

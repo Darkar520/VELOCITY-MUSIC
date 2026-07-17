@@ -13,6 +13,7 @@ import {
   parseSessionResume,
   shouldApplySessionResume,
   isStreamUrlFresh,
+  isAudioPipelineDead,
 } from '../frontend/src/audioContinuity.js';
 
 test('playSyncStrategy: A7 — no play oculto SOLO si yielded; next en lock SÍ play', () => {
@@ -58,9 +59,46 @@ test('hideRecoverDelays vacío', () => {
 });
 
 test('mediaSessionPlaybackState', () => {
-  assert.equal(mediaSessionPlaybackState({ userWantsPlay: true, yieldedFocus: true }), 'playing');
+  assert.equal(mediaSessionPlaybackState({ userWantsPlay: true, yieldedFocus: true }), 'paused');
   assert.equal(mediaSessionPlaybackState({ userWantsPlay: true, yieldedFocus: false }), 'playing');
   assert.equal(mediaSessionPlaybackState({ userWantsPlay: false, yieldedFocus: false }), 'paused');
+});
+
+test('A14: isAudioPipelineDead — detección, no esperanza', () => {
+  // Zombie: !paused, buffer lleno y reloj congelado → pipeline cortado.
+  assert.equal(isAudioPipelineDead({
+    userWantsPlay: true, yieldedFocus: false, paused: false,
+    currentTime: 90, readyState: 4, stallMs: 5000,
+  }), true);
+  // Pause externo (evento perdido o no): también es muerte del pipeline.
+  assert.equal(isAudioPipelineDead({
+    userWantsPlay: true, yieldedFocus: false, paused: true,
+    currentTime: 90, readyState: 4, stallMs: 0,
+  }), true);
+  // Sano: reloj avanzó hace poco.
+  assert.equal(isAudioPipelineDead({
+    userWantsPlay: true, yieldedFocus: false, paused: false,
+    currentTime: 90, readyState: 4, stallMs: 1000,
+  }), false);
+  // Red lenta (sin buffer) NO es pipeline muerto.
+  assert.equal(isAudioPipelineDead({
+    userWantsPlay: true, yieldedFocus: false, paused: false,
+    currentTime: 90, readyState: 2, stallMs: 60000,
+  }), false);
+  // Pista arrancando (currentTime≈0) no es zombie.
+  assert.equal(isAudioPipelineDead({
+    userWantsPlay: true, yieldedFocus: false, paused: false,
+    currentTime: 0.2, readyState: 4, stallMs: 60000,
+  }), false);
+  // Estados honestos: usuario pausó / ya cedimos / terminó / selfPause.
+  for (const patch of [
+    { userWantsPlay: false }, { yieldedFocus: true }, { ended: true }, { selfPause: true },
+  ]) {
+    assert.equal(isAudioPipelineDead({
+      userWantsPlay: true, yieldedFocus: false, paused: true,
+      currentTime: 90, readyState: 4, stallMs: 60000, ...patch,
+    }), false, JSON.stringify(patch));
+  }
 });
 
 test('A10: canRestoreInterruptPosition solo con yield activo', () => {

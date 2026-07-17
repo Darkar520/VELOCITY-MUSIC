@@ -244,6 +244,11 @@ export function reduce(state, event) {
         };
         push(effects, { type: 'pause', self: true });
         push(effects, {
+          type: 'mediaSession',
+          state: 'paused',
+          position,
+        });
+        push(effects, {
           type: 'syncReact',
           patch: { mediaInterrupted: true, time: position },
         });
@@ -257,6 +262,43 @@ export function reduce(state, event) {
       if (!hidden && state.intent === 'play' && state.srcStatus === 'ready') {
         push(effects, { type: 'play' });
       }
+      break;
+    }
+
+    case 'PIPELINE_DEAD': {
+      // A14: el detector (isAudioPipelineDead) confirma que Chrome cortó la
+      // salida de audio aunque el elemento diga !paused (zombie silencioso).
+      // Misma política que EXTERNAL_PAUSE, solo cambia el origen (detección).
+      const hidden = event.hidden === true;
+      const position = Number.isFinite(event.position) ? event.position : state.livePosition;
+
+      // Foreground: el usuario está mirando; re-assert play (como ducking) y
+      // dejar la reparación fina al stuckCheck/forceReacquire de App.
+      if (!hidden) {
+        if (state.intent === 'play' && state.focus !== 'yielded' && state.srcStatus === 'ready') {
+          push(effects, { type: 'play' });
+        }
+        break;
+      }
+
+      // Sin intención o ya cedido: nada que hacer.
+      if (state.intent !== 'play' || state.focus === 'yielded') break;
+
+      // Background + pipeline muerto → yield honesto: pausar el elemento,
+      // anclar posición (A10) y decir la verdad al OS (Media Session paused).
+      next = {
+        ...state,
+        focus: 'yielded',
+        yieldPosition: position,
+        yieldTrackId: state.trackId,
+        livePosition: position,
+      };
+      push(effects, { type: 'pause', self: true });
+      push(effects, { type: 'mediaSession', state: 'paused', position });
+      push(effects, {
+        type: 'syncReact',
+        patch: { mediaInterrupted: true, time: position },
+      });
       break;
     }
 

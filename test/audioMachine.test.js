@@ -43,7 +43,7 @@ test('initialState: pausado, sin yield, sin src', () => {
 
 // ── A7 EXTERNAL_PAUSE ──
 
-test('A7: EXTERNAL_PAUSE hidden + intent play → yield + pause (no MS paused)', () => {
+test('A7: EXTERNAL_PAUSE hidden + intent play → yield + pause + MS paused', () => {
   const base = {
     ...initialState(),
     intent: 'play',
@@ -63,10 +63,11 @@ test('A7: EXTERNAL_PAUSE hidden + intent play → yield + pause (no MS paused)',
   assert.equal(state.yieldPosition, 42);
   assert.equal(state.yieldTrackId, 'ig-track');
   assert.ok(hasEffect(effects, 'pause'));
-  // mediaSession ya NO emite 'paused': mantener playing al OS
-  // para evitar que Chrome suspenda la pestaña.
-  const msEffects = effectsOfType(effects, 'mediaSession');
-  assert.equal(msEffects.length, 0, 'no debe emitir mediaSession paused');
+  // MS honesto: el elemento ESTÁ pausado tras ceder → reportar 'paused'.
+  // (Mentir 'playing' aquí fue el zombie A14: notificación avanzando en silencio.)
+  const ms = effectsOfType(effects, 'mediaSession')[0];
+  assert.ok(ms);
+  assert.equal(ms.state, 'paused');
   assert.equal(selectPlaySync(state, { visible: false }), 'noop');
 });
 
@@ -108,6 +109,84 @@ test('A7: EXTERNAL_PAUSE selfPause → no-op de yield', () => {
   });
   assert.equal(state.focus, 'own');
   assert.ok(!hasEffect(effects, 'pause') || effects.length === 0);
+});
+
+// ── A14 PIPELINE_DEAD (zombie silencioso detectado) ──
+
+test('A14: PIPELINE_DEAD hidden + intent play → yield honesto + pause + MS paused', () => {
+  const base = {
+    ...initialState(),
+    intent: 'play',
+    focus: 'own',
+    trackId: 'zombie-track',
+    livePosition: 77,
+    srcStatus: 'ready',
+  };
+  const { state, effects } = reduce(base, {
+    type: 'PIPELINE_DEAD',
+    hidden: true,
+    position: 77,
+  });
+  assert.equal(state.focus, 'yielded');
+  assert.equal(state.intent, 'play', 'intención se mantiene para reanudar al volver');
+  assert.equal(state.yieldPosition, 77, 'ancla A10 para reanudar en el mismo segundo');
+  assert.equal(state.yieldTrackId, 'zombie-track');
+  assert.equal(state.livePosition, 77);
+  assert.ok(hasEffect(effects, 'pause'), 'pausar el elemento zombie (dejar de fingir)');
+  const ms = effectsOfType(effects, 'mediaSession')[0];
+  assert.ok(ms, 'Media Session debe reflejar la realidad');
+  assert.equal(ms.state, 'paused');
+  assert.equal(ms.position, 77);
+  const sync = effectsOfType(effects, 'syncReact')[0];
+  assert.ok(sync && sync.patch.mediaInterrupted === true);
+  // Tras el yield, oculto no se pelea (A7)…
+  assert.equal(selectPlaySync(state, { visible: false }), 'noop');
+  // …y al volver, DOC_VISIBLE reanuda desde el ancla.
+  const back = reduce(state, { type: 'DOC_VISIBLE', currentTime: 77 });
+  assert.equal(back.state.focus, 'own');
+  assert.ok(hasEffect(back.effects, 'play'));
+});
+
+test('A14: PIPELINE_DEAD visible → soft re-assert play, sin yield', () => {
+  const base = {
+    ...initialState(),
+    intent: 'play',
+    focus: 'own',
+    trackId: 't1',
+    livePosition: 10,
+    srcStatus: 'ready',
+  };
+  const { state, effects } = reduce(base, {
+    type: 'PIPELINE_DEAD',
+    hidden: false,
+    position: 10,
+  });
+  assert.equal(state.focus, 'own', 'en foreground no se cede el foco');
+  assert.equal(state.yieldPosition, null);
+  assert.ok(hasEffect(effects, 'play'));
+  assert.ok(!hasEffect(effects, 'pause'));
+  assert.equal(effectsOfType(effects, 'mediaSession').length, 0);
+});
+
+test('A14: PIPELINE_DEAD sin intent play o ya yielded → no-op', () => {
+  const pausedBase = { ...initialState(), intent: 'pause', trackId: 't1', srcStatus: 'ready' };
+  const r1 = reduce(pausedBase, { type: 'PIPELINE_DEAD', hidden: true, position: 5 });
+  assert.equal(r1.state.focus, 'own');
+  assert.equal(r1.effects.length, 0);
+
+  const yieldedBase = {
+    ...initialState(),
+    intent: 'play',
+    focus: 'yielded',
+    trackId: 't1',
+    yieldPosition: 30,
+    yieldTrackId: 't1',
+    srcStatus: 'ready',
+  };
+  const r2 = reduce(yieldedBase, { type: 'PIPELINE_DEAD', hidden: true, position: 30 });
+  assert.equal(r2.state.focus, 'yielded');
+  assert.equal(r2.state.yieldPosition, 30, 'no pisar el ancla original');
+  assert.equal(r2.effects.length, 0);
 });
 
 // ── A11 next / TRACK_SET / STREAM_READY ──

@@ -19,6 +19,7 @@ import {
   canForceReacquire,
   isExternalPause,
   hideRecoverDelays,
+  isAudioPipelineDead,
 } from '../frontend/src/audioContinuity.js';
 
 /** @typedef {{ id: string, ids: string[], note?: string, check: () => void }} Scenario */
@@ -175,13 +176,88 @@ const scenarios = [
 
   // ── Media Session / reacquire ──
   {
-    id: 'A4-ms-playing-even-when-yielded',
-    ids: ['A4', 'A7'],
-    note: 'mediaSessionPlaybackState NEVER returns paused when user wants music, even if yielded',
+    id: 'A4-ms-paused-when-yielded',
+    ids: ['A4', 'A7', 'A14'],
+    note: 'MS honesto al ceder: el elemento está pausado → reportar paused (mentir = zombie A14)',
     check() {
       assert.equal(mediaSessionPlaybackState({
         userWantsPlay: true, yieldedFocus: true,
-      }), 'playing');
+      }), 'paused');
+    },
+  },
+  // ── A14: detección de pipeline muerto (no esperanza) ──
+  {
+    id: 'A14-detects-frozen-clock-with-buffer',
+    ids: ['A14'],
+    note: '!paused + buffer + reloj congelado ≥4.5s = pipeline cortado por Chrome',
+    check() {
+      assert.equal(isAudioPipelineDead({
+        userWantsPlay: true, yieldedFocus: false, selfPause: false, ended: false,
+        paused: false, currentTime: 120, readyState: 4, stallMs: 6000,
+      }), true);
+    },
+  },
+  {
+    id: 'A14-detects-external-pause',
+    ids: ['A14', 'A7'],
+    note: 'pause externo en background = pipeline cortado (aunque el evento pause se pierda)',
+    check() {
+      assert.equal(isAudioPipelineDead({
+        userWantsPlay: true, yieldedFocus: false, selfPause: false, ended: false,
+        paused: true, currentTime: 120, readyState: 4, stallMs: 0,
+      }), true);
+    },
+  },
+  {
+    id: 'A14-no-false-positive-healthy-playback',
+    ids: ['A14'],
+    note: 'reloj avanzando = sano, aunque el tick del timer se retrase',
+    check() {
+      assert.equal(isAudioPipelineDead({
+        userWantsPlay: true, yieldedFocus: false, selfPause: false, ended: false,
+        paused: false, currentTime: 120, readyState: 4, stallMs: 1500,
+      }), false);
+    },
+  },
+  {
+    id: 'A14-no-false-positive-network-stall',
+    ids: ['A14', 'A13'],
+    note: 'sin buffer (readyState<3) = hambre de red, no pipeline muerto',
+    check() {
+      assert.equal(isAudioPipelineDead({
+        userWantsPlay: true, yieldedFocus: false, selfPause: false, ended: false,
+        paused: false, currentTime: 120, readyState: 2, stallMs: 30000,
+      }), false);
+    },
+  },
+  {
+    id: 'A14-no-fire-when-yielded-or-paused-by-user',
+    ids: ['A14', 'A7'],
+    note: 'yield a IG o pausa del usuario: estados honestos, no muerte',
+    check() {
+      assert.equal(isAudioPipelineDead({
+        userWantsPlay: true, yieldedFocus: true, selfPause: false, ended: false,
+        paused: false, currentTime: 120, readyState: 4, stallMs: 60000,
+      }), false);
+      assert.equal(isAudioPipelineDead({
+        userWantsPlay: false, yieldedFocus: false, selfPause: false, ended: false,
+        paused: true, currentTime: 120, readyState: 4, stallMs: 60000,
+      }), false);
+      assert.equal(isAudioPipelineDead({
+        userWantsPlay: true, yieldedFocus: false, selfPause: false, ended: true,
+        paused: true, currentTime: 120, readyState: 4, stallMs: 60000,
+      }), false);
+    },
+  },
+  {
+    id: 'A14-no-fire-while-track-starting',
+    ids: ['A14', 'A12'],
+    note: 'currentTime≈0 = pista arrancando (lo gestiona PLAY_FAILED, no el detector)',
+    check() {
+      assert.equal(isAudioPipelineDead({
+        userWantsPlay: true, yieldedFocus: false, selfPause: false, ended: false,
+        paused: false, currentTime: 0, readyState: 4, stallMs: 60000,
+      }), false);
     },
   },
   {

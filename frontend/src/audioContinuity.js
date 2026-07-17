@@ -52,12 +52,52 @@ export function shouldYieldOnExternalPause({
 
 export function mediaSessionPlaybackState({ userWantsPlay, yieldedFocus }) {
   if (!userWantsPlay) return 'paused';
-  // NUNCA reportar 'paused' al OS cuando el usuario quiere musica.
-  // Decirle al OS que pausamos provoca que Chrome suspenda la pestana,
-  // matando la reproduccion en segundo plano por completo.
-  // En vez de ceder, mentir para mantener la pestana viva.
-  void yieldedFocus;
+  // Yield real (pause externo / pipeline muerto): el elemento ESTA pausado,
+  // asi que Media Session debe decir la verdad. Reportar 'playing' aqui crea
+  // el zombie A14: la notificacion avanza pero no hay salida de audio.
+  if (yieldedFocus) return 'paused';
   return 'playing';
+}
+
+/**
+ * ¿Chrome mató el pipeline de salida de audio? (A14 — detección, no esperanza)
+ *
+ * Un play() que resuelve NO implica audio audible: Chrome puede cortar la
+ * salida PCM en background aunque el elemento diga !paused. Señales medibles
+ * sin Web Audio (AudioContext secuestra el <audio> y mata background en móvil):
+ *
+ *  1. Pause externo: el elemento quedó pausado sin que lo pidiéramos
+ *     (el evento 'pause' pudo perderse si el SO suspendió el JS justo ahí).
+ *  2. Reloj congelado: !paused, con datos en buffer (readyState >= 3), y
+ *     currentTime sin avanzar ≥ minStallMs. Con buffer disponible un elemento
+ *     sano avanza; si no lo hace, el pipeline está cortado.
+ *
+ * NO es pipeline muerto (no confundir):
+ *  - !userWantsPlay / selfPause / ended → estado honesto, nada que detectar.
+ *  - yieldedFocus → ya cedimos a otra app (A7); la recuperación es en visible.
+ *  - currentTime ≈ 0 → la pista aún está arrancando (lo gestiona PLAY_FAILED).
+ *  - readyState < 3 → probable hambre de red, no pipeline cortado; el spinner
+ *    de 'waiting'/'stalled' y la reanudación al volver ya lo cubren.
+ */
+export function isAudioPipelineDead({
+  userWantsPlay,
+  yieldedFocus,
+  selfPause = false,
+  ended = false,
+  paused,
+  currentTime = 0,
+  readyState = 0,
+  stallMs = 0,
+  minStallMs = 4500,
+}) {
+  if (!userWantsPlay || yieldedFocus || selfPause || ended) return false;
+  // Señal 1: pause externo (Chrome/OS retiró el foco de audio).
+  if (paused === true) return true;
+  if (paused !== false) return false;
+  // Señal 2: reloj congelado con buffer disponible mientras "suena".
+  if (!Number.isFinite(currentTime) || currentTime <= 0.5) return false;
+  if (!Number.isFinite(readyState) || readyState < 3) return false;
+  return stallMs >= minStallMs;
 }
 
 /**
