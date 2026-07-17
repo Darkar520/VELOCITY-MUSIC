@@ -1,14 +1,8 @@
-/**
- * MiniPlayerBar — barra de reproductor colapsada.
- * Props de App tienen prioridad; carátula resuelta vía bestCoverFor (catálogo/IDB).
- */
-import React, { useMemo } from 'react';
-import { hex2rgba, grad, hiResCover } from '../helpers.js';
+import React from 'react';
+import { hex2rgba, grad } from '../helpers.js';
 import { useHSwipe } from '../hooks.js';
-import { FALLBACK_COVER } from '../constants.js';
 import { Icon } from '../Icons.jsx';
 import { Spinner, CoverImg } from '../components.jsx';
-import { bestCoverFor } from '../catalog.js';
 import { usePlayerStore } from '../store/playerStore.js';
 
 export function MiniPlayerBar({
@@ -31,15 +25,6 @@ export function MiniPlayerBar({
   const { dragX, handlers } = useHSwipe({ onLeft: next, onRight: prev, threshold: 60 });
   const isSliding = Math.abs(dragX) > 0;
 
-  // Siempre preferir carátula del catálogo (HTTPS o data: offline) sobre estado vacío.
-  const coverSrc = useMemo(() => {
-    if (!track) return FALLBACK_COVER;
-    const raw = bestCoverFor(track.id, track.cover || track.artworkUrl || '');
-    if (!raw || typeof raw !== 'string') return FALLBACK_COVER;
-    if (raw.startsWith('data:') || raw.startsWith('blob:')) return raw;
-    return hiResCover(raw, 96) || FALLBACK_COVER;
-  }, [track?.id, track?.cover, track?.artworkUrl]);
-
   if (!track) return null;
 
   return (
@@ -61,8 +46,8 @@ export function MiniPlayerBar({
         }}
       >
         <CoverImg
-          key={`${track.id || 't'}-${coverSrc.slice(0, 48)}`}
-          src={coverSrc}
+          key={track.id}
+          src={track.cover}
           alt=""
           radius={11}
           size={96}

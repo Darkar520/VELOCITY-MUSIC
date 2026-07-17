@@ -118,7 +118,6 @@ test('ImportPlaylistModal imports exported SPOTIFY_BOOKMARKLET', () => {
 test('extracted UI modules import runtime symbols they reference', () => {
   const required = [
     ['player/MiniPlayerBar.jsx', [
-      [/FALLBACK_COVER/, /import\s*\{[^}]*FALLBACK_COVER[^}]*\}\s*from\s*['"]\.\.\/constants\.js['"]/],
       [/useHSwipe\s*\(/, /import\s*\{[^}]*useHSwipe[^}]*\}\s*from\s*['"]\.\.\/hooks\.js['"]/],
     ]],
     ['player/PlayerBar.jsx', [
