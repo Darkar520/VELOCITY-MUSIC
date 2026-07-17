@@ -175,12 +175,13 @@ const scenarios = [
 
   // ── Media Session / reacquire ──
   {
-    id: 'A4-ms-paused-when-yielded',
+    id: 'A4-ms-playing-even-when-yielded',
     ids: ['A4', 'A7'],
+    note: 'mediaSessionPlaybackState NEVER returns paused when user wants music, even if yielded',
     check() {
       assert.equal(mediaSessionPlaybackState({
         userWantsPlay: true, yieldedFocus: true,
-      }), 'paused');
+      }), 'playing');
     },
   },
   {

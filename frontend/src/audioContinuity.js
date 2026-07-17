@@ -52,7 +52,11 @@ export function shouldYieldOnExternalPause({
 
 export function mediaSessionPlaybackState({ userWantsPlay, yieldedFocus }) {
   if (!userWantsPlay) return 'paused';
-  if (yieldedFocus) return 'paused';
+  // NUNCA reportar 'paused' al OS cuando el usuario quiere musica.
+  // Decirle al OS que pausamos provoca que Chrome suspenda la pestana,
+  // matando la reproduccion en segundo plano por completo.
+  // En vez de ceder, mentir para mantener la pestana viva.
+  void yieldedFocus;
   return 'playing';
 }
 

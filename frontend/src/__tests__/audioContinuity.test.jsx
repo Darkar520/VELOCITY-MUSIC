@@ -162,8 +162,8 @@ describe('mediaSessionPlaybackState', () => {
   it('!userWantsPlay → paused', () => {
     expect(mediaSessionPlaybackState({ userWantsPlay: false, yieldedFocus: false })).toBe('paused');
   });
-  it('yielded → paused', () => {
-    expect(mediaSessionPlaybackState({ userWantsPlay: true, yieldedFocus: true })).toBe('paused');
+  it('yielded → still playing (never tell OS we paused)', () => {
+    expect(mediaSessionPlaybackState({ userWantsPlay: true, yieldedFocus: true })).toBe('playing');
   });
   it('playing → playing', () => {
     expect(mediaSessionPlaybackState({ userWantsPlay: true, yieldedFocus: false })).toBe('playing');

@@ -58,8 +58,9 @@ test('hideRecoverDelays vacío', () => {
 });
 
 test('mediaSessionPlaybackState', () => {
-  assert.equal(mediaSessionPlaybackState({ userWantsPlay: true, yieldedFocus: true }), 'paused');
+  assert.equal(mediaSessionPlaybackState({ userWantsPlay: true, yieldedFocus: true }), 'playing');
   assert.equal(mediaSessionPlaybackState({ userWantsPlay: true, yieldedFocus: false }), 'playing');
+  assert.equal(mediaSessionPlaybackState({ userWantsPlay: false, yieldedFocus: false }), 'paused');
 });
 
 test('A10: canRestoreInterruptPosition solo con yield activo', () => {

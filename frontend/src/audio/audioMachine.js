@@ -244,11 +244,6 @@ export function reduce(state, event) {
         };
         push(effects, { type: 'pause', self: true });
         push(effects, {
-          type: 'mediaSession',
-          state: 'paused',
-          position,
-        });
-        push(effects, {
           type: 'syncReact',
           patch: { mediaInterrupted: true, time: position },
         });

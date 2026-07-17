@@ -43,7 +43,7 @@ test('initialState: pausado, sin yield, sin src', () => {
 
 // ── A7 EXTERNAL_PAUSE ──
 
-test('A7: EXTERNAL_PAUSE hidden + intent play → yield + pause + MS paused', () => {
+test('A7: EXTERNAL_PAUSE hidden + intent play → yield + pause (no MS paused)', () => {
   const base = {
     ...initialState(),
     intent: 'play',
@@ -63,9 +63,10 @@ test('A7: EXTERNAL_PAUSE hidden + intent play → yield + pause + MS paused', ()
   assert.equal(state.yieldPosition, 42);
   assert.equal(state.yieldTrackId, 'ig-track');
   assert.ok(hasEffect(effects, 'pause'));
-  const ms = effectsOfType(effects, 'mediaSession')[0];
-  assert.ok(ms);
-  assert.equal(ms.state, 'paused');
+  // mediaSession ya NO emite 'paused': mantener playing al OS
+  // para evitar que Chrome suspenda la pestaña.
+  const msEffects = effectsOfType(effects, 'mediaSession');
+  assert.equal(msEffects.length, 0, 'no debe emitir mediaSession paused');
   assert.equal(selectPlaySync(state, { visible: false }), 'noop');
 });
 

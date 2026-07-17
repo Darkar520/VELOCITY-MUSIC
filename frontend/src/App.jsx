@@ -476,6 +476,7 @@ export default function App() {
   const reacquireInFlight = useRef(false);
   const lastTimeRef = useRef(0);
   const stuckCheckRef = useRef(null);
+  const bgYieldedRef = useRef(false);
 
   const nextTrackActionRef = useRef(() => {});
   const prevTrackActionRef = useRef(() => {});
@@ -729,6 +730,50 @@ export default function App() {
     }
   }, [playing, track, playSrc, vol, mediaInterrupted]);
 
+  // Reanudacion agresiva en segundo plano: cuando Chrome pausa el <audio>
+  // en background, intenta play() varias veces con delays crecientes antes
+  // de ceder. Sin esto, el diseno "cooperativo" (EXTERNAL_PAUSE → yield)
+  // le dice al OS que pausamos, Chrome suspende la pestana y se acaba la
+  // reproduccion.
+  const bgTimersRef = useRef([]);
+  const scheduleBackgroundResume = () => {
+    if (isDocumentVisible()) return;
+    const a = audioRef.current;
+    if (!a || !playingRef.current || a.ended) return;
+    bgYieldedRef.current = true;
+    const delays = [200, 600, 1400, 3200, 7000];
+    bgTimersRef.current.forEach(clearTimeout);
+    bgTimersRef.current = [];
+    delays.forEach((ms, i) => {
+      bgTimersRef.current.push(setTimeout(() => {
+        const el = audioRef.current;
+        if (!el || el.ended) return;
+        if (!playingRef.current) return;
+        if (el.volume < vol * 0.6) el.volume = vol;
+        try { el.currentTime = interruptPositionRef.current ?? el.currentTime; } catch {}
+        try {
+          const p = el.play();
+          if (p && p.catch) p.catch(() => {});
+        } catch {}
+        if (i === delays.length - 1) {
+          // Ultimo intento fallo: ceder el foco (comportamiento original)
+          const pos = el.currentTime || 0;
+          bgTimersRef.current.push(setTimeout(() => {
+            dispatchAudio({
+              type: 'EXTERNAL_PAUSE',
+              hidden: true,
+              selfPause: false,
+              position: Number.isFinite(pos) ? pos : undefined,
+            });
+            bgYieldedRef.current = false;
+          }, 1200));
+        }
+      }, ms));
+    });
+  };
+
+  useEffect(() => () => { bgTimersRef.current.forEach(clearTimeout); }, []);
+
   // ── Wake Lock API: previene que la CPU/screen se suspenda mientras reproduce ──
   // En algunos dispositivos Android agresivos, el navegador puede suspender
   // el proceso de JS en background incluso con Media Session activa. El Wake Lock
@@ -867,6 +912,7 @@ export default function App() {
         timeStuck,
       })) return;
 
+      bgYieldedRef.current = false;
       dispatchAudio({
         type: 'DOC_VISIBLE',
         currentTime: a.currentTime || 0,
@@ -925,6 +971,38 @@ export default function App() {
       window.removeEventListener('pageshow', onPageShow);
       if (stuckCheckRef.current) { clearInterval(stuckCheckRef.current); stuckCheckRef.current = null; }
     };
+  }, [vol]);
+
+  // ── Watchdog de segundo plano: si el audio se pausa en background y el
+  // usuario quiere musica, reintenta play() periodicamente. Complementa
+  // scheduleBackgroundResume (que hace reintentos agresivos al inicio).
+  const bgWatchdogRef = useRef(null);
+  useEffect(() => {
+    const iv = setInterval(() => {
+      if (isDocumentVisible()) return;
+      const a = audioRef.current;
+      if (!a || a.ended) return;
+      if (!playingRef.current) return;
+      if (a.paused && !bgYieldedRef.current) {
+        if (a.volume < vol * 0.6) a.volume = vol;
+        try { a.play().catch(() => {}); } catch {}
+      }
+      // Mantener posicion en Media Session aunque este pausado
+      if (('mediaSession' in navigator) && navigator.mediaSession.setPositionState) {
+        try {
+          const d = a.duration > 0 && isFinite(a.duration) ? a.duration : 0;
+          if (d > 0) {
+            navigator.mediaSession.setPositionState({
+              duration: d,
+              position: Math.min(Math.max(0, a.currentTime || 0), d),
+              playbackRate: 1,
+            });
+          }
+        } catch {}
+      }
+    }, 10000);
+    bgWatchdogRef.current = iv;
+    return () => { clearInterval(iv); };
   }, [vol]);
 
   // ── Precargar la(s) siguiente(s) pista(s) al cambiar la actual o la cola ──
@@ -1650,6 +1728,7 @@ export default function App() {
       }}
       onPlay={() => {
         selfPauseRef.current = false;
+        bgYieldedRef.current = false;
         const el = audioRef.current;
         if (getMachine().intent !== 'play') {
           selfPauseRef.current = true;
@@ -1668,7 +1747,7 @@ export default function App() {
       }}
       onPlaying={() => {
         selfPauseRef.current = false;
-        const el = audioRef.current;
+        bgYieldedRef.current = false;
         if (getMachine().intent !== 'play') {
           selfPauseRef.current = true;
           try { el?.pause(); } catch {}
@@ -1714,12 +1793,21 @@ export default function App() {
           audioEnded: a.ended,
         })) return;
 
+        // En background: intentar reanudar agresivamente en vez de ceder
+        // inmediatamente. Chrome pausa el audio en segundo plano pero podemos
+        // hacer play() de vuelta varias veces antes de rendirnos.
+        if (!isDocumentVisible() && !bgYieldedRef.current) {
+          scheduleBackgroundResume();
+          return;
+        }
+
         dispatchAudio({
           type: 'EXTERNAL_PAUSE',
           hidden: !isDocumentVisible(),
           selfPause: selfPauseRef.current,
           position: a.currentTime || 0,
         });
+        bgYieldedRef.current = false;
       }}
       onError={handleAudioError}
       onEnded={() => {
