@@ -296,28 +296,40 @@ export function createApp(deps = {}) {
       res.setHeader('X-Cache', 'HIT');
       return res.json({ results: cached.results });
     }
+    const doSearch = () => searchTracks(qRaw, {
+      limit: req.query.limit,
+      catalogImpl,
+      timeoutMs: catalogTimeoutMs,
+    });
+    let results;
     try {
-      const results = await searchTracks(qRaw, {
-        limit: req.query.limit,
-        catalogImpl,
-        timeoutMs: catalogTimeoutMs,
-      });
-      const deduped = dedupeTracks(results);
-      searchCacheSet(cacheKey, { results: deduped, at: Date.now() });
-      if (statsRepo) {
-        statsRepo.incr('searches').catch(() => {});
-        // Trazabilidad por usuario (si viene autenticado): qué buscó y cuándo.
-        if (qRaw && typeof statsRepo.recordSearch === 'function') {
-          const uid = optionalUserId(req);
-          if (uid) statsRepo.recordSearch(uid, qRaw).catch(() => {});
-        }
-      }
-      res.setHeader('X-Cache', 'MISS');
-      return res.json({ results: deduped });
+      results = await doSearch();
     } catch (err) {
       if (err instanceof MetadataError) return res.status(err.status).json({ error: err.message });
-      return res.status(502).json({ error: 'El catálogo de YouTube Music no está disponible.' });
+      // Primer fallo puede ser cold-start del cliente de YTMusic (la inicialización
+      // tarda varios segundos). Reintentar una vez con una pausa corta: si el cliente
+      // ya terminó de inicializar, el segundo intento funciona sin que el usuario
+      // vea el error.
+      try {
+        await new Promise((r) => setTimeout(r, 800));
+        results = await doSearch();
+      } catch (err2) {
+        if (err2 instanceof MetadataError) return res.status(err2.status).json({ error: err2.message });
+        return res.status(502).json({ error: 'El catálogo de YouTube Music no está disponible.' });
+      }
     }
+    const deduped = dedupeTracks(results);
+    searchCacheSet(cacheKey, { results: deduped, at: Date.now() });
+    if (statsRepo) {
+      statsRepo.incr('searches').catch(() => {});
+      // Trazabilidad por usuario (si viene autenticado): qué buscó y cuándo.
+      if (qRaw && typeof statsRepo.recordSearch === 'function') {
+        const uid = optionalUserId(req);
+        if (uid) statsRepo.recordSearch(uid, qRaw).catch(() => {});
+      }
+    }
+    res.setHeader('X-Cache', 'MISS');
+    return res.json({ results: deduped });
   });
 
   // ---- Letras (YouTube Music nativo + lrclib filtrado + lyrics.ovh) ----
@@ -480,19 +492,28 @@ export function createApp(deps = {}) {
     const q = String(req.query.q || '').trim();
     if (!q) return res.status(400).json({ error: 'Falta el parámetro q.' });
     if (typeof searchAllImpl !== 'function') return res.status(501).json({ error: 'No disponible.' });
+    const doSearchAll = () => withTimeout(searchAllImpl(q, 20), 12000);
+    let data;
     try {
-      const data = await withTimeout(searchAllImpl(q, 20), 12000);
-      if (statsRepo) {
-        statsRepo.incr('searches').catch(() => {});
-        if (typeof statsRepo.recordSearch === 'function') {
-          const uid = optionalUserId(req);
-          if (uid) statsRepo.recordSearch(uid, q).catch(() => {});
-        }
-      }
-      return res.json(data);
+      data = await doSearchAll();
     } catch {
-      return res.status(502).json({ error: 'No se pudo buscar.' });
+      // Primer fallo puede ser cold-start del cliente de YTMusic. Reintentar una
+      // vez: si el cliente ya inicializó, el segundo intento funciona de inmediato.
+      try {
+        await new Promise((r) => setTimeout(r, 800));
+        data = await doSearchAll();
+      } catch {
+        return res.status(502).json({ error: 'No se pudo buscar.' });
+      }
     }
+    if (statsRepo) {
+      statsRepo.incr('searches').catch(() => {});
+      if (typeof statsRepo.recordSearch === 'function') {
+        const uid = optionalUserId(req);
+        if (uid) statsRepo.recordSearch(uid, q).catch(() => {});
+      }
+    }
+    return res.json(data);
   });
 
   // ---- Artista (perfil: top canciones + álbumes reales) ----

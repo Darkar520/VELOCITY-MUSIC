@@ -263,8 +263,14 @@ export function usePlaybackController(deps) {
         showToast?.('Sesión caducada. Vuelve a iniciar sesión.');
         dispatchAudio({ type: 'USER_PAUSE' });
       } else {
+        // Retries agotados y sin src en el elemento: handleAudioError no
+        // disparará porque currentSrc está vacío (TRACK_SET hizo clearSrc).
+        // Despachar USER_PAUSE para sacar la máquina del estado
+        // { intent:'play', srcStatus:'none' } que deja la UI bloqueada en
+        // "playing" sin audio y sin posibilidad de recuperarse (stuck 0:00).
+        showToast?.('No se pudo obtener el audio. Toca play para reintentar.');
+        dispatchAudio({ type: 'USER_PAUSE' });
         setLoadingAudio?.(false);
-        // Dejar intent play: el onError del <audio> reintentará con firma fresca.
       }
     }
   };
