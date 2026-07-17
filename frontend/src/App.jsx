@@ -1714,6 +1714,7 @@ export default function App() {
       onPlaying={() => {
         selfPauseRef.current = false;
         bgLastProgressRef.current = Date.now();
+        const el = audioRef.current;
         if (getMachine().intent !== 'play') {
           selfPauseRef.current = true;
           try { el?.pause(); } catch {}
