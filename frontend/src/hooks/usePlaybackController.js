@@ -12,6 +12,7 @@ import { cacheTrack, trackById, saveMeta, bestCoverFor, normalizeTrack } from '.
 import { isDocumentVisible, shouldFadeIn, isStreamUrlFresh } from '../audioContinuity.js';
 import { runAudioEffects, bumpAudioEpoch } from '../audio/runAudioEffects.js';
 import { usePlayerStore } from '../store/playerStore.js';
+import { enrichCoverIfNeeded } from '../coverEnrich.js';
 
 const QUALITY_MAP = { high: 'high', medium: 'medium', low: 'low', HQ: 'high', Standard: 'medium', FLAC: 'low' };
 
@@ -59,6 +60,11 @@ export function usePlaybackController(deps) {
     showToast,
     recordPlayStat,
     setMediaSessionState,
+    // Refs de error que deben resetearse en cada play() explícito:
+    // sin esto, fallos consecutivos de pistas distintas de la misma lista
+    // llegan al límite anti-cascada y detienen la reproducción (bug stuck-0:00).
+    playErrorRef: playErrorRefDep,
+    consecutiveFailsRef: consecutiveFailsRefDep,
   } = deps;
 
   const effectCtxRef = useRef({});
@@ -352,9 +358,30 @@ export function usePlaybackController(deps) {
     cacheTrack(t); saveMeta();
     playSnapRef.current = t;
 
+    // Enriquecimiento de carátula: si es un thumbnail de YouTube, buscar en
+    // iTunes en background (no bloquea la reproducción).
+    enrichCoverIfNeeded(t, (id, coverUrl) => {
+      // Actualizar catálogo preservando todos los campos existentes de la pista.
+      const existing = trackById(id);
+      if (existing) {
+        cacheTrack({ ...existing, cover: coverUrl });
+        saveMeta();
+      }
+      setTrack((prev) => {
+        if (!prev || prev.id !== id) return prev;
+        if (prev.cover === coverUrl) return prev;
+        return { ...prev, cover: coverUrl };
+      });
+    });
+
     // 1) Invalidar plays/seeks de la pista anterior (timeouts schedulePlay).
     const gen = ++playGenRef.current;
     signFailRef.current = { id: null, n: 0 };
+    // Resetear contadores de error: una acción explícita del usuario (nuevo track)
+    // debe empezar limpia. Sin esto, fallos de pistas anteriores acumulan en
+    // consecutiveFailsRef y disparan el corte anti-cascada antes de tiempo.
+    if (playErrorRefDep) playErrorRefDep.current = { id: null, n: 0 };
+    if (consecutiveFailsRefDep) consecutiveFailsRefDep.current = 0;
     try {
       cancelAnimationFrame(fadeRafRef.current);
       clearTimeout(fadeSafetyRef.current);
@@ -431,6 +458,7 @@ export function usePlaybackController(deps) {
     setPlayingFrom, audioRef, fadeRafRef, fadeSafetyRef, selfPauseRef, pendingFadeRef,
     vol, setQueue, quality, streamParamsFor, objUrlRef, dispatchAudio, setTime, downloaded,
     setTrack, getMachine, applyOnlineSrc, afterPlaySideEffects, backendDown, setPlaySrc, showToast,
+    playErrorRefDep, consecutiveFailsRefDep,
   ]);
 
   const togglePlay = useCallback(() => {

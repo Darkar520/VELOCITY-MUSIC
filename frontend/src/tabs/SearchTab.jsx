@@ -9,6 +9,7 @@ import { SearchBar } from './SearchBar.jsx';
 import { useListSearch } from './useListSearch.js';
 import { useLibraryStore } from '../store/libraryStore.js';
 import { usePlayerStore } from '../store/playerStore.js';
+import { enrichTracksInBackground } from '../coverEnrich.js';
 
 export function SearchTab({ T, play, addToTarget, onMenu, recentSearches, addSearch, removeSearch, goArtist, goAlbum, goMix, selecting, selection, toggleSelect, startSelection, addToQueue, removeFromQueue, backendDown, setTab }) {
   // Library store
@@ -57,6 +58,20 @@ export function SearchTab({ T, play, addToTarget, onMenu, recentSearches, addSea
         }
         if (!alive || ctrl.signal.aborted) return;
         setRes(data); setErr('');
+        // Enriquecer carátulas de YouTube en background: no bloquea la UI.
+        enrichTracksInBackground(data.songs, (id, coverUrl) => {
+          const existing = trackById(id);
+          if (existing) {
+            cacheTrack({ ...existing, cover: coverUrl });
+            setRes((prev) => {
+              if (!prev || !prev.songs) return prev;
+              const updated = prev.songs.map((t) =>
+                t.id === id ? { ...t, cover: coverUrl } : t
+              );
+              return { ...prev, songs: updated };
+            });
+          }
+        });
       } catch (e) {
         if (!aborted(e) && alive) setErr('No se pudo buscar. Revisa tu conexión e inténtalo de nuevo.');
       } finally {

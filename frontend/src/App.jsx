@@ -519,6 +519,7 @@ export default function App() {
     quality, backendDown, downloaded, track, playing, time, vol, queue, shuffle,
     setTrack, setPlaying, setTime, setPlaySrc, setLoadingAudio, setMediaInterrupted,
     setQueue, setRecent, setPlayingFrom, showToast, recordPlayStat, setMediaSessionState,
+    playErrorRef, consecutiveFailsRef,
   });
   // Web Audio para normalizar volumen (compresor de rango dinámico). Opt-in.
   // ── AudioContext eliminado: era incompatible con background playback en móvil ──
