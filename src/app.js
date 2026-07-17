@@ -552,14 +552,14 @@ export function createApp(deps = {}) {
   // ---- Radio / relacionadas (reproducción tipo Spotify) ----
   app.get('/api/radio', async (req, res) => {
     const id = String(req.query.id || '').trim();
-    const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 50));
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 100));
     if (!id) return res.status(400).json({ error: 'Se requiere id de pista.' });
     if (typeof radioImpl !== 'function') return res.status(501).json({ error: 'No disponible.' });
     const cacheKey = `radio:${id}:${limit}`;
     const cached = detailCacheGet(cacheKey);
     if (cached) { res.setHeader('X-Cache', 'HIT'); return res.json(cached); }
     try {
-      const tracks = await withTimeout(radioImpl(id, limit), 12000);
+      const tracks = await withTimeout(radioImpl(id, limit), 20000);
       const result = { tracks: Array.isArray(tracks) ? tracks : [] };
       detailCacheSet(cacheKey, result);
       res.setHeader('X-Cache', 'MISS');

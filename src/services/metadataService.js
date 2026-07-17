@@ -14,7 +14,7 @@
 
 export const SEARCH_TIMEOUT_MS = 5000;
 export const DEFAULT_LIMIT = 50;
-export const MAX_LIMIT = 50;
+export const MAX_LIMIT = 100;
 export const MIN_LIMIT = 1;
 export const MAX_QUERY_LENGTH = 256;
 

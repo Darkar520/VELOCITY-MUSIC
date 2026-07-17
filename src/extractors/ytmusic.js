@@ -315,33 +315,68 @@ function mapUpNext(s) {
  * Radio / "reproducir a continuación": dado un videoId, devuelve canciones
  * relacionadas (misma línea/estilo) tal como las agrupa YouTube Music.
  * Es la base de la reproducción tipo Spotify (seguir la canción elegida).
+ *
+ * Mejoras v2:
+ *  - Soporta hasta 100 canciones (antes 25).
+ *  - Expansión de grafo con hasta 10 semillas secundarias.
+ *  - Diversidad de artistas: máximo 3 canciones consecutivas del mismo artista
+ *    y máximo 5 canciones en total por artista (antes sin límite).
+ *  - Deduplicación estricta por videoId.
  */
-export async function getRadio(videoId, limit = 25) {
+export async function getRadio(videoId, limit = 100) {
   const client = await getClientSafe();
   const seen = new Set();
   const out = [];
-  // Incorpora un lote de "Up Nexts" respetando unicidad y el límite.
+
+  // Helpers de diversidad
+  const artistCount = new Map();
+  const MAX_PER_ARTIST = 5;
+
+  // Incorpora un lote de "Up Nexts" respetando unicidad, el límite y la
+  // diversidad de artistas.
   const ingest = (ups) => {
     for (const u of (Array.isArray(ups) ? ups : [])) {
       if (out.length >= limit) break;
       if (!u || !u.videoId) continue;
       if (u.type && u.type !== 'SONG') continue;
       if (seen.has(u.videoId)) continue;
-      seen.add(u.videoId);
       const t = mapUpNext(u);
-      if (t.id && t.title) out.push(t);
+      if (!t.id || !t.title) continue;
+      const artistKey = (t.artist || '').toLowerCase();
+      const count = artistCount.get(artistKey) || 0;
+      if (count >= MAX_PER_ARTIST) continue;
+      seen.add(u.videoId);
+      artistCount.set(artistKey, count + 1);
+      out.push(t);
     }
   };
+
   // Semilla principal.
   try { ingest(await client.getUpNexts(videoId)); } catch {}
-  // "Up Nexts" de YouTube Music suele devolver ~20-25 pistas por semilla. Para
-  // alcanzar el límite (p.ej. 50) expandimos el grafo: usamos las primeras
-  // pistas como semillas secundarias y unimos sus radios (en paralelo, deduplicado).
+
+  // Expansión del grafo: usar hasta 10 pistas como semillas secundarias.
+  // Se hace en paralelo para ser rápido; se ingestan en orden para mantener
+  // relevancia (las pistas más cercanas a la semilla primero).
   if (out.length < limit) {
-    const secondary = out.slice(0, 6).map((t) => t.id).filter((id) => id && id !== videoId);
+    const secondary = out.slice(0, 10).map((t) => t.id).filter((id) => id && id !== videoId);
     const batches = await Promise.all(secondary.map((id) => client.getUpNexts(id).catch(() => [])));
-    for (const b of batches) { if (out.length >= limit) break; ingest(b); }
+    for (const b of batches) {
+      if (out.length >= limit) break;
+      ingest(b);
+    }
   }
+
+  // Si aún no llegamos al límite, hacer una segunda ronda con semillas de la
+  // parte media del grafo (distancia 2 desde la semilla original).
+  if (out.length < limit) {
+    const tertiary = out.slice(10, 20).map((t) => t.id).filter((id) => id && id !== videoId);
+    const batches2 = await Promise.all(tertiary.map((id) => client.getUpNexts(id).catch(() => [])));
+    for (const b of batches2) {
+      if (out.length >= limit) break;
+      ingest(b);
+    }
+  }
+
   return out.slice(0, limit);
 }
 

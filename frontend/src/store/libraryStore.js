@@ -119,11 +119,11 @@ export const useLibraryStore = create((set, get) => ({
   },
 
   // ─── Recent (historial de reproducción) ─────────────────────
-  /** Agrega trackId al frente del historial, dedupe, máx 50. */
+  /** Agrega trackId al frente del historial, dedupe, máx 200. */
   pushRecent: (trackId) => {
     if (!trackId) return;
     set((s) => ({
-      recent: [trackId, ...s.recent.filter((x) => x !== trackId)].slice(0, 50),
+      recent: [trackId, ...s.recent.filter((x) => x !== trackId)].slice(0, 200),
     }));
   },
 

@@ -59,17 +59,17 @@ describe('libraryStore', () => {
     expect(pl.trackIds).toEqual(['t1', 't3']);
   });
 
-  it('pushRecent dedupe y mantiene máximo 50 entradas', () => {
+  it('pushRecent dedupe y mantiene máximo 200 entradas', () => {
     const store = useLibraryStore.getState();
     store.pushRecent('a');
     store.pushRecent('b');
     store.pushRecent('a'); // ya existe — debe mover al frente, no duplicar
     expect(useLibraryStore.getState().recent).toEqual(['a', 'b']);
-    // Llenar más de 50
-    for (let i = 0; i < 60; i++) store.pushRecent(`id${i}`);
-    expect(useLibraryStore.getState().recent).toHaveLength(50);
+    // Llenar más de 200
+    for (let i = 0; i < 210; i++) store.pushRecent(`id${i}`);
+    expect(useLibraryStore.getState().recent).toHaveLength(200);
     // El último pusheado debe estar primero
-    expect(useLibraryStore.getState().recent[0]).toBe('id59');
+    expect(useLibraryStore.getState().recent[0]).toBe('id209');
   });
 
   it('saveAlbum agrega sin duplicar y unsaveAlbum quita', () => {

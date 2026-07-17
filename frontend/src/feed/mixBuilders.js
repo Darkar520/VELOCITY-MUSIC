@@ -21,7 +21,7 @@ export function artistKey(t) {
   return (t?.artist || '').toLowerCase().replace(/\s+/g, '');
 }
 
-export function tracksFromIds(ids, limit = 50) {
+export function tracksFromIds(ids, limit = 100) {
   return dedupeByTitle((ids || []).map(trackById).filter(Boolean)).slice(0, limit);
 }
 
@@ -41,7 +41,7 @@ export function mixesByArtist(tracks, { maxMixes = 8, minTracks = 4, labelFn } =
 
   return groups.map((g) => ({
     label: labelFn ? labelFn(g) : g.name,
-    tracks: g.tracks.slice(0, 50),
+    tracks: g.tracks.slice(0, 100),
   }));
 }
 
@@ -76,7 +76,7 @@ export function ensureManyMixes(mixes, { min = 3, max = 8, prefix = 'Selección'
     const all = clean[0].tracks || [];
     const byArt = mixesByArtist(all, { maxMixes: max, minTracks: 3, labelFn: (g) => g.name });
     if (byArt.length >= min) return byArt;
-    const chunks = mixesByChunks(all, { size: 50, maxMixes: max, prefix });
+    const chunks = mixesByChunks(all, { size: 100, maxMixes: max, prefix });
     if (chunks.length >= 2) return chunks;
     // último recurso: rebanar en 2 aunque queden cortos
     if (all.length >= 8) {
@@ -100,7 +100,7 @@ export function ensureManyMixes(mixes, { min = 3, max = 8, prefix = 'Selección'
 
 /** Offline: mixes por artista + chunks = varios carruseles de descargas. */
 export function offlineMixes(downloadedIds) {
-  const tracks = tracksFromIds([...downloadedIds], 120);
+  const tracks = tracksFromIds([...downloadedIds], 200);
   if (tracks.length < 4) return [];
   let mixes = mixesByArtist(tracks, {
     maxMixes: 8,
@@ -110,7 +110,7 @@ export function offlineMixes(downloadedIds) {
   if (mixes.length < 3) {
     mixes = [
       ...mixes,
-      ...mixesByChunks(tracks, { size: 50, maxMixes: 6, prefix: 'Descargas' }),
+      ...mixesByChunks(tracks, { size: 100, maxMixes: 6, prefix: 'Descargas' }),
     ];
   }
   // dedupe labels
@@ -124,7 +124,7 @@ export function offlineMixes(downloadedIds) {
 
 /** Favoritos → varios mixes por artista top. */
 export function favArtistMixes(favIds) {
-  const tracks = tracksFromIds(favIds, 100);
+  const tracks = tracksFromIds(favIds, 200);
   return mixesByArtist(tracks, {
     maxMixes: 8,
     minTracks: 3,
@@ -132,15 +132,15 @@ export function favArtistMixes(favIds) {
   });
 }
 
-/** Historial reciente → varios slices temporales. Bug fix: todos los slices ahora son de 50 canciones. */
+/** Historial reciente → varios slices temporales. Bug fix: todos los slices ahora son de 100 canciones. */
 export function recentSliceMixes(recentIds) {
-  const tracks = tracksFromIds(recentIds, 100);
+  const tracks = tracksFromIds(recentIds, 200);
   if (tracks.length < 4) return [];
   const slices = [
-    { label: 'Hoy en bucle', tracks: tracks.slice(0, 50) },
-    { label: 'Esta semana', tracks: tracks.slice(0, 50) },
-    { label: 'Tu rotación', tracks: tracks.slice(10, 60) },
-    { label: 'Más atrás', tracks: tracks.slice(20, 70) },
+    { label: 'Hoy en bucle', tracks: tracks.slice(0, 100) },
+    { label: 'Esta semana', tracks: tracks.slice(0, 100) },
+    { label: 'Tu rotación', tracks: tracks.slice(10, 110) },
+    { label: 'Más atrás', tracks: tracks.slice(20, 120) },
   ].filter((m) => m.tracks.length >= 4);
   const byArt = mixesByArtist(tracks, { maxMixes: 4, minTracks: 3, labelFn: (g) => `Reciente · ${g.name}` });
   return ensureManyMixes([...slices, ...byArt], { min: 3, max: 8, prefix: 'Reciente' });
@@ -149,7 +149,7 @@ export function recentSliceMixes(recentIds) {
 export function playlistMixes(playlists) {
   return (playlists || [])
     .map((p) => {
-      const tracks = tracksFromIds(p.trackIds || [], 50);
+      const tracks = tracksFromIds(p.trackIds || [], 100);
       if (tracks.length < 4) return null;
       return { label: p.name || 'Playlist', tracks };
     })
