@@ -28,6 +28,8 @@ export function SearchTab({ T, play, addToTarget, onMenu, recentSearches, addSea
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
   const [slowWarning, setSlowWarning] = useState(false);
+  // retryKey se incrementa para forzar un nuevo disparo del useEffect de búsqueda.
+  const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
     const term = q.trim();
@@ -90,7 +92,7 @@ export function SearchTab({ T, play, addToTarget, onMenu, recentSearches, addSea
       }
     }, 380);
     return () => { alive = false; clearTimeout(id); clearTimeout(slowTimer); ctrl.abort(); };
-  }, [q]);
+  }, [q, retryKey]);
 
   const runGenre = (g) => { setQ(g.q); addSearch(g.label); };
   const empty = !res.songs.length && !res.albums.length && !res.artists.length;
@@ -150,7 +152,7 @@ export function SearchTab({ T, play, addToTarget, onMenu, recentSearches, addSea
 
       <div style={{ position:'relative', marginBottom:22 }}>
         <div style={{ position:'absolute', left:15, top:'50%', transform:'translateY(-50%)', pointerEvents:'none' }}>
-          {loading ? <Spinner c={T.accent} sz={17} /> : <Icon.Search c={q ? T.accent : 'var(--txt-2)'} sz={17} />}
+          {loading ? <Spinner c={slowWarning ? '#f59e0b' : T.accent} sz={17} /> : <Icon.Search c={q ? T.accent : 'var(--txt-2)'} sz={17} />}
         </div>
         <input type="text" value={q} onChange={e => setQ(e.target.value)} onBlur={() => q.trim() && addSearch(q.trim())}
           placeholder="Artistas, canciones, álbumes…"
@@ -160,8 +162,24 @@ export function SearchTab({ T, play, addToTarget, onMenu, recentSearches, addSea
 
       {q ? (
         <>
-          {err && <div style={{ textAlign:'center', color:'#fb7185', fontSize:12.5, paddingTop:20 }}>{err}</div>}
-          {loading && slowWarning && <div style={{ textAlign:'center', color:'var(--txt-2)', fontSize:12, paddingTop:12 }}>Conectando con el catálogo de música, un momento…</div>}
+          {err && (
+            <div style={{ textAlign:'center', paddingTop:20 }}>
+              <div style={{ color:'#fb7185', fontSize:12.5, marginBottom:10 }}>{err}</div>
+              <button
+                onClick={() => setRetryKey((k) => k + 1)}
+                className="btn-tap"
+                style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:99, padding:'8px 20px', cursor:'pointer', color:'var(--txt-0)', fontSize:12, fontWeight:700 }}
+              >
+                Reintentar
+              </button>
+            </div>
+          )}
+          {loading && slowWarning && (
+            <div style={{ textAlign:'center', paddingTop:12, display:'flex', flexDirection:'column', alignItems:'center', gap:8 }}>
+              <Spinner c="#f59e0b" sz={18} />
+              <div style={{ color:'#f59e0b', fontSize:12, fontWeight:600 }}>Conectando con el catálogo de música…</div>
+            </div>
+          )}
           {!loading && !err && empty && <div style={{ textAlign:'center', color:'var(--txt-2)', fontSize:13, paddingTop:36 }}>Sin resultados para "{q}"</div>}
 
           {res.artists.length > 0 && (<>

@@ -7,7 +7,7 @@ import { createLimiter, createInflight } from './src/lib/concurrency.js';
 import { normalizeText } from './src/lib/normalize.js';
 import { resolveActiveMode } from './src/services/resolutionMode.js';
 import { probeYtDlp, createYtDlpExtractor, createYtDlpCatalog, createSoundCloudCatalog, createSoundCloudExtractor, YT_DLP_BIN_DIR } from './src/extractors/ytdlp.js';
-import { createYTMusicCatalog, createYTMusicArtist, createYTMusicAlbum, createYTMusicLyrics, createYTMusicSearchAll, createYTMusicRadio, createYTMusicSong } from './src/extractors/ytmusic.js';
+import { createYTMusicCatalog, createYTMusicArtist, createYTMusicAlbum, createYTMusicLyrics, createYTMusicSearchAll, createYTMusicRadio, createYTMusicSong, readyPromise as ytMusicReadyPromise } from './src/extractors/ytmusic.js';
 import { installYtDlpByDownload } from './src/services/extractorSetup.js';
 import {
   createMemoryUserRepo,
@@ -239,6 +239,20 @@ export async function bootstrap() {
     revocationService,
     ...repos,
   });
+
+  // ── Warmup barrier: esperar a que el cliente de YouTube Music esté listo ──
+  // Esto elimina la ventana de cold-start donde la primera búsqueda entra en
+  // withTimeout con initialize() todavía en vuelo. Si el cliente no responde
+  // en 30s continuamos de todas formas (el retry de app.js lo cubrirá).
+  try {
+    await Promise.race([
+      ytMusicReadyPromise(),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('warmup timeout')), 30000)),
+    ]);
+    console.log('✅ Cliente YouTube Music inicializado y listo.');
+  } catch (e) {
+    console.warn(`⚠️  Cliente YouTube Music no listo al arrancar (${e.message}). Se reintentará en la primera búsqueda.`);
+  }
 
   app.listen(PORT, () => {
     console.log('=======================================================');

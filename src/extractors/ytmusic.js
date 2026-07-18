@@ -20,37 +20,64 @@ let _client = null;
 // que llegan en el arranque en frío. Evita crear múltiples instancias.
 let _initPromise = null;
 
-async function getClient() {
-  if (_client) return _client;
-  if (!_initPromise) {
-    _initPromise = (async () => {
-      try {
-        const c = new YTMusic();
-        await c.initialize();
-        _client = c;
-        return c;
-      } catch (err) {
-        _initPromise = null;
-        throw err;
-      }
-    })();
-  }
+// _readyPromise se resuelve la primera vez que el cliente queda disponible.
+// server.js puede hacer await readyPromise() para no abrir el puerto hasta que
+// el cliente esté listo, eliminando la ventana de vulnerabilidad de cold-start.
+let _readyResolve = null;
+const _readyPromise = new Promise((res) => { _readyResolve = res; });
+
+/** Exportamos para que server.js pueda esperar al cliente antes de app.listen(). */
+export function readyPromise() { return _readyPromise; }
+
+/**
+ * startInit() es el único lugar donde se crea un YTMusic().
+ * Garantiza:
+ *   - Un único _initPromise activo (mutex): ninguna llamada concurrente lanza
+ *     dos instancias paralelas.
+ *   - Si falla, limpia _initPromise ANTES de rechazar, de modo que el siguiente
+ *     llamador vuelve a entrar al bloque de creación sin que quede una Promise
+ *     rechazada atascada en el módulo.
+ */
+function startInit() {
+  if (_initPromise) return _initPromise;
+  _initPromise = (async () => {
+    try {
+      const c = new YTMusic();
+      await c.initialize();
+      _client = c;
+      _readyResolve(c);   // desbloquea a server.js (y a cualquier await readyPromise())
+      return c;
+    } catch (err) {
+      // Limpiar ANTES de rechazar: evita que llamadas concurrentes al catch de
+      // getClientSafe vean _initPromise != null y salten el reintento.
+      _initPromise = null;
+      throw err;
+    }
+  })();
   return _initPromise;
 }
 
-// Reintentar si el cliente falla (p.ej. error en inicialización).
+async function getClient() {
+  if (_client) return _client;
+  return startInit();
+}
+
+/**
+ * getClientSafe() — igual que getClient() pero con reintento atómico ante fallo.
+ * Si getClient() rechaza, limpia el estado y llama a startInit() de nuevo.
+ * Usar startInit() en el catch (en vez de new YTMusic() directamente) garantiza
+ * que dos llamadas concurrentes al catch comparten una única Promise de reintento
+ * (sin doble instancia).
+ */
 async function getClientSafe() {
   try {
     return await getClient();
   } catch {
-    // Reinicializar: limpiar la Promise para intentar de nuevo en la siguiente llamada.
+    // Estado limpio garantizado por startInit() (ya lo borra en su propio catch),
+    // pero por seguridad explicitamos el reset aquí también.
     _client = null;
     _initPromise = null;
-    const c = new YTMusic();
-    await c.initialize();
-    _client = c;
-    _initPromise = Promise.resolve(c);
-    return c;
+    return startInit();
   }
 }
 
@@ -554,6 +581,7 @@ export async function searchAllYTMusic(query, limit = 20) {
 export function createYTMusicSearchAll() { return (query, limit) => searchAllYTMusic(query, limit); }
 
 // Eager initialization on module load.
-// Guardamos la Promise para que el endpoint de búsqueda pueda esperar al
-// cliente sin depender exclusivamente del timeout de metadataService.
-getClientSafe().catch(() => {});
+// startInit() arranca la inicialización inmediatamente al importar el módulo,
+// de modo que cuando llegue la primera búsqueda el cliente ya puede estar listo.
+// Errores silenciados: el reintento ocurre en la próxima llamada a getClientSafe().
+startInit().catch(() => {});
