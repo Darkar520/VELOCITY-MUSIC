@@ -134,11 +134,11 @@ export function createApp(deps = {}) {
         'Content-Security-Policy',
         [
           "default-src 'self'",
-          "script-src 'self'",
-          "style-src 'self' 'unsafe-inline'", // Tailwind/Vite inyectan estilos inline
+          "script-src 'self' 'sha256-zvt1Rdu4aXcM4KAXFxTpomJDII7RciJhJ0v6GT4Ht4Y='", // hash del inline script de registro del SW en public/index.html — si ese script cambia, actualizar este hash
+          "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com", // Tailwind/Vite inyectan estilos inline; Google Fonts via @import en constants.js
           "img-src 'self' data: blob: https:",
           "media-src 'self' https: blob: data:",
-          "font-src 'self' data:",
+          "font-src 'self' data: https://fonts.gstatic.com", // archivos .woff2 de Google Fonts
           "connect-src 'self' https://oauth2.googleapis.com https://lrclib.net https://api.lyrics.ovh",
           "frame-ancestors 'self'",
           "base-uri 'self'",

@@ -135,6 +135,13 @@ export function DetailView({ view, T, play, addToTarget, onMenu, goArtist, goAlb
         </div>
         {detailLoading && !d ? (
           <div style={{ display:'flex', justifyContent:'center', padding:'40px 0' }}><Spinner c={T.accent} sz={24} /></div>
+        ) : !detailLoading && (!d || d.error) ? (
+          <div style={{ textAlign:'center', padding:'40px 20px' }}>
+            <div style={{ fontSize:32, marginBottom:12 }}>😕</div>
+            <div style={{ fontSize:14, fontWeight:700, color:'var(--txt-0)', marginBottom:6 }}>No se pudo cargar este artista</div>
+            <div style={{ fontSize:12, color:'var(--txt-2)', marginBottom:20, lineHeight:1.5 }}>Puede ser un problema de conexión o que el servidor esté iniciando. Inténtalo de nuevo.</div>
+            <button onClick={() => goArtist(view.artistId, view.name)} className="btn-tap" style={{ background:grad(T), border:'none', borderRadius:99, padding:'10px 24px', cursor:'pointer', color:'#04060a', fontSize:13, fontWeight:800 }}>Reintentar</button>
+          </div>
         ) : (
           <>
             {albums.length > 0 && <>

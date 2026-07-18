@@ -90,7 +90,7 @@ export function AuthScreen({ onAuthed, T }) {
 
   return (
     <div style={{ minHeight:'100dvh', background:`radial-gradient(circle at 30% 0%, #0d1320, #04060a 60%)`, display:'flex', alignItems:'center', justifyContent:'center', padding:20, fontFamily:'Inter,sans-serif' }}>
-      <div className="fade-up" style={{ width:'min(420px, 100%)', background:'var(--surf-0)', border:'1px solid var(--line)', borderRadius:28, padding:'34px 28px', boxShadow:`0 30px 90px #000c, 0 0 40px ${hex2rgba(T.accent,.1)}` }}>
+      <main role="main" aria-label="Inicio de sesión" className="fade-up" style={{ width:'min(420px, 100%)', background:'var(--surf-0)', border:'1px solid var(--line)', borderRadius:28, padding:'34px 28px', boxShadow:`0 30px 90px #000c, 0 0 40px ${hex2rgba(T.accent,.1)}` }}>
         <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:26 }}>
           <div style={{ width:46, height:46, borderRadius:14, background:grad(T), display:'flex', alignItems:'center', justifyContent:'center', boxShadow:`0 6px 20px ${hex2rgba(T.accent,.5)}` }}><Icon.Play c="#04060a" sz={22} /></div>
           <div>
@@ -145,7 +145,7 @@ export function AuthScreen({ onAuthed, T }) {
             {mode==='login' ? 'Regístrate' : 'Inicia sesión'}
           </button>
         </div>
-      </div>
+      </main>
     </div>
   );
 }

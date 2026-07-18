@@ -1199,7 +1199,9 @@ export default function App() {
       });
       return own.length ? own : tracks.slice(0, 8);
     };
-    const fallback = () => api.search(name).then((raw) => setDetailData({ type:'artist', name, topSongs: filterArtistTracks(raw, name), albums: [] })).catch(() => {});
+    const fallback = () => api.search(name)
+      .then((raw) => setDetailData({ type:'artist', name, topSongs: filterArtistTracks(raw, name), albums: [] }))
+      .catch(() => { setDetailData({ type:'artist', name, topSongs: [], albums: [], error: true }); });
     if (!artistId) { fallback().finally(() => setDetailLoading(false)); return; }
     api.artist(artistId)
       .then((d) => {
@@ -1763,12 +1765,42 @@ export default function App() {
 
         // Pause externo: la machine decide (yield honesto en background,
         // soft-kick en foreground). Nada de re-play oculto aquí (A7/A14).
-        dispatchAudio({
-          type: 'EXTERNAL_PAUSE',
-          hidden: !isDocumentVisible(),
-          selfPause: selfPauseRef.current,
-          position: a.currentTime || 0,
-        });
+        //
+        // Race condition iOS/Android: en algunos dispositivos el evento 'pause'
+        // del <audio> llega ANTES de que visibilitychange ponga hidden=true
+        // (ventana de hasta ~300ms). Si despachamos EXTERNAL_PAUSE con hidden=false,
+        // shouldYieldOnExternalPause devuelve false y no se ancla → al volver
+        // visible tryResume dispara DOC_VISIBLE sin yield → play() falla en iOS
+        // (NotAllowedError background). Fix: si el doc aún es visible, diferir
+        // 300ms para que visibilitychange llegue y re-evaluar hidden.
+        const dispatchExternalPause = (hidden) => {
+          // Re-verificar que el pause sigue siendo externo y el intent sigue activo.
+          if (getMachine().intent !== 'play') return;
+          if (!isExternalPause({
+            selfPause: selfPauseRef.current,
+            pendingFade: pendingFadeRef.current,
+            userWantsPlay: true,
+            audioEnded: audioRef.current?.ended ?? false,
+          })) return;
+          dispatchAudio({
+            type: 'EXTERNAL_PAUSE',
+            hidden,
+            selfPause: selfPauseRef.current,
+            position: audioRef.current?.currentTime || 0,
+          });
+        };
+
+        if (!isDocumentVisible()) {
+          // Doc ya oculto: path normal, yield inmediato.
+          dispatchExternalPause(true);
+        } else {
+          // Doc aún visible: posible race condition iOS. Diferir 300ms y
+          // re-evaluar hidden. Si para entonces el audio reanudó (ej. ducking
+          // resuelto), el chequeo isExternalPause lo descarta automáticamente.
+          setTimeout(() => {
+            dispatchExternalPause(!isDocumentVisible());
+          }, 300);
+        }
       }}
       onError={handleAudioError}
       onEnded={() => {
@@ -1835,7 +1867,7 @@ export default function App() {
         <div style={{ position:'absolute', top:-120, left:'40%', width:520, height:320, background:grad(T), filter:'blur(120px)', opacity:.12, pointerEvents:'none', zIndex:0 }} />
         <div style={{ flex:1, display:'flex', overflow:'hidden', position:'relative', zIndex:1 }}>
           <Sidebar tab={tab} setTab={setTab} nav={NAV} T={T} playlists={playlists} setOpenPlaylist={setOpenPlaylist} setView={setView} />
-          <main style={{ flex:1, overflowY:'auto' }}>
+          <main role="main" aria-label="Aplicación" style={{ flex:1, overflowY:'auto' }}>
             <div style={{ maxWidth:1080, margin:'0 auto', padding:'30px 38px 40px' }}>{Content}</div>
           </main>
         </div>
@@ -1852,7 +1884,7 @@ export default function App() {
       {audioEl}
       <div style={{ position:'absolute', top:-60, left:'50%', transform:'translateX(-50%)', width:300, height:200, background:grad(T), filter:'blur(70px)', opacity:.16, pointerEvents:'none', zIndex:0 }} />
       <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', paddingTop:'calc(env(safe-area-inset-top, 12px) + 8px)', position:'relative', zIndex:1 }}>
-        <div style={{ flex:1, overflowY:'auto', overflowX:'hidden', padding:'4px 18px 0', width:'100%', boxSizing:'border-box' }}>{Content}</div>
+        <main role="main" aria-label="Aplicación" style={{ flex:1, overflowY:'auto', overflowX:'hidden', padding:'4px 18px 0', width:'100%', boxSizing:'border-box' }}>{Content}</main>
 
         {track && (
           <div style={{ padding:'8px 14px 6px' }}>

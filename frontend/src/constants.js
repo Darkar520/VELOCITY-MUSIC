@@ -7,7 +7,7 @@ export const CSS = `
   :root {
     --bg-0:#04060a; --bg-1:#080c12; --surf-0:#0b0f16; --surf-1:#10151e; --surf-2:#161c27;
     --line:#ffffff10; --line-soft:#ffffff08;
-    --txt-0:#f4f7fb; --txt-1:#aab4c2; --txt-2:#5b6675; --txt-3:#3a4150;
+    --txt-0:#f4f7fb; --txt-1:#aab4c2; --txt-2:#7a8694; --txt-3:#737e8c;
   }
   *, *::before, *::after { box-sizing: border-box; }
   @keyframes fadeUp      { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:translateY(0); } }
@@ -54,7 +54,7 @@ export const CSS = `
 export const BASE_VARS = {
   '--bg-0':'#04060a', '--bg-1':'#080c12', '--surf-0':'#0b0f16', '--surf-1':'#10151e', '--surf-2':'#161c27',
   '--line':'#ffffff10', '--line-soft':'#ffffff08',
-  '--txt-0':'#f4f7fb', '--txt-1':'#aab4c2', '--txt-2':'#5b6675', '--txt-3':'#3a4150',
+  '--txt-0':'#f4f7fb', '--txt-1':'#aab4c2', '--txt-2':'#7a8694', '--txt-3':'#737e8c',
 };
 
 export const THEMES = {
