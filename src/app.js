@@ -307,11 +307,11 @@ export function createApp(deps = {}) {
     } catch (err) {
       if (err instanceof MetadataError) return res.status(err.status).json({ error: err.message });
       // Primer fallo puede ser cold-start del cliente de YTMusic (la inicialización
-      // tarda varios segundos). Reintentar una vez con una pausa corta: si el cliente
-      // ya terminó de inicializar, el segundo intento funciona sin que el usuario
+      // tarda varios segundos). Reintentar una vez con una pausa más generosa: si el
+      // cliente ya terminó de inicializar, el segundo intento funciona sin que el usuario
       // vea el error.
       try {
-        await new Promise((r) => setTimeout(r, 800));
+        await new Promise((r) => setTimeout(r, 2000));
         results = await doSearch();
       } catch (err2) {
         if (err2 instanceof MetadataError) return res.status(err2.status).json({ error: err2.message });
@@ -492,15 +492,16 @@ export function createApp(deps = {}) {
     const q = String(req.query.q || '').trim();
     if (!q) return res.status(400).json({ error: 'Falta el parámetro q.' });
     if (typeof searchAllImpl !== 'function') return res.status(501).json({ error: 'No disponible.' });
-    const doSearchAll = () => withTimeout(searchAllImpl(q, 20), 12000);
+    const doSearchAll = () => withTimeout(searchAllImpl(q, 20), 20000);
     let data;
     try {
       data = await doSearchAll();
     } catch {
       // Primer fallo puede ser cold-start del cliente de YTMusic. Reintentar una
-      // vez: si el cliente ya inicializó, el segundo intento funciona de inmediato.
+      // vez con pausa generosa: si el cliente ya inicializó, el segundo intento
+      // funciona de inmediato.
       try {
-        await new Promise((r) => setTimeout(r, 800));
+        await new Promise((r) => setTimeout(r, 2000));
         data = await doSearchAll();
       } catch {
         return res.status(502).json({ error: 'No se pudo buscar.' });

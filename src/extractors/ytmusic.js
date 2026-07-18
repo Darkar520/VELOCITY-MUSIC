@@ -145,6 +145,11 @@ function extractArtist(song) {
  * @returns {Promise<object[]>}
  */
 export async function searchYTMusic(query, limit = 20) {
+  // Si el cliente todavía está inicializando (cold-start), esperamos a que
+  // termine antes de intentar la búsqueda. Esto evita el race condition donde
+  // metadataService.withTimeout cancela la espera cuando initialize() todavía
+  // no ha completado, pero la Promise sigue viva y el siguiente intento obtiene
+  // el mismo _initPromise-ya-completado en lugar de poder reutilizarlo.
   const client = await getClientSafe();
   // searchSongs busca solo en el catálogo de canciones (no videos).
   const results = await client.searchSongs(query);
@@ -549,4 +554,6 @@ export async function searchAllYTMusic(query, limit = 20) {
 export function createYTMusicSearchAll() { return (query, limit) => searchAllYTMusic(query, limit); }
 
 // Eager initialization on module load.
+// Guardamos la Promise para que el endpoint de búsqueda pueda esperar al
+// cliente sin depender exclusivamente del timeout de metadataService.
 getClientSafe().catch(() => {});

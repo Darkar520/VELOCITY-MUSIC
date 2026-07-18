@@ -27,14 +27,18 @@ export function SearchTab({ T, play, addToTarget, onMenu, recentSearches, addSea
   const [relatedMixes, setRelatedMixes] = useState([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
+  const [slowWarning, setSlowWarning] = useState(false);
 
   useEffect(() => {
     const term = q.trim();
-    if (!term) { setRes({ songs: [], albums: [], artists: [] }); setErr(''); setLoading(false); return; }
-    setLoading(true); setErr('');
+    if (!term) { setRes({ songs: [], albums: [], artists: [] }); setErr(''); setLoading(false); setSlowWarning(false); return; }
+    setLoading(true); setErr(''); setSlowWarning(false);
     const ctrl = new AbortController();
     let alive = true;                                  // solo la búsqueda vigente actualiza la UI
     const aborted = (e) => e && (e.name === 'AbortError' || ctrl.signal.aborted);
+    // Aviso de lentitud: si el catálogo tarda más de 4s (probable cold-start), mostrar
+    // un mensaje para que el usuario sepa que no está roto.
+    const slowTimer = setTimeout(() => { if (alive) setSlowWarning(true); }, 4000);
     const id = setTimeout(async () => {
       // Intenta searchAll; si falla por algo transitorio, cae a search; y reintenta 1 vez.
       const attempt = async () => {
@@ -57,7 +61,7 @@ export function SearchTab({ T, play, addToTarget, onMenu, recentSearches, addSea
           data = await attempt();
         }
         if (!alive || ctrl.signal.aborted) return;
-        setRes(data); setErr('');
+        setRes(data); setErr(''); setSlowWarning(false);
         // Enriquecer carátulas de YouTube en background: no bloquea la UI.
         enrichTracksInBackground(data.songs, (id, coverUrl) => {
           const existing = trackById(id);
@@ -73,12 +77,19 @@ export function SearchTab({ T, play, addToTarget, onMenu, recentSearches, addSea
           }
         });
       } catch (e) {
-        if (!aborted(e) && alive) setErr('No se pudo buscar. Revisa tu conexión e inténtalo de nuevo.');
+        if (!aborted(e) && alive) {
+          // Distinguir error de catálogo (backend lento/no disponible) de error de red real.
+          const isCatalogError = e?.status === 502 || e?.status === 503;
+          setErr(isCatalogError
+            ? 'El catálogo tarda en responder. Inténtalo de nuevo en unos segundos.'
+            : 'No se pudo buscar. Revisa tu conexión e inténtalo de nuevo.');
+        }
       } finally {
-        if (alive && !ctrl.signal.aborted) setLoading(false);
+        clearTimeout(slowTimer);
+        if (alive && !ctrl.signal.aborted) { setLoading(false); setSlowWarning(false); }
       }
     }, 380);
-    return () => { alive = false; clearTimeout(id); ctrl.abort(); };
+    return () => { alive = false; clearTimeout(id); clearTimeout(slowTimer); ctrl.abort(); };
   }, [q]);
 
   const runGenre = (g) => { setQ(g.q); addSearch(g.label); };
@@ -150,6 +161,7 @@ export function SearchTab({ T, play, addToTarget, onMenu, recentSearches, addSea
       {q ? (
         <>
           {err && <div style={{ textAlign:'center', color:'#fb7185', fontSize:12.5, paddingTop:20 }}>{err}</div>}
+          {loading && slowWarning && <div style={{ textAlign:'center', color:'var(--txt-2)', fontSize:12, paddingTop:12 }}>Conectando con el catálogo de música, un momento…</div>}
           {!loading && !err && empty && <div style={{ textAlign:'center', color:'var(--txt-2)', fontSize:13, paddingTop:36 }}>Sin resultados para "{q}"</div>}
 
           {res.artists.length > 0 && (<>

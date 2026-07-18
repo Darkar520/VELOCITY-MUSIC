@@ -48,12 +48,27 @@ export const api = {
     } catch { return false; }
   },
   async search(q, signal) {
-    const data = await jsonOrThrow(await fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal, headers: authHeaders() }));
+    const attempt = () => fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal, headers: authHeaders() });
+    let res = await attempt();
+    // Reintento silencioso ante 502 (catálogo lento / cold-start del servidor).
+    // No reintentamos ante otros errores para no enmascarar problemas reales.
+    if (res.status === 502 && !(signal && signal.aborted)) {
+      await new Promise(r => setTimeout(r, 1500));
+      if (!(signal && signal.aborted)) res = await attempt();
+    }
+    const data = await jsonOrThrow(res);
     return data.results || [];
   },
   // Búsqueda combinada: { songs, albums, artists }
   async searchAll(q, signal) {
-    return jsonOrThrow(await fetch(`/api/search/all?q=${encodeURIComponent(q)}`, { signal, headers: authHeaders() }));
+    const attempt = () => fetch(`/api/search/all?q=${encodeURIComponent(q)}`, { signal, headers: authHeaders() });
+    let res = await attempt();
+    // Reintento silencioso ante 502 (catálogo lento / cold-start del servidor).
+    if (res.status === 502 && !(signal && signal.aborted)) {
+      await new Promise(r => setTimeout(r, 1500));
+      if (!(signal && signal.aborted)) res = await attempt();
+    }
+    return jsonOrThrow(res);
   },
   // URL base del proxy (sin firma). Preferir ensureStreamUrl para <audio>/descargas.
   // quality: 'high' | 'medium' | 'low' (mapeado desde la preferencia del usuario)

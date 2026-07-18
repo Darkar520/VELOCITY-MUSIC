@@ -12,7 +12,7 @@
  * Requisitos: 1.1–1.9
  */
 
-export const SEARCH_TIMEOUT_MS = 5000;
+export const SEARCH_TIMEOUT_MS = 15000;
 export const DEFAULT_LIMIT = 50;
 export const MAX_LIMIT = 100;
 export const MIN_LIMIT = 1;

@@ -193,7 +193,7 @@ export async function bootstrap() {
     // Catálogo: YouTube Music API (rápido, portadas de álbum, solo canciones).
     // Fallback a yt-dlp si ytmusic-api falla.
     catalogImpl: catalogWithFallback,
-    catalogTimeoutMs: 12000,
+    catalogTimeoutMs: 20000,
     resolveTimeoutMs: 95000, // 5 clientes YT(15s c/u) + backoff(7s) + SC(15s) + margen
     extractorImpl,
     artistImpl: createYTMusicArtist(),
