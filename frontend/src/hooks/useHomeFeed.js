@@ -67,7 +67,7 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
       (recent || []).slice(0, 40).join(','),
       pl, sp, dl,
       (recentSearches || []).slice(0, 8).join('|'),
-      Array.isArray(onboardPrefs) ? onboardPrefs.map((p) => p.q).join(',') : '',
+      Array.isArray(onboardPrefs) ? onboardPrefs.map((p) => p.q).join(',') : Array.isArray(onboardPrefs?.genres) ? onboardPrefs.genres.map((p) => p.q).join(',') : '',
     ].join('::');
   }, [favs, recent, playlists, savedPlaylists, effectiveDownloaded, recentSearches, onboardPrefs]);
 
@@ -90,7 +90,8 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
     const savedPls = [...(lib.savedPlaylists || [])];
     const dlIds = [...(downloadedRef.current || [])];
     const searches = [...new Set((recentSearches || []).map((s) => (s || '').trim()).filter(Boolean))].slice(0, 8);
-    const prefs = Array.isArray(onboardPrefs) ? onboardPrefs : [];
+    const prefs = Array.isArray(onboardPrefs) ? onboardPrefs : Array.isArray(onboardPrefs?.genres) ? onboardPrefs.genres : [];
+    const artistPrefs = Array.isArray(onboardPrefs?.artists) ? onboardPrefs.artists : [];
 
     const score = {};
     recentIds.forEach((id, i) => { score[id] = (score[id] || 0) + Math.max(1, 14 - i * 0.35); });
@@ -227,7 +228,7 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
         list = list.map((m) => ({
           ...m,
           tracks: m.tracks.filter((t) => !usedIDs.has(t.id)),
-        })).filter((m) => m.tracks.length >= MIN_MIX);
+        })).filter((m) => m.tracks.length >= 10);
         if (!list.length) return;
         addUsed(list);
         sections.push({ section, mixes: list });
@@ -368,22 +369,31 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
           ...favIds.slice(0, 12).map(trackById).filter(Boolean),
           ...recentIds.slice(0, 12).map(trackById).filter(Boolean),
         ]), 8);
-        const disc = await buildDiscoveryMixes(discSeeds, 8);
+        const disc = await buildDiscoveryMixes(discSeeds, 12);
         pushRich('Descubrimiento para ti', disc, { prefix: 'Descubre' });
       }
 
       // ═══ 10) GÉNEROS a fondo (multi) ═══
-      if (prefs.length && alive()) {
+      if (prefs.length && alive() && sections.length >= 2) {
         const genreMixes = clean(await mapPool(
           prefs.slice(0, 10),
           RADIO_CONCURRENCY,
           (p) => mixFromQueryDeep(p.label, p.q),
         ));
+        // Si hay artistas preferidos del onboarding, añadir mixes extra
+        if (artistPrefs.length) {
+          const artistMixesExtra = clean(await mapPool(
+            artistPrefs.slice(0, 6),
+            RADIO_CONCURRENCY,
+            (a) => mixFromSearch(a.name, a.name),
+          ));
+          genreMixes.push(...artistMixesExtra);
+        }
         pushRich('Tus géneros a fondo', genreMixes, { prefix: 'Género' });
       }
 
       // ═══ 11) ARTISTAS DE TU UNIVERSO ═══
-      if (alive()) {
+      if (alive() && sections.length >= 2) {
         const byArtist = new Map();
         for (const t of ranked.slice(0, 100)) {
           const k = artistKey(t);
@@ -396,7 +406,7 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
       }
 
       // ═══ 12) DNA musical — VARIOS clusters de semillas ═══
-      if (alive()) {
+      if (alive() && sections.length >= 2) {
         const pool = dedupeByTitle([
           ...seeds,
           ...favIds.slice(0, 12).map(trackById).filter(Boolean),
@@ -409,15 +419,15 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
           pick(pool, 5),
           pick(pool, 5),
         ].filter((c) => c.length >= 2);
-        const dnaMixes = clean(await mapPool(clusters, 1, async (cluster, idx) => {
+        const dnaMixes = clean(await mapPool(clusters, 2, async (cluster, idx) => {
           try {
-            const rels = await mapPool(cluster, RADIO_CONCURRENCY, (s) =>
-              api.radio(s.id, 50).catch(() => []),
+            const rels = await mapPool(cluster, 2, (s) =>
+              api.radio(s.id, 100).catch(() => []),
             );
             const tracks = capPerArtist(
               dedupeByTitle([...cluster, ...rels.flat().map(normalizeTrack)]),
               3,
-            ).filter((t) => t.id).slice(0, MIN_MIX_TRACKS);
+            ).filter((t) => t.id).slice(0, 80);
             if (tracks.length < 8) return null;
             const labels = ['Tu DNA musical', 'Tu firma sonora', 'Núcleo de gustos', 'Esencia personal'];
             return { label: labels[idx] || `DNA ${idx + 1}`, tracks };
@@ -427,7 +437,7 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
       }
 
       // ═══ 13) MÁS PROFUNDIDAD — varios ángulos ═══
-      if (alive()) {
+      if (alive() && sections.length >= 6) {
         const altA = pick(ranked.slice(0, 50), 6);
         const altB = pick(seeds, 6);
         const altC = pick(favIds.map(trackById).filter(Boolean), 6);
@@ -461,14 +471,14 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
       }
 
       // ═══ 14) MOODS — estados de ánimo ═══
-      if (alive() && sections.length < 14) {
+      if (alive() && sections.length >= 6) {
         const moods = pick(MOODS, 6);
         const moodMixes = clean(await mapPool(moods, RADIO_CONCURRENCY, (m) => mixFromSearch(m.label, m.q)));
         pushRich('Por cómo te sentís', moodMixes, { prefix: 'Mood' });
       }
 
       // ═══ 15) VIAJA EN EL TIEMPO ═══
-      if (alive() && sections.length < 14) {
+      if (alive() && sections.length >= 6) {
         const eras = pick(ERAS, 5);
         const eraMixes = clean(await mapPool(eras, RADIO_CONCURRENCY, (e) => mixFromSearch(e.label, e.q)));
         pushRich('Viaja en el tiempo', eraMixes, { prefix: 'Época' });

@@ -52,8 +52,8 @@ export function mixesByChunks(tracks, { size = 50, maxMixes = 6, prefix = 'Mix' 
   const out = [];
   for (let i = 0; i < list.length && out.length < maxMixes; i += size) {
     const chunk = list.slice(i, i + size);
-    if (chunk.length < 4 && out.length > 0) break;
-    if (chunk.length < 4) continue;
+    if (chunk.length < 10 && out.length > 0) break;
+    if (chunk.length < 10) continue;
     out.push({
       label: `${prefix} ${out.length + 1}`,
       tracks: chunk,
@@ -69,7 +69,7 @@ export function mixesByChunks(tracks, { size = 50, maxMixes = 6, prefix = 'Mix' 
  * 3) si no alcanza → devolver lo que haya (caller decide renombrar)
  */
 export function ensureManyMixes(mixes, { min = 3, max = 8, prefix = 'Selección' } = {}) {
-  const clean = (mixes || []).filter((m) => m && (m.tracks || []).length >= 4);
+  const clean = (mixes || []).filter((m) => m && (m.tracks || []).length >= 10);
   if (clean.length >= min) return clean.slice(0, max);
 
   if (clean.length === 1) {

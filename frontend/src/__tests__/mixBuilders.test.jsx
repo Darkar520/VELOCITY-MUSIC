@@ -84,14 +84,14 @@ describe('mixesByArtist', () => {
 
 describe('mixesByChunks', () => {
   it('parte en chunks de tamaño fijo', () => {
-    const tracks = mkTracks(20, 'mbc');
-    const mixes = mixesByChunks(tracks, { size: 5, maxMixes: 4 });
+    const tracks = mkTracks(60, 'mbc');
+    const mixes = mixesByChunks(tracks, { size: 15, maxMixes: 4 });
     expect(mixes).toHaveLength(4);
-    expect(mixes[0].tracks).toHaveLength(5);
+    expect(mixes[0].tracks).toHaveLength(15);
   });
   it('respeta maxMixes', () => {
     const tracks = mkTracks(50, 'mbcm');
-    const mixes = mixesByChunks(tracks, { size: 5, maxMixes: 3 });
+    const mixes = mixesByChunks(tracks, { size: 10, maxMixes: 3 });
     expect(mixes.length).toBeLessThanOrEqual(3);
   });
   it('array vacío → []', () => {
@@ -102,27 +102,27 @@ describe('mixesByChunks', () => {
 describe('ensureManyMixes', () => {
   it('ya hay ≥ min → devuelve tal cual', () => {
     const mixes = [
-      { label: 'A', tracks: mkTracks(5, 'em1') },
-      { label: 'B', tracks: mkTracks(5, 'em2') },
-      { label: 'C', tracks: mkTracks(5, 'em3') },
+      { label: 'A', tracks: mkTracks(12, 'em1') },
+      { label: 'B', tracks: mkTracks(12, 'em2') },
+      { label: 'C', tracks: mkTracks(12, 'em3') },
     ];
     expect(ensureManyMixes(mixes, { min: 3 })).toHaveLength(3);
   });
 
   it('1 mix con muchas tracks → expande por artista', () => {
-    const tracks = mkTracks(20, 'em4');
+    const tracks = mkTracks(30, 'em4');
     const one = [{ label: 'Big', tracks }];
     const r = ensureManyMixes(one, { min: 2 });
     expect(r.length).toBeGreaterThanOrEqual(2);
   });
 
-  it('filtra mixes con < 4 tracks', () => {
+  it('filtra mixes con < 10 tracks', () => {
     const mixes = [
-      { label: 'A', tracks: mkTracks(2, 'em5') },
-      { label: 'B', tracks: mkTracks(5, 'em6') },
+      { label: 'A', tracks: mkTracks(5, 'em5') },
+      { label: 'B', tracks: mkTracks(12, 'em6') },
     ];
     const r = ensureManyMixes(mixes, { min: 1 });
-    expect(r.every((m) => m.tracks.length >= 4)).toBe(true);
+    expect(r.every((m) => m.tracks.length >= 10)).toBe(true);
   });
 });
 
