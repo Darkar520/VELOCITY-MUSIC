@@ -31,14 +31,19 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
   const [onboardStep, setOnboardStep] = useState(1); // 1=géneros, 2=artistas
   const [artistSel, setArtistSel] = useState([]);
   const [artistSuggestions, setArtistSuggestions] = useState([]);
+  const [artistsLoading, setArtistsLoading] = useState(false);
+  const [relatedArtists, setRelatedArtists] = useState([]);
 
   // Paso 2: cargar artistas sugeridos en base a los géneros elegidos
   useEffect(() => {
-    if (onboardStep !== 2 || !onboardSel.length) return;
+    if (onboardStep !== 2) return;
+    setArtistsLoading(true);
+    setArtistSuggestions([]);
+    setRelatedArtists([]);
     let cancelled = false;
-    const seeds = onboardSel.slice(0, 6);
+    const seeds = onboardSel.slice(0, 10);
     Promise.allSettled(
-      seeds.map(g => api.searchAll(g.q).catch(() => ({ artists: [] })))
+      seeds.map(g => api.searchAll(g.q + ' artistas').catch(() => ({ artists: [] })))
     ).then(results => {
       if (cancelled) return;
       const seen = new Set();
@@ -52,9 +57,37 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
         }
       }
       setArtistSuggestions(artists.slice(0, 24));
+      setArtistsLoading(false);
     });
     return () => { cancelled = true; };
   }, [onboardStep, onboardSel]);
+  // Carga artistas relacionados cuando el usuario selecciona uno en el onboarding.
+  const fetchRelated = async (artist) => {
+    try {
+      const data = await api.artist(artist.artistId);
+      const songs = data.topSongs || [];
+      const seen = new Set([
+        ...artistSuggestions.map(a => a.artistId),
+        ...relatedArtists.map(a => a.artistId),
+        artist.artistId,
+      ]);
+      const newRelated = [];
+      for (const s of songs) {
+        if (!s.artistId || seen.has(s.artistId)) continue;
+        seen.add(s.artistId);
+        newRelated.push({ artistId: s.artistId, name: s.artist, thumbnail: s.cover });
+        if (newRelated.length >= 8) break;
+      }
+      if (newRelated.length > 0) {
+        setRelatedArtists(prev => {
+          const existing = new Set(prev.map(a => a.artistId));
+          const fresh = newRelated.filter(a => !existing.has(a.artistId));
+          return [...prev, ...fresh].slice(0, 20);
+        });
+      }
+    } catch { /* ignorar */ }
+  };
+
   // Recientes: ids de historial → catálogo; si faltan metas, rellenar con pistas del feed.
   const recentTracks = React.useMemo(() => {
     const fromHist = dedupeByTitle((recent || []).map(trackById).filter(Boolean));
@@ -111,33 +144,61 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
               <div style={{ fontSize:22, fontWeight:900, color:'var(--txt-0)', marginBottom:6 }}>¿Qué artistas te gustan?</div>
               <div style={{ fontSize:12.5, color:'var(--txt-2)', marginBottom:20 }}>Selecciona los que quieras — o sáltate este paso</div>
 
-              {artistSuggestions.length === 0 && (
+              {artistsLoading && artistSuggestions.length === 0 && (
                 <div style={{ display:'flex', justifyContent:'center', alignItems:'center', gap:10, padding:'24px 0', color:'var(--txt-2)' }}>
                   <Spinner c={T.accent} sz={20} /><span style={{ fontSize:12 }}>Buscando artistas…</span>
                 </div>
               )}
-
-              {artistSuggestions.length > 0 && (
-                <div style={{ display:'flex', flexWrap:'wrap', gap:14, justifyContent:'center', marginBottom:24,
-                  maxHeight:'55vh', overflowY:'auto' }}>
-                  {artistSuggestions.map(a => {
-                    const active = artistSel.some(s => s.artistId === a.artistId);
-                    return (
-                      <button key={a.artistId} onClick={() => setArtistSel(prev => active ? prev.filter(s => s.artistId !== a.artistId) : [...prev, a])} className="btn-tap press" style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:6, background:'none', border:'none', cursor:'pointer', padding:'4px 6px', width:80 }}>
-                        <div style={{ position:'relative' }}>
-                          <CoverImg src={a.thumbnail} alt={a.name} radius={999} size={56} style={{ width:56, height:56, boxShadow: active ? `0 0 0 2.5px ${T.accent}` : 'none', transition:'box-shadow .15s ease' }} />
-                          {active && (
-                            <div style={{ position:'absolute', bottom:0, right:0, width:18, height:18, borderRadius:'50%', background:T.accent, display:'flex', alignItems:'center', justifyContent:'center' }}>
-                              <Icon.Check c="#000" sz={11} />
-                            </div>
-                          )}
-                        </div>
-                        <span style={{ fontSize:11, fontWeight:600, color: active ? T.accent : 'var(--txt-1)', textAlign:'center', lineHeight:1.25, maxWidth:72, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{a.name}</span>
-                      </button>
-                    );
-                  })}
+              {!artistsLoading && artistSuggestions.length === 0 && (
+                <div style={{ padding:'24px 0', color:'var(--txt-2)', fontSize:12.5 }}>
+                  No encontramos sugerencias para tus géneros. Podés continuar igual.
                 </div>
               )}
+
+              {artistSuggestions.length > 0 && (() => {
+                const ArtistChip = (a) => {
+                  const active = artistSel.some(s => s.artistId === a.artistId);
+                  return (
+                    <button key={a.artistId} onClick={() => {
+                      if (active) {
+                        setArtistSel(prev => prev.filter(s => s.artistId !== a.artistId));
+                      } else {
+                        setArtistSel(prev => [...prev, a]);
+                        fetchRelated(a);
+                      }
+                    }} className="btn-tap press" style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:6, background:'none', border:'none', cursor:'pointer', padding:'4px 6px', width:80 }}>
+                      <div style={{ position:'relative' }}>
+                        <CoverImg src={a.thumbnail} alt={a.name} radius={999} size={56} style={{ width:56, height:56, boxShadow: active ? `0 0 0 2.5px ${T.accent}` : 'none', transition:'box-shadow .15s ease' }} />
+                        {active && (
+                          <div style={{ position:'absolute', bottom:0, right:0, width:18, height:18, borderRadius:'50%', background:T.accent, display:'flex', alignItems:'center', justifyContent:'center' }}>
+                            <Icon.Check c="#000" sz={11} />
+                          </div>
+                        )}
+                      </div>
+                      <span style={{ fontSize:11, fontWeight:600, color: active ? T.accent : 'var(--txt-1)', textAlign:'center', lineHeight:1.25, maxWidth:72, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{a.name}</span>
+                    </button>
+                  );
+                };
+                return (
+                  <div style={{ marginBottom:24, maxHeight:'60vh', overflowY:'auto' }}>
+                    <div style={{ display:'flex', flexWrap:'wrap', gap:14, justifyContent:'center' }}>
+                      {artistSuggestions.map(ArtistChip)}
+                    </div>
+                    {relatedArtists.length > 0 && (
+                      <>
+                        <div style={{ display:'flex', alignItems:'center', gap:8, margin:'18px 0 12px', padding:'0 4px' }}>
+                          <div style={{ flex:1, height:1, background:'var(--line-soft)' }} />
+                          <span style={{ fontSize:10, fontWeight:700, color:'var(--txt-3)', letterSpacing:1.5, textTransform:'uppercase' }}>Relacionados</span>
+                          <div style={{ flex:1, height:1, background:'var(--line-soft)' }} />
+                        </div>
+                        <div style={{ display:'flex', flexWrap:'wrap', gap:14, justifyContent:'center' }}>
+                          {relatedArtists.map(ArtistChip)}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
 
               <div style={{ display:'flex', gap:10, justifyContent:'center' }}>
                 <button onClick={() => setOnboardStep(1)} className="btn-tap" style={{ padding:'12px 22px', borderRadius:99, border:'1.5px solid var(--line)', background:'var(--surf-1)', color:'var(--txt-1)', fontSize:14, fontWeight:700, cursor:'pointer' }}>
@@ -147,8 +208,8 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
                   Empezar
                 </button>
               </div>
-              <button onClick={() => setOnboardPrefs({ genres: onboardSel, artists: [] })} style={{ background:'none', border:'none', color:'var(--txt-3)', fontSize:12, cursor:'pointer', marginTop:12, textDecoration:'underline' }}>
-                Omitir
+              <button onClick={() => setOnboardPrefs({ genres: onboardSel, artists: [] })} className="btn-tap" style={{ background:'transparent', border:`1px solid var(--line)`, borderRadius:99, padding:'7px 18px', color:'var(--txt-2)', fontSize:11.5, fontWeight:600, cursor:'pointer', marginTop:10, letterSpacing:.3 }}>
+                Omitir este paso
               </button>
             </>
           )}

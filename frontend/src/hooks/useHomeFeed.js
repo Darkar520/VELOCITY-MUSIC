@@ -266,7 +266,7 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
       // ═══ 2) BIBLIOTECA LOCAL multi-mix ═══
       {
         const favMix = favArtistMixes(favIds);
-        if (favMix.length) pushRich('De tus Me gusta', favMix, { min: 4, prefix: 'Like' });
+        if (favMix.length) pushRich('De tus Me gusta', favMix, { min: 2, prefix: 'Like' });
       }
       if (pls.length && alive()) {
         const plm = clean(await mapPool(pls.slice(0, 12), RADIO_CONCURRENCY, expandedPlaylistMix));

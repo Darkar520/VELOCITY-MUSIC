@@ -79,12 +79,12 @@ export function ensureManyMixes(mixes, { min = 3, max = 8, prefix = 'Selección'
     const chunks = mixesByChunks(all, { size: 100, maxMixes: max, prefix });
     if (chunks.length >= 2) return chunks;
     // último recurso: rebanar en 2 aunque queden cortos
-    if (all.length >= 8) {
+    if (all.length >= 20) {
       const mid = Math.floor(all.length / 2);
       return [
         { label: `${prefix} A`, tracks: all.slice(0, mid) },
         { label: `${prefix} B`, tracks: all.slice(mid) },
-      ].filter((m) => m.tracks.length >= 4);
+      ].filter((m) => m.tracks.length >= 10);
     }
   }
 
