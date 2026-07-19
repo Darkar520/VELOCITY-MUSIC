@@ -34,7 +34,10 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
   const [artistsLoading, setArtistsLoading] = useState(false);
   const [relatedArtists, setRelatedArtists] = useState([]);
 
-  // Paso 2: cargar artistas sugeridos en base a los géneros elegidos
+  // Paso 2: cargar artistas sugeridos en base a los géneros elegidos.
+  // Estrategia: extraer artistas únicos de las canciones devueltas por cada
+  // búsqueda de género. searchArtists() de YouTube Music requiere un nombre
+  // concreto — no sirve para consultas de género — por eso usamos songs[].
   useEffect(() => {
     if (onboardStep !== 2) return;
     setArtistsLoading(true);
@@ -43,18 +46,37 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
     let cancelled = false;
     const seeds = onboardSel.slice(0, 10);
     Promise.allSettled(
-      seeds.map(g => api.searchAll(g.q + ' artistas').catch(() => ({ artists: [] })))
+      seeds.map(g => api.searchAll(g.q).catch(() => ({ songs: [], albums: [], artists: [] })))
     ).then(results => {
       if (cancelled) return;
-      const seen = new Set();
+      // Clave de dedup: artistId cuando existe, o nombre normalizado.
+      const seenKey = new Set();
       const artists = [];
       for (const r of results) {
         if (r.status !== 'fulfilled') continue;
-        for (const a of (r.value?.artists || [])) {
-          if (!a?.artistId || seen.has(a.artistId)) continue;
-          seen.add(a.artistId);
-          artists.push({ artistId: a.artistId, name: a.name, thumbnail: a.thumbnail });
+        const data = r.value || {};
+        // Primero los artists[] directos (a veces presentes para artistas concretos).
+        for (const a of (data.artists || [])) {
+          if (!a?.name) continue;
+          const key = a.artistId || a.name.toLowerCase().replace(/\s+/g, '');
+          if (seenKey.has(key)) continue;
+          seenKey.add(key);
+          artists.push({ artistId: a.artistId || null, name: a.name, thumbnail: a.thumbnail || null });
         }
+        // Fuente principal: extraer artistas de las canciones del género.
+        for (const s of (data.songs || [])) {
+          if (!s?.artist) continue;
+          const key = s.artistId || s.artist.toLowerCase().replace(/\s+/g, '');
+          if (seenKey.has(key)) continue;
+          seenKey.add(key);
+          artists.push({
+            artistId: s.artistId || null,
+            name: s.artist,
+            thumbnail: s.cover || null, // cover de la canción como avatar provisional
+          });
+          if (artists.length >= 36) break;
+        }
+        if (artists.length >= 36) break;
       }
       setArtistSuggestions(artists.slice(0, 24));
       setArtistsLoading(false);
@@ -62,30 +84,50 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
     return () => { cancelled = true; };
   }, [onboardStep, onboardSel]);
   // Carga artistas relacionados cuando el usuario selecciona uno en el onboarding.
+  // Si el artista tiene artistId usamos su perfil (topSongs). Si no, buscamos por
+  // nombre y extraemos artistas distintos del resultado — nunca lanzamos 400.
   const fetchRelated = async (artist) => {
     try {
-      const data = await api.artist(artist.artistId);
-      const songs = data.topSongs || [];
-      const seen = new Set([
-        ...artistSuggestions.map(a => a.artistId),
-        ...relatedArtists.map(a => a.artistId),
-        artist.artistId,
+      let relatedSongs = [];
+      if (artist.artistId) {
+        // Tenemos artistId: perfil del artista → topSongs
+        const data = await api.artist(artist.artistId);
+        relatedSongs = data.topSongs || [];
+      } else {
+        // Sin artistId: buscar canciones del artista por nombre y extraer otros artistas.
+        const data = await api.searchAll(artist.name).catch(() => ({ songs: [] }));
+        const target = (artist.name || '').toLowerCase().replace(/\s+/g, '');
+        relatedSongs = (data.songs || []).filter(s => {
+          const a = (s.artist || '').toLowerCase().replace(/\s+/g, '');
+          return a !== target; // excluir el mismo artista; queremos relacionados
+        });
+      }
+      // Construir conjunto de claves ya vistas (sugerencias + relacionados actuales + el seleccionado).
+      const seenAll = new Set([
+        ...artistSuggestions.map(a => a.artistId || a.name.toLowerCase().replace(/\s+/g, '')),
+        ...relatedArtists.map(a => a.artistId || a.name.toLowerCase().replace(/\s+/g, '')),
+        artist.artistId || artist.name.toLowerCase().replace(/\s+/g, ''),
       ]);
       const newRelated = [];
-      for (const s of songs) {
-        if (!s.artistId || seen.has(s.artistId)) continue;
-        seen.add(s.artistId);
-        newRelated.push({ artistId: s.artistId, name: s.artist, thumbnail: s.cover });
+      for (const s of relatedSongs) {
+        if (!s.artist) continue;
+        const key = s.artistId || s.artist.toLowerCase().replace(/\s+/g, '');
+        if (seenAll.has(key)) continue;
+        seenAll.add(key);
+        newRelated.push({ artistId: s.artistId || null, name: s.artist, thumbnail: s.cover || null });
         if (newRelated.length >= 8) break;
       }
       if (newRelated.length > 0) {
         setRelatedArtists(prev => {
-          const existing = new Set(prev.map(a => a.artistId));
-          const fresh = newRelated.filter(a => !existing.has(a.artistId));
+          const existingKeys = new Set(prev.map(a => a.artistId || a.name.toLowerCase().replace(/\s+/g, '')));
+          const fresh = newRelated.filter(a => {
+            const k = a.artistId || a.name.toLowerCase().replace(/\s+/g, '');
+            return !existingKeys.has(k);
+          });
           return [...prev, ...fresh].slice(0, 20);
         });
       }
-    } catch { /* ignorar */ }
+    } catch { /* ignorar — no romper el onboarding */ }
   };
 
   // Recientes: ids de historial → catálogo; si faltan metas, rellenar con pistas del feed.

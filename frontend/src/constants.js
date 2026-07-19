@@ -223,6 +223,16 @@ export const ONBOARDING_GENRES = [
   { label:'Blues', q:'blues classics' },
   { label:'Reggae', q:'reggae classics' },
   { label:'Dembow', q:'dembow 2025' },
+  { label:'Neo Soul', q:'neo soul hits' },
+  { label:'Drill', q:'uk drill music' },
+  { label:'Phonk', q:'phonk music 2024' },
+  { label:'Flamenco', q:'flamenco moderno' },
+  { label:'Bossa Nova', q:'bossa nova classics' },
+  { label:'Cumbia Villera', q:'cumbia villera argentina' },
+  { label:'Vallenato', q:'vallenato colombiano' },
+  { label:'Grupero', q:'musica grupera mexicana' },
+  { label:'Gospel', q:'gospel music' },
+  { label:'Alternativo', q:'alternative music 2024' },
 ];
 
 // Mixes por estado de ánimo / momento (se muestrean aleatoriamente cada vez).
