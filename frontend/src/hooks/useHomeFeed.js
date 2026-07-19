@@ -137,10 +137,23 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
         if (!seed?.id) return null;
         try {
           const rel = await api.radio(seed.id, 100);
-          const tracks = capPerArtist(
+          let tracks = capPerArtist(
             dedupeByTitle([seed, ...rel.map(normalizeTrack)]),
             8,
-          ).filter((t) => t.id).slice(0, limit);
+          ).filter((t) => t.id);
+          // Si quedan pocos tracks tras dedup/cap, pedir más radio para enriquecer.
+          // api.radio devuelve resultados distintos en cada llamada, así que la
+          // segunda pasada genuinamente puede aportar tracks nuevos.
+          if (tracks.length < 30) {
+            try {
+              const rel2 = await api.radio(seed.id, 100);
+              tracks = capPerArtist(
+                dedupeByTitle([seed, ...tracks, ...rel2.map(normalizeTrack)]),
+                8,
+              ).filter((t) => t.id);
+            } catch { /* ignorar — usar lo que ya tenemos */ }
+          }
+          tracks = tracks.slice(0, limit);
           return tracks.length >= MIN_MIX
             ? { label: seed.artist || seed.title || 'Mezcla', tracks }
             : null;
@@ -199,7 +212,10 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
       const buildDiscoveryMixes = async (baseTracks, max = 6) => {
         const bases = pick((baseTracks || []).filter(Boolean), max);
         if (!bases.length) return [];
-        const known = new Set([...recentIds, ...favIds, ...dlIds, ...bases.map((s) => s.id)]);
+        // Solo excluir las semillas propias, no todo el historial.
+        // El objetivo de Descubrimiento es variedad; filtrar recentIds/favIds dejaba
+        // muy pocos tracks cuando el usuario tiene mucho historial.
+        const known = new Set([...bases.map((s) => s.id)]);
         const mixes = clean(await mapPool(bases, RADIO_CONCURRENCY, async (s) => {
           try {
             const rel = await api.radio(s.id, 50);
@@ -250,7 +266,7 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
       // ═══ 2) BIBLIOTECA LOCAL multi-mix ═══
       {
         const favMix = favArtistMixes(favIds);
-        if (favMix.length) pushRich('De tus Me gusta', favMix, { prefix: 'Like' });
+        if (favMix.length) pushRich('De tus Me gusta', favMix, { min: 4, prefix: 'Like' });
       }
       if (pls.length && alive()) {
         const plm = clean(await mapPool(pls.slice(0, 12), RADIO_CONCURRENCY, expandedPlaylistMix));
@@ -284,7 +300,7 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
       // ═══ 3) HECHO PARA TI — varios radios de semillas ═══
       if (hasHistory && seeds.length && alive()) {
         const made = clean(await mapPool(seeds.slice(0, 10), RADIO_CONCURRENCY, (s) => mixFromSeed(s, MIN_MIX_TRACKS)));
-        pushRich('Hecho para ti', made, { prefix: 'Para ti' });
+        pushRich('Hecho para ti', made, { min: 4, prefix: 'Para ti' });
       }
 
       // ═══ 4) BÚSQUEDAS ═══
@@ -302,7 +318,7 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
             return m ? { ...m, label: cap1(base.artist || term) } : null;
           } catch { return null; }
         }));
-        pushRich('Inspirado en tus búsquedas', searchMixes, { prefix: 'Búsqueda' });
+        pushRich('Inspirado en tus búsquedas', searchMixes, { min: 4, prefix: 'Búsqueda' });
       }
 
       // ═══ 5) MOMENTO ACTUAL ═══
@@ -320,7 +336,7 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
         }
         if (fresh.length) {
           const mixes = clean(await mapPool(fresh.slice(0, 8), RADIO_CONCURRENCY, (s) => mixFromSeed(s, MIN_MIX_TRACKS)));
-          pushRich('Tu momento actual', mixes, { prefix: 'Ahora' });
+          pushRich('Tu momento actual', mixes, { min: 4, prefix: 'Ahora' });
         }
       }
 
@@ -328,7 +344,7 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
       if (seeds.length && alive()) {
         const bs = pick(seeds, 8);
         const mixes = clean(await mapPool(bs, RADIO_CONCURRENCY, (s) => mixFromSeed(s, MIN_MIX_TRACKS)));
-        pushRich('Porque te gusta', mixes, { prefix: 'Porque' });
+        pushRich('Porque te gusta', mixes, { min: 4, prefix: 'Porque' });
       }
 
       // ═══ 7) FAVORITOS EXPANDIDOS — un mix por fav seed ═══
@@ -340,7 +356,7 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
         }));
         // + locales por artista
         const local = favArtistMixes(favIds);
-        pushRich('Tus favoritos expandidos', [...mixes, ...local], { prefix: 'Favorito' });
+        pushRich('Tus favoritos expandidos', [...mixes, ...local], { min: 4, prefix: 'Favorito' });
       }
 
       // ═══ 8) MÁS COMO TUS PLAYLISTS ═══
@@ -359,7 +375,7 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
           const m = await mixFromSeed(seed, MIN_MIX_TRACKS);
           return m ? { ...m, label: 'Como ' + (playlist.name || 'tu playlist') } : null;
         }));
-        pushRich('Más como tus playlists', mixes, { prefix: 'Playlist+' });
+        pushRich('Más como tus playlists', mixes, { min: 4, prefix: 'Playlist+' });
       }
 
       // ═══ 9) DESCUBRIMIENTO multi ═══
@@ -370,7 +386,7 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
           ...recentIds.slice(0, 12).map(trackById).filter(Boolean),
         ]), 8);
         const disc = await buildDiscoveryMixes(discSeeds, 12);
-        pushRich('Descubrimiento para ti', disc, { prefix: 'Descubre' });
+        pushRich('Descubrimiento para ti', disc, { min: 4, prefix: 'Descubre' });
       }
 
       // ═══ 10) GÉNEROS a fondo (multi) ═══
@@ -402,7 +418,7 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
         }
         const topArtists = [...byArtist.values()].slice(0, 10);
         const artistMixes = clean(await mapPool(topArtists, RADIO_CONCURRENCY, (s) => mixFromSeed(s, MIN_MIX_TRACKS)));
-        pushRich('Artistas de tu universo', artistMixes, { prefix: 'Artista' });
+        pushRich('Artistas de tu universo', artistMixes, { min: 4, prefix: 'Artista' });
       }
 
       // ═══ 12) DNA musical — VARIOS clusters de semillas ═══
@@ -433,7 +449,7 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
             return { label: labels[idx] || `DNA ${idx + 1}`, tracks };
           } catch { return null; }
         }));
-        pushRich('Hecho solo para vos', dnaMixes, { prefix: 'DNA' });
+        pushRich('Hecho solo para vos', dnaMixes, { min: 4, prefix: 'DNA' });
       }
 
       // ═══ 13) MÁS PROFUNDIDAD — varios ángulos ═══
