@@ -59,7 +59,12 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
           const key = a.artistId || a.name.toLowerCase().replace(/\s+/g, '');
           if (seenKey.has(key)) continue;
           seenKey.add(key);
-          artists.push({ artistId: a.artistId || null, name: a.name, thumbnail: a.thumbnail || null });
+          artists.push({
+            artistId: a.artistId || null,
+            name: a.name,
+            thumbnail: a.thumbnail || null,
+            _key: key,
+          });
         }
         // Fuente principal: extraer artistas de las canciones del género.
         for (const s of (data.songs || [])) {
@@ -71,6 +76,7 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
             artistId: s.artistId || null,
             name: s.artist,
             thumbnail: s.artworkUrl || s.cover || null,
+            _key: key,
           });
           if (artists.length >= limit) break;
         }
@@ -159,6 +165,7 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
           artistId: s.artistId || null,
           name: s.artist,
           thumbnail: s.artworkUrl || s.cover || null,
+          _key: key,
         });
         if (newRelated.length >= 8) break;
       }
@@ -241,11 +248,11 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
 
               {artistSuggestions.length > 0 && (() => {
                 const ArtistChip = (a) => {
-                  const active = artistSel.some(s => s.artistId === a.artistId);
+                  const active = artistSel.some(s => (s._key || s.artistId) === (a._key || a.artistId));
                   return (
-                    <button key={a.artistId} onClick={() => {
+                    <button key={a._key || a.artistId || a.name} onClick={() => {
                       if (active) {
-                        setArtistSel(prev => prev.filter(s => s.artistId !== a.artistId));
+                        setArtistSel(prev => prev.filter(s => (s._key || s.artistId) !== (a._key || a.artistId)));
                       } else {
                         setArtistSel(prev => [...prev, a]);
                         fetchRelated(a);

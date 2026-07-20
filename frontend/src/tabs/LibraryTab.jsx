@@ -149,7 +149,7 @@ export function LibraryTab({ T, play, openPlaylist, setOpenPlaylist, addToTarget
         <>
           <SectionHeader label="Álbumes Guardados" accent={T.accent} />
           <div style={{ display:'flex', gap:15, overflowX:'auto', paddingBottom:6 }}>
-            {savedAlbums.map(a => <MediaCard key={a.albumId} cover={a.cover} title={a.name} subtitle={a.artist || 'Álbum'} T={T} onClick={() => goAlbum(a.albumId, a.name, a.artist, null, a.cover)} />)}
+            {[...savedAlbums].sort((a, b) => (a.name || '').localeCompare(b.name || '', 'es', { sensitivity: 'base' })).map(a => <MediaCard key={a.albumId} cover={a.cover} title={a.name} subtitle={a.artist || 'Álbum'} T={T} onClick={() => goAlbum(a.albumId, a.name, a.artist, null, a.cover)} />)}
           </div>
         </>
       )}

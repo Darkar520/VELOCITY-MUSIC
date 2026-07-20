@@ -127,7 +127,17 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
     const alive = () => myToken === feedTokenRef.current;
     setHomeLoading(true);
 
+    // Safety timeout: if the feed IIFE doesn't finish in 90s, unlock loading
+    // with whatever sections have been pushed so far.
+    const safetyTimer = setTimeout(() => {
+      if (alive()) {
+        feedSigRef.current = sig;
+        setHomeLoading(false);
+      }
+    }, 90000);
+
     (async () => {
+      try {
       const clean = (arr) => (arr || []).filter(Boolean);
       const vary = () => Math.floor(Date.now() / (6 * 3600 * 1000)) % 5;
       const VARY_SFXS = ['', ' hits', ' top songs', ' best', ' popular'];
@@ -300,7 +310,7 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
       // ═══ 3) HECHO PARA TI — varios radios de semillas ═══
       if (hasHistory && seeds.length && alive()) {
         const made = clean(await mapPool(seeds.slice(0, 10), RADIO_CONCURRENCY, (s) => mixFromSeed(s, MIN_MIX_TRACKS)));
-        pushRich('Hecho para ti', made, { min: 4, prefix: 'Para ti' });
+        pushRich('Hecho para ti', made, { min: sections.length < 3 ? 2 : 4, prefix: 'Para ti' });
       }
 
       // ═══ 4) BÚSQUEDAS ═══
@@ -336,7 +346,7 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
         }
         if (fresh.length) {
           const mixes = clean(await mapPool(fresh.slice(0, 8), RADIO_CONCURRENCY, (s) => mixFromSeed(s, MIN_MIX_TRACKS)));
-          pushRich('Tu momento actual', mixes, { min: 4, prefix: 'Ahora' });
+          pushRich('Tu momento actual', mixes, { min: sections.length < 3 ? 2 : 4, prefix: 'Ahora' });
         }
       }
 
@@ -344,7 +354,7 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
       if (seeds.length && alive()) {
         const bs = pick(seeds, 8);
         const mixes = clean(await mapPool(bs, RADIO_CONCURRENCY, (s) => mixFromSeed(s, MIN_MIX_TRACKS)));
-        pushRich('Porque te gusta', mixes, { min: 4, prefix: 'Porque' });
+        pushRich('Porque te gusta', mixes, { min: sections.length < 3 ? 2 : 4, prefix: 'Porque' });
       }
 
       // ═══ 7) FAVORITOS EXPANDIDOS — un mix por fav seed ═══
@@ -386,7 +396,7 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
           ...recentIds.slice(0, 12).map(trackById).filter(Boolean),
         ]), 8);
         const disc = await buildDiscoveryMixes(discSeeds, 12);
-        pushRich('Descubrimiento para ti', disc, { min: 4, prefix: 'Descubre' });
+        pushRich('Descubrimiento para ti', disc, { min: sections.length < 4 ? 2 : 4, prefix: 'Descubre' });
       }
 
       // ═══ 10) GÉNEROS a fondo (multi) ═══
@@ -501,8 +511,18 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
       }
 
       if (alive()) {
+        clearTimeout(safetyTimer);
         feedSigRef.current = sig;
         setHomeLoading(false);
+      }
+      } catch (err) {
+        // Unexpected error — unlock loading with whatever sections were pushed.
+        if (alive()) {
+          feedSigRef.current = sig;
+          setHomeLoading(false);
+        }
+      } finally {
+        clearTimeout(safetyTimer);
       }
     })();
   }, [authed, libReady, contentSig, feedNonce, setHomeRows, setHomeLoading, setFeedNonce]);
