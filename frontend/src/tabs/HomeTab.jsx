@@ -98,12 +98,16 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
       const artists = extractArtists(results, seenKey, 24);
       if (artists.length > 0) {
         setArtistSuggestions(prev => {
-          const existingKeys = new Set(prev.map(a => a.artistId || a.name.toLowerCase().replace(/\s+/g, '')));
-          const fresh = artists.filter(a => !existingKeys.has(a.artistId || a.name.toLowerCase().replace(/\s+/g, '')));
+          const existingKeys = new Set(prev.map(a => a._key || a.artistId || a.name.toLowerCase().replace(/\s+/g, '')));
+          const fresh = artists.filter(a => !existingKeys.has(a._key || a.artistId || a.name.toLowerCase().replace(/\s+/g, '')));
           return [...prev, ...fresh].slice(0, 24);
         });
         setArtistsLoading(false); // ocultar spinner en cuanto llega el primer lote
       }
+      // Si batch1 no produjo artistas y no hay batch2, cerrar el spinner aquí.
+      // Sin este guard, si todos los searchAll de batch1 devuelven vacío y
+      // batch2Seeds está vacío (≤3 géneros seleccionados), el spinner queda infinito.
+      if (artists.length === 0 && batch2Seeds.length === 0) setArtistsLoading(false);
     });
 
     // Lote 2: géneros restantes — añadir más artistas al grid ya visible
@@ -115,8 +119,8 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
         const moreArtists = extractArtists(results, seenKey, 24);
         if (moreArtists.length > 0) {
           setArtistSuggestions(prev => {
-            const existingKeys = new Set(prev.map(a => a.artistId || a.name.toLowerCase().replace(/\s+/g, '')));
-            const fresh = moreArtists.filter(a => !existingKeys.has(a.artistId || a.name.toLowerCase().replace(/\s+/g, '')));
+            const existingKeys = new Set(prev.map(a => a._key || a.artistId || a.name.toLowerCase().replace(/\s+/g, '')));
+            const fresh = moreArtists.filter(a => !existingKeys.has(a._key || a.artistId || a.name.toLowerCase().replace(/\s+/g, '')));
             return [...prev, ...fresh].slice(0, 36); // ampliar el grid con más artistas
           });
           setArtistsLoading(false); // por si el lote 1 no tuvo resultados
@@ -171,8 +175,8 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
       }
       if (newRelated.length > 0) {
         setRelatedArtists(prev => {
-          const existingKeys = new Set(prev.map(a => a.artistId || a.name.toLowerCase().replace(/\s+/g, '')));
-          const fresh = newRelated.filter(a => !existingKeys.has(a.artistId || a.name.toLowerCase().replace(/\s+/g, '')));
+          const existingKeys = new Set(prev.map(a => a._key || a.artistId || a.name.toLowerCase().replace(/\s+/g, '')));
+          const fresh = newRelated.filter(a => !existingKeys.has(a._key || a.artistId || a.name.toLowerCase().replace(/\s+/g, '')));
           return [...prev, ...fresh].slice(0, 20);
         });
       }
