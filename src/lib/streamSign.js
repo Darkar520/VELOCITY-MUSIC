@@ -1,7 +1,13 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
-/** TTL por defecto de un enlace de stream firmado (alineado a stream-cache ≈4h). */
-export const DEFAULT_STREAM_TTL_SECONDS = 4 * 3600;
+/**
+ * TTL por defecto de un enlace de stream firmado (23h).
+ * Nota: el TTL de la firma (23h) es deliberadamente mayor que el del caché
+ * de yt-dlp en streamCache.js (≈5h). Esto es correcto: si la URL subyacente
+ * expira antes de que expire la firma, handleAudioError re-resuelve la URL
+ * de forma automática. El TTL largo cubre sesiones largas sin re-firma.
+ */
+export const DEFAULT_STREAM_TTL_SECONDS = 23 * 3600;
 
 /**
  * Mensaje canónico para HMAC (orden fijo, UTF-8).

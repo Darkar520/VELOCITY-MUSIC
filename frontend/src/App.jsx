@@ -1002,7 +1002,9 @@ export default function App() {
       if (!nt) { el.removeAttribute('src'); return; }
       try {
         // Preferir firma ya en caché (síncrona); si no, ensure + warm.
-        let url = api.peekStreamUrl({ artist: nt.artist, title: nt.title, id: nt.id, quality: qParam }, 90);
+        // 300s de umbral: re-firma si quedan < 5 min en la URL cacheada.
+        // Evita que la siguiente pista arranque con una URL a punto de expirar.
+        let url = api.peekStreamUrl({ artist: nt.artist, title: nt.title, id: nt.id, quality: qParam }, 300);
         if (!url) url = await api.ensureStreamUrl({ artist: nt.artist, title: nt.title, id: nt.id, quality: qParam });
         if (cancelled || !el) return;
         if (el.getAttribute('src') !== url) { el.src = url; try { el.load(); } catch {} }
@@ -1685,6 +1687,39 @@ export default function App() {
         if ((systemPausedRef.current || mediaInterrupted) && a.paused) return;
         const ct = a.currentTime || 0; setTime(ct);
         if (ct > 0 && loadingAudio) setLoadingAudio(false);
+
+        // ── RE-FIRMA PROACTIVA: si la URL firmada expira en < 3 min, obtener
+        // una URL fresca y asignarla sin interrumpir la reproducción. ──
+        // Solo actuar si la pista está sonando y hay más de 30s reproducidos
+        // (evitar race con el arranque inicial).
+        const currentSrc = a.currentSrc || a.getAttribute('src') || '';
+        if (currentSrc && currentSrc.includes('exp=') && a.currentTime > 30 && playingRef.current) {
+          try {
+            const urlObj = new URL(currentSrc, location.href);
+            const expSec = Number(urlObj.searchParams.get('exp'));
+            const nowSec = Math.floor(Date.now() / 1000);
+            // Si quedan menos de 3 minutos (180s), re-firmar en background.
+            if (Number.isFinite(expSec) && expSec - nowSec < 180 && expSec > nowSec) {
+              if (!a._resignInFlight) {
+                a._resignInFlight = true;
+                const tk = trackRef.current;
+                const q = ({ high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' }[quality] || 'high');
+                api.ensureStreamUrl({
+                  artist: tk?.artist, title: tk?.title, id: tk?.id, quality: q,
+                  stream: (tk?.source === 'soundcloud' && tk?.stream) ? tk.stream : undefined,
+                }).then(freshUrl => {
+                  // Solo actualizar si la pista no cambió durante la re-firma.
+                  if (!a || trackRef.current?.id !== tk?.id || !playingRef.current) return;
+                  if (freshUrl && freshUrl !== currentSrc) {
+                    // Asignar la nueva URL sin interrumpir: NO llamar a.load().
+                    a.setAttribute('src', freshUrl);
+                    if (typeof setPlaySrc === 'function') setPlaySrc(freshUrl);
+                  }
+                }).catch(() => {}).finally(() => { if (a) a._resignInFlight = false; });
+              }
+            }
+          } catch { /* ignorar — no interrumpir reproducción por error de parsing */ }
+        }
       }}
       onLoadedMetadata={() => {
         setDur(audioRef.current?.duration || 0);
