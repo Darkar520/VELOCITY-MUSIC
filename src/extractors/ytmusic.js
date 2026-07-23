@@ -81,6 +81,44 @@ async function getClientSafe() {
   }
 }
 
+/**
+ * withClient(op) — ejecuta una operación de consulta contra el cliente y, si
+ * falla en un cliente YA INICIALIZADO, invalida el cliente, re-inicializa UNA
+ * vez y reintenta.
+ *
+ * Causa raíz que arregla: getClientSafe() solo re-inicializa cuando falla la
+ * INICIALIZACIÓN. Pero un cliente que inicializó bien puede quedar "vivo pero
+ * stale": su visitor-data / sesión anónima caduca, o YouTube responde 429/5xx
+ * de forma transitoria. En ese estado, client.searchSongs/getArtist/etc. lanzan
+ * y NADA re-inicializa el cliente: el mismo cliente stale se reutiliza en el
+ * retry del backend (2s) y en los reintentos del frontend, de modo que la
+ * búsqueda "no encuentra el artista / no se puede ejecutar" hasta que la
+ * condición transitoria desaparece sola. Este wrapper convierte ese fallo
+ * pegajoso en una re-inicialización transparente + un reintento.
+ *
+ * El reintento es único (bounded): si la re-inicialización o la 2ª consulta
+ * también fallan, se propaga el error (lo maneja la capa superior: retry del
+ * endpoint + fallback a yt-dlp/SoundCloud).
+ */
+async function withClient(op) {
+  const client = await getClientSafe();
+  try {
+    return await op(client);
+  } catch (err) {
+    // La consulta falló en un cliente aparentemente vivo → forzar cliente fresco.
+    _client = null;
+    _initPromise = null;
+    let fresh;
+    try {
+      fresh = await getClientSafe();
+    } catch {
+      // No se pudo re-inicializar: propagar el error ORIGINAL de la consulta.
+      throw err;
+    }
+    return op(fresh);
+  }
+}
+
 /** Elimina sufijos promocionales del título (Official Audio/Video, etc.) */
 function cleanTitle(raw) {
   if (!raw) return raw;
@@ -177,13 +215,14 @@ export async function searchYTMusic(query, limit = 20) {
   // metadataService.withTimeout cancela la espera cuando initialize() todavía
   // no ha completado, pero la Promise sigue viva y el siguiente intento obtiene
   // el mismo _initPromise-ya-completado en lugar de poder reutilizarlo.
-  const client = await getClientSafe();
-  // searchSongs busca solo en el catálogo de canciones (no videos).
-  const results = await client.searchSongs(query);
-  return results
-    .slice(0, limit)
-    .map(mapYTMusicSong)
-    .filter((t) => t.id && t.title);
+  return withClient(async (client) => {
+    // searchSongs busca solo en el catálogo de canciones (no videos).
+    const results = await client.searchSongs(query);
+    return results
+      .slice(0, limit)
+      .map(mapYTMusicSong)
+      .filter((t) => t.id && t.title);
+  });
 }
 
 /**
@@ -197,104 +236,107 @@ export function createYTMusicCatalog() {
 
 /** Perfil de artista: nombre, portada, canciones más escuchadas y álbumes. */
 export async function getArtistData(artistId) {
-  const client = await getClientSafe();
-  const a = await client.getArtist(artistId);
-  const artistName = a.name ?? null;
-  const key = normalizeText(artistName || '');
+  return withClient(async (client) => {
+    const a = await client.getArtist(artistId);
+    const artistName = a.name ?? null;
+    const key = normalizeText(artistName || '');
 
-  // Álbumes fiables: getArtist().topAlbums suele ser correcto. getArtistAlbums()
-  // a veces devuelve playlists/recomendaciones ajenas, así que reforzamos con una
-  // búsqueda directa y filtramos por artista coincidente, descartando playlists.
-  let albums = Array.isArray(a.topAlbums) ? a.topAlbums.slice() : [];
-  if (albums.length < 4 && artistName) {
-    try { const s = await client.searchAlbums(artistName); if (Array.isArray(s)) albums = albums.concat(s); } catch {}
-  }
-  if (albums.length < 2) {
-    try { const more = await client.getArtistAlbums(artistId); if (Array.isArray(more)) albums = albums.concat(more); } catch {}
-  }
-  const isAlbumId = (id) => typeof id === 'string' && !/^(VL|PL|RDCLAK)/.test(id);
-  const seenAlb = new Set();
-  const mappedAlbums = albums
-    .map(mapAlbumDetailed)
-    .filter((al) => al.albumId && isAlbumId(al.albumId))
-    // Solo álbumes cuyo artista normalizado sea exactamente el artista buscado,
-    // o al menos que el nombre del artista del perfil esté contenido de forma
-    // completa en el del álbum (evita "Anna Kavinsky" colar con semilla "Kavinsky").
-    .filter((al) => {
-      if (!key) return true;
-      const alArtist = normalizeText(al.artist || '');
-      // Coincidencia exacta o el artista del perfil empieza el del álbum.
-      return alArtist === key || alArtist.startsWith(key + ' ') || alArtist.split(/,\s*/).some(p => p === key);
-    })
-    .filter((al) => { if (seenAlb.has(al.albumId)) return false; seenAlb.add(al.albumId); return true; });
-
-  // Canciones: topSongs suele ser fiable. getArtistSongs a veces mete
-  // recomendaciones ajenas ("Dale Don Dale" en System of a Down). Filtramos
-  // siempre por coincidencia de artista y priorizamos el orden de topSongs.
-  let rawSongs = Array.isArray(a.topSongs) ? a.topSongs.slice() : [];
-  try {
-    const full = await client.getArtistSongs(artistId);
-    if (Array.isArray(full) && full.length) {
-      const seen = new Set(rawSongs.map((s) => s.videoId || s.id).filter(Boolean));
-      for (const s of full) {
-        const vid = s.videoId || s.id;
-        if (vid && seen.has(vid)) continue;
-        if (vid) seen.add(vid);
-        rawSongs.push(s);
-      }
+    // Álbumes fiables: getArtist().topAlbums suele ser correcto. getArtistAlbums()
+    // a veces devuelve playlists/recomendaciones ajenas, así que reforzamos con una
+    // búsqueda directa y filtramos por artista coincidente, descartando playlists.
+    let albums = Array.isArray(a.topAlbums) ? a.topAlbums.slice() : [];
+    if (albums.length < 4 && artistName) {
+      try { const s = await client.searchAlbums(artistName); if (Array.isArray(s)) albums = albums.concat(s); } catch {}
     }
-  } catch {}
-  const mappedSongs = rawSongs
-    .map(mapYTMusicSong)
-    .filter((s) => s.id && s.title)
-    .filter((s) => !key || artistNameMatches(s.artist, artistName));
-  // Deduplicar por título normalizado (misma canción, distintas subidas).
-  const seenTitle = new Set();
-  const topSongs = mappedSongs.filter((s) => {
-    const k = `${normalizeText(s.title)}|${normalizeText(s.artist)}`;
-    if (seenTitle.has(k)) return false;
-    seenTitle.add(k);
-    return true;
+    if (albums.length < 2) {
+      try { const more = await client.getArtistAlbums(artistId); if (Array.isArray(more)) albums = albums.concat(more); } catch {}
+    }
+    const isAlbumId = (id) => typeof id === 'string' && !/^(VL|PL|RDCLAK)/.test(id);
+    const seenAlb = new Set();
+    const mappedAlbums = albums
+      .map(mapAlbumDetailed)
+      .filter((al) => al.albumId && isAlbumId(al.albumId))
+      // Solo álbumes cuyo artista normalizado sea exactamente el artista buscado,
+      // o al menos que el nombre del artista del perfil esté contenido de forma
+      // completa en el del álbum (evita "Anna Kavinsky" colar con semilla "Kavinsky").
+      .filter((al) => {
+        if (!key) return true;
+        const alArtist = normalizeText(al.artist || '');
+        // Coincidencia exacta o el artista del perfil empieza el del álbum.
+        return alArtist === key || alArtist.startsWith(key + ' ') || alArtist.split(/,\s*/).some(p => p === key);
+      })
+      .filter((al) => { if (seenAlb.has(al.albumId)) return false; seenAlb.add(al.albumId); return true; });
+
+    // Canciones: topSongs suele ser fiable. getArtistSongs a veces mete
+    // recomendaciones ajenas ("Dale Don Dale" en System of a Down). Filtramos
+    // siempre por coincidencia de artista y priorizamos el orden de topSongs.
+    let rawSongs = Array.isArray(a.topSongs) ? a.topSongs.slice() : [];
+    try {
+      const full = await client.getArtistSongs(artistId);
+      if (Array.isArray(full) && full.length) {
+        const seen = new Set(rawSongs.map((s) => s.videoId || s.id).filter(Boolean));
+        for (const s of full) {
+          const vid = s.videoId || s.id;
+          if (vid && seen.has(vid)) continue;
+          if (vid) seen.add(vid);
+          rawSongs.push(s);
+        }
+      }
+    } catch {}
+    const mappedSongs = rawSongs
+      .map(mapYTMusicSong)
+      .filter((s) => s.id && s.title)
+      .filter((s) => !key || artistNameMatches(s.artist, artistName));
+    // Deduplicar por título normalizado (misma canción, distintas subidas).
+    const seenTitle = new Set();
+    const topSongs = mappedSongs.filter((s) => {
+      const k = `${normalizeText(s.title)}|${normalizeText(s.artist)}`;
+      if (seenTitle.has(k)) return false;
+      seenTitle.add(k);
+      return true;
+    });
+    return {
+      artistId,
+      name: artistName,
+      thumbnail: pickBestThumb(a.thumbnails),
+      topSongs,
+      albums: mappedAlbums,
+    };
   });
-  return {
-    artistId,
-    name: artistName,
-    thumbnail: pickBestThumb(a.thumbnails),
-    topSongs,
-    albums: mappedAlbums,
-  };
 }
 
 /** Álbum completo: metadatos + lista de pistas. */
 export async function getAlbumData(albumId) {
-  const client = await getClientSafe();
-  const al = await client.getAlbum(albumId);
-  const cover = pickBestThumb(al.thumbnails);
-  const tracks = (al.songs || []).map(s => {
-    const m = mapYTMusicSong(s);
-    if (!m.artworkUrl) m.artworkUrl = cover;
-    if (!m.album) m.album = al.name ?? null;
-    if (!m.albumId) m.albumId = albumId;
-    return m;
-  }).filter(s => s.id && s.title);
-  return {
-    albumId,
-    name: al.name ?? null,
-    artist: al.artist?.name ?? null,
-    artistId: al.artist?.artistId ?? null,
-    year: al.year ?? null,
-    cover,
-    tracks,
-  };
+  return withClient(async (client) => {
+    const al = await client.getAlbum(albumId);
+    const cover = pickBestThumb(al.thumbnails);
+    const tracks = (al.songs || []).map(s => {
+      const m = mapYTMusicSong(s);
+      if (!m.artworkUrl) m.artworkUrl = cover;
+      if (!m.album) m.album = al.name ?? null;
+      if (!m.albumId) m.albumId = albumId;
+      return m;
+    }).filter(s => s.id && s.title);
+    return {
+      albumId,
+      name: al.name ?? null,
+      artist: al.artist?.name ?? null,
+      artistId: al.artist?.artistId ?? null,
+      year: al.year ?? null,
+      cover,
+      tracks,
+    };
+  });
 }
 
 /** Letra nativa de YouTube Music por videoId (texto plano). */
 export async function getLyricsById(videoId) {
-  const client = await getClientSafe();
-  const lines = await client.getLyrics(videoId);
-  if (Array.isArray(lines) && lines.length) return lines.join('\n');
-  if (typeof lines === 'string' && lines.trim()) return lines;
-  return null;
+  return withClient(async (client) => {
+    const lines = await client.getLyrics(videoId);
+    if (Array.isArray(lines) && lines.length) return lines.join('\n');
+    if (typeof lines === 'string' && lines.trim()) return lines;
+    return null;
+  });
 }
 
 /** Convierte "m:ss"/"h:mm:ss" o número a segundos. */
@@ -356,60 +398,63 @@ function mapUpNext(s) {
  *  - Deduplicación estricta por videoId.
  */
 export async function getRadio(videoId, limit = 100) {
-  const client = await getClientSafe();
-  const seen = new Set();
-  const out = [];
+  return withClient(async (client) => {
+    const seen = new Set();
+    const out = [];
 
-  // Helpers de diversidad
-  const artistCount = new Map();
-  const MAX_PER_ARTIST = 5;
+    // Helpers de diversidad
+    const artistCount = new Map();
+    const MAX_PER_ARTIST = 5;
 
-  // Incorpora un lote de "Up Nexts" respetando unicidad, el límite y la
-  // diversidad de artistas.
-  const ingest = (ups) => {
-    for (const u of (Array.isArray(ups) ? ups : [])) {
-      if (out.length >= limit) break;
-      if (!u || !u.videoId) continue;
-      if (u.type && u.type !== 'SONG') continue;
-      if (seen.has(u.videoId)) continue;
-      const t = mapUpNext(u);
-      if (!t.id || !t.title) continue;
-      const artistKey = (t.artist || '').toLowerCase();
-      const count = artistCount.get(artistKey) || 0;
-      if (count >= MAX_PER_ARTIST) continue;
-      seen.add(u.videoId);
-      artistCount.set(artistKey, count + 1);
-      out.push(t);
+    // Incorpora un lote de "Up Nexts" respetando unicidad, el límite y la
+    // diversidad de artistas.
+    const ingest = (ups) => {
+      for (const u of (Array.isArray(ups) ? ups : [])) {
+        if (out.length >= limit) break;
+        if (!u || !u.videoId) continue;
+        if (u.type && u.type !== 'SONG') continue;
+        if (seen.has(u.videoId)) continue;
+        const t = mapUpNext(u);
+        if (!t.id || !t.title) continue;
+        const artistKey = (t.artist || '').toLowerCase();
+        const count = artistCount.get(artistKey) || 0;
+        if (count >= MAX_PER_ARTIST) continue;
+        seen.add(u.videoId);
+        artistCount.set(artistKey, count + 1);
+        out.push(t);
+      }
+    };
+
+    // Semilla principal. NO se traga el error: si el cliente está stale, el
+    // throw sube a withClient() para re-inicializar y reintentar (evita radios
+    // vacías por sesión caducada). Las expansiones secundarias sí toleran fallos.
+    ingest(await client.getUpNexts(videoId));
+
+    // Expansión del grafo: usar hasta 10 pistas como semillas secundarias.
+    // Se hace en paralelo para ser rápido; se ingestan en orden para mantener
+    // relevancia (las pistas más cercanas a la semilla primero).
+    if (out.length < limit) {
+      const secondary = out.slice(0, 10).map((t) => t.id).filter((id) => id && id !== videoId);
+      const batches = await Promise.all(secondary.map((id) => client.getUpNexts(id).catch(() => [])));
+      for (const b of batches) {
+        if (out.length >= limit) break;
+        ingest(b);
+      }
     }
-  };
 
-  // Semilla principal.
-  try { ingest(await client.getUpNexts(videoId)); } catch {}
-
-  // Expansión del grafo: usar hasta 10 pistas como semillas secundarias.
-  // Se hace en paralelo para ser rápido; se ingestan en orden para mantener
-  // relevancia (las pistas más cercanas a la semilla primero).
-  if (out.length < limit) {
-    const secondary = out.slice(0, 10).map((t) => t.id).filter((id) => id && id !== videoId);
-    const batches = await Promise.all(secondary.map((id) => client.getUpNexts(id).catch(() => [])));
-    for (const b of batches) {
-      if (out.length >= limit) break;
-      ingest(b);
+    // Si aún no llegamos al límite, hacer una segunda ronda con semillas de la
+    // parte media del grafo (distancia 2 desde la semilla original).
+    if (out.length < limit) {
+      const tertiary = out.slice(10, 20).map((t) => t.id).filter((id) => id && id !== videoId);
+      const batches2 = await Promise.all(tertiary.map((id) => client.getUpNexts(id).catch(() => [])));
+      for (const b of batches2) {
+        if (out.length >= limit) break;
+        ingest(b);
+      }
     }
-  }
 
-  // Si aún no llegamos al límite, hacer una segunda ronda con semillas de la
-  // parte media del grafo (distancia 2 desde la semilla original).
-  if (out.length < limit) {
-    const tertiary = out.slice(10, 20).map((t) => t.id).filter((id) => id && id !== videoId);
-    const batches2 = await Promise.all(tertiary.map((id) => client.getUpNexts(id).catch(() => [])));
-    for (const b of batches2) {
-      if (out.length >= limit) break;
-      ingest(b);
-    }
-  }
-
-  return out.slice(0, limit);
+    return out.slice(0, limit);
+  });
 }
 
 export function createYTMusicRadio() { return (videoId, limit) => getRadio(videoId, limit); }
@@ -421,20 +466,21 @@ export function createYTMusicRadio() { return (videoId, limit) => getRadio(video
  */
 export async function getSongById(videoId) {
   if (!videoId) return null;
-  const client = await getClientSafe();
-  const s = await client.getSong(videoId);
-  if (!s) return null;
-  return {
-    id: s.videoId ?? videoId,
-    title: cleanTitle(s.name ?? null),
-    artist: s.artist?.name ?? null,
-    artistId: s.artist?.artistId ?? null,
-    album: null,
-    albumId: null,
-    cover: pickBestThumb(s.thumbnails) || null,
-    durationSeconds: s.duration ?? null,
-    genre: null,
-  };
+  return withClient(async (client) => {
+    const s = await client.getSong(videoId);
+    if (!s) return null;
+    return {
+      id: s.videoId ?? videoId,
+      title: cleanTitle(s.name ?? null),
+      artist: s.artist?.name ?? null,
+      artistId: s.artist?.artistId ?? null,
+      album: null,
+      albumId: null,
+      cover: pickBestThumb(s.thumbnails) || null,
+      durationSeconds: s.duration ?? null,
+      genre: null,
+    };
+  });
 }
 
 export function createYTMusicSong() { return (videoId) => getSongById(videoId); }
@@ -527,12 +573,25 @@ export function rankSearchSongs(query, songs, artists = []) {
 
 /** Búsqueda combinada: canciones + álbumes + artistas (en paralelo). */
 export async function searchAllYTMusic(query, limit = 20) {
-  const client = await getClientSafe();
+  return withClient((client) => searchAllWithClient(client, query, limit));
+}
+
+// Exportada para test: recibe el `client` como parámetro (inyectable) y
+// contiene la lógica pura de combinar songs/álbumes/artistas + el invariante
+// "si las 3 sub-consultas fallan → lanzar".
+export async function searchAllWithClient(client, query, limit) {
   const [songsR, albumsR, artistsR] = await Promise.allSettled([
     client.searchSongs(query),
     client.searchAlbums(query),
     client.searchArtists(query),
   ]);
+  // Si las TRES sub-consultas fallan, el cliente/red está caído: lanzar para
+  // que withClient() re-inicialice y reintente, y si aun así falla, que el
+  // endpoint active su retry/fallback. Antes se devolvía {songs:[],albums:[],
+  // artists:[]} como éxito → la UI mostraba "Sin resultados" (engañoso).
+  if (songsR.status === 'rejected' && albumsR.status === 'rejected' && artistsR.status === 'rejected') {
+    throw songsR.reason || albumsR.reason || artistsR.reason || new Error('searchAll: todas las sub-consultas fallaron');
+  }
   let songs = songsR.status === 'fulfilled' ? songsR.value.slice(0, Math.max(limit, 30)).map(mapYTMusicSong).filter(t => t.id && t.title) : [];
   const albums = albumsR.status === 'fulfilled' ? albumsR.value.slice(0, 12).map(mapAlbumDetailed).filter(a => a.albumId) : [];
   const artists = artistsR.status === 'fulfilled' ? artistsR.value.slice(0, 12).map(mapArtistDetailed).filter(a => a.artistId) : [];

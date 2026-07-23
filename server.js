@@ -162,11 +162,25 @@ export async function bootstrap() {
   //    se lanza un solo yt-dlp y todas comparten el resultado.
   const resolveLimit = createLimiter(RESOLVE_CONCURRENCY);
   const resolveInflight = createInflight();
-  const baseExtractor = createYtDlpExtractor({
-    // SoundCloud como último recurso cuando ambos clientes YT fallan:
-    // busca la misma pista en SC como fallback de reproducción.
-    scFallback: createSoundCloudExtractor(),
-  });
+  // SoundCloud como ÚLTIMO recurso de reproducción: cuando los 5 clientes de
+  // YouTube fallan (throttling/bot-detection), buscamos la MISMA canción en
+  // SoundCloud (scsearch) y resolvemos su URL de stream. Esto hace real el
+  // fallback documentado (antes el extractor de SC exigía una URL `stream` que
+  // nunca recibía, así que no reproducía nada para pistas de YouTube Music).
+  const scSearch = createSoundCloudCatalog();
+  const scResolve = createSoundCloudExtractor();
+  const scSearchAndResolve = async ({ artist, title, quality }) => {
+    if (!artist || !title) return null;
+    try {
+      const hits = await scSearch(`${artist} ${title}`, 1);
+      const streamUrl = hits && hits[0] && (hits[0].streamUrl || hits[0].stream);
+      if (!streamUrl) return null;
+      return await scResolve({ stream: streamUrl, quality });
+    } catch {
+      return null;
+    }
+  };
+  const baseExtractor = createYtDlpExtractor({ scFallback: scSearchAndResolve });
   const extractorImpl = (args = {}) => {
     const q = args.quality ? `#${args.quality}` : '';
     const key = args.videoId
@@ -223,6 +237,14 @@ export async function bootstrap() {
           const hits = tokens.filter((w) => blob.includes(w)).length;
           return hits >= Math.min(2, tokens.length) || blob.includes(nq);
         }).slice(0, 5);
+        // Si YouTube Music falló por completo (incluso tras la auto-sanación de
+        // withClient) Y SoundCloud tampoco aportó nada, propagar el error para
+        // que el endpoint reintente (cold-start) y el frontend caiga a
+        // /api/search (catálogo con fallback a yt-dlp). Sin esto, un fallo total
+        // se mostraría como "Sin resultados" (engañoso) y no habría reintento.
+        if (ytData.status === 'rejected' && sc.length === 0) {
+          throw ytData.reason || new Error('searchAll: catálogo no disponible');
+        }
         return {
           songs: [...(yt.songs || []), ...sc],
           albums: yt.albums || [],
