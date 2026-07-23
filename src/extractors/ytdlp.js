@@ -109,8 +109,11 @@ export function createYtDlpExtractor({ scFallback } = {}) {
     const ytTarget = videoId
       ? `https://www.youtube.com/watch?v=${videoId}`
       : `ytsearch1:${artist} - ${title} (Official Audio)`;
+    // --force-ipv4: YouTube aplica bot-detection más agresiva sobre rangos IPv6
+    // de datacenter; forzar IPv4 reduce los 403/429 intermitentes que hacen que
+    // "la misma canción a veces reproduzca y a veces no".
     const baseArgs = ['-f', audioFormatSelector(quality), '-g', '--no-playlist',
-      '--extractor-retries', '2', '--socket-timeout', '15'];
+      '--force-ipv4', '--extractor-retries', '3', '--socket-timeout', '15'];
 
     for (let i = 0; i < YT_CLIENTS.length; i++) {
       const clientArgs = YT_CLIENTS[i];
@@ -127,8 +130,12 @@ export function createYtDlpExtractor({ scFallback } = {}) {
       if (url) return url;
     }
 
-    // Último recurso: SoundCloud para la misma búsqueda.
-    if (typeof scFallback === 'function' && !videoId) {
+    // Último recurso: SoundCloud para la misma pista. Se intenta SIEMPRE que
+    // haya artista+título, incluso si la pista tenía videoId de YouTube: cuando
+    // YouTube rechaza los 5 clientes (throttling/bot-detection), buscar la misma
+    // canción en SoundCloud permite que se reproduzca en lugar de fallar. El
+    // fallback busca+resuelve por artista/título (lo inyecta server.js).
+    if (typeof scFallback === 'function' && artist && title) {
       try {
         const scUrl = await scFallback({ artist, title, quality });
         if (scUrl) return scUrl;
