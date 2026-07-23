@@ -764,3 +764,95 @@ test('Regresión: cleanTitle elimina sufijos promocionales de YouTube', () => {
       `cleanTitle("${input}") debería ser "${expected}"`);
   }
 });
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 25. Bug búsqueda "no se pudo ejecutar" en el primer intento — searchAll no debe
+//     tragarse un fallo total como éxito vacío
+// ─────────────────────────────────────────────────────────────────────────────
+// Causa raíz: searchAllYTMusic usaba Promise.allSettled y, si las TRES sub-
+// consultas (songs/albums/artists) fallaban, devolvía {songs:[],albums:[],
+// artists:[]} como ÉXITO. La UI lo mostraba como "Sin resultados" y el retry /
+// fallback del backend NUNCA se activaba. El invariante correcto: si las tres
+// fallan → lanzar (para que withClient re-inicialice y, si aún falla, el
+// endpoint reintente con fallback a yt-dlp/SoundCloud).
+test('Regresión: searchAllWithClient lanza si las 3 sub-consultas fallan', async () => {
+  const { searchAllWithClient } = await import('../src/extractors/ytmusic.js');
+
+  const boom = () => Promise.reject(new Error('YT 429'));
+  const allFail = { searchSongs: boom, searchAlbums: boom, searchArtists: boom };
+  await assert.rejects(
+    () => searchAllWithClient(allFail, 'daft punk', 20),
+    /YT 429|fallaron/,
+    'con las 3 sub-consultas caídas debe lanzar, no devolver éxito vacío',
+  );
+});
+
+test('Regresión: searchAllWithClient tolera fallo parcial (solo songs OK)', async () => {
+  const { searchAllWithClient } = await import('../src/extractors/ytmusic.js');
+
+  const partial = {
+    searchSongs: async () => ([{ videoId: 'v1', name: 'Track', artists: [{ name: 'A' }] }]),
+    searchAlbums: () => Promise.reject(new Error('albums down')),
+    searchArtists: () => Promise.reject(new Error('artists down')),
+  };
+  const out = await searchAllWithClient(partial, 'track', 20);
+  assert.ok(Array.isArray(out.songs) && out.songs.length >= 1, 'debe devolver las canciones disponibles');
+  assert.deepEqual(out.albums, [], 'álbumes vacíos ante fallo de esa sub-consulta');
+  assert.deepEqual(out.artists, [], 'artistas vacíos ante fallo de esa sub-consulta');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 26. Auto-sanación del cliente stale (semántica de withClient de ytmusic.js)
+// ─────────────────────────────────────────────────────────────────────────────
+// Modela el contrato de withClient: si una consulta falla en un cliente ya
+// inicializado (stale), se re-inicializa el cliente UNA vez y se reintenta la
+// consulta. Un solo reintento acotado; si el 2º también falla, se propaga.
+test('Regresión: withClient re-inicializa una vez y reintenta ante consulta fallida', async () => {
+  let inits = 0;
+  let clientGen = 0;
+
+  // Cada init produce un cliente nuevo. El cliente gen-0 (stale) falla la
+  // consulta; el gen-1 (fresco) la resuelve.
+  const makeClient = () => { const gen = clientGen++; return { gen }; };
+  let current = null;
+  const getClientSafe = async () => { if (!current) { inits++; current = makeClient(); } return current; };
+
+  // Réplica exacta de la lógica de withClient(op) en ytmusic.js.
+  const withClient = async (op) => {
+    const client = await getClientSafe();
+    try {
+      return await op(client);
+    } catch (err) {
+      current = null;                 // invalidar cliente stale
+      let fresh;
+      try { fresh = await getClientSafe(); } catch { throw err; }
+      return op(fresh);
+    }
+  };
+
+  const query = (client) => {
+    if (client.gen === 0) throw new Error('sesión stale');  // primer cliente falla
+    return `ok-desde-gen-${client.gen}`;
+  };
+
+  const result = await withClient(query);
+  assert.equal(result, 'ok-desde-gen-1', 'debe resolver con el cliente re-inicializado');
+  assert.equal(inits, 2, 'debe inicializar exactamente 2 veces (inicial + 1 re-init)');
+});
+
+test('Regresión: withClient propaga el error si el reintento también falla', async () => {
+  let current = null;
+  const getClientSafe = async () => { if (!current) current = { gen: 0 }; return current; };
+  const withClient = async (op) => {
+    const client = await getClientSafe();
+    try { return await op(client); }
+    catch (err) {
+      current = null;
+      let fresh; try { fresh = await getClientSafe(); } catch { throw err; }
+      return op(fresh);
+    }
+  };
+  // La consulta SIEMPRE falla (outage real): debe propagar tras un único reintento.
+  await assert.rejects(() => withClient(() => { throw new Error('outage'); }), /outage/);
+});
