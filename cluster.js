@@ -50,7 +50,17 @@ if (!wantCluster) {
   console.log(`🔧 yt-dlp por worker: ${perWorker} (total ~${perWorker * workers})`);
   console.log('=======================================================');
 
+  // Escalonar el arranque de workers para evitar que todos sonden yt-dlp al
+  // mismo tiempo. En Windows, 8 procesos yt-dlp simultáneos en el bootstrap
+  // compiten por recursos y algunos son killed por el SO, dejando el worker
+  // permanentemente en modo degraded.
+  // Con WORKER_STAGGER_MS=500 (default) los workers arrancan de 500 en 500 ms;
+  // el coste total es (workers-1)*500 ms = ~3,5 s para 8 workers, aceptable.
+  const staggerMs = Number(process.env.WORKER_STAGGER_MS ?? 500);
   for (let i = 0; i < workers; i++) {
+    if (i > 0 && staggerMs > 0) {
+      await new Promise((r) => setTimeout(r, staggerMs));
+    }
     cluster.fork({ WORKER_RESOLVE_CONCURRENCY: String(perWorker), WORKER_ID: String(i) });
   }
   // Reponer workers caídos para mantener el servicio siempre arriba.

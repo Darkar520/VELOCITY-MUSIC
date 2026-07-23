@@ -69,8 +69,30 @@ export function resolveYtDlpBin() {
   return 'yt-dlp';
 }
 
-/** Sonda de disponibilidad: `yt-dlp --version`. Resuelve true/false. */
-export function probeYtDlp() {
+/**
+ * Sonda de disponibilidad: `yt-dlp --version`. Resuelve true/false.
+ *
+ * En modo cluster, 8 workers arrancan simultáneamente y cada uno dispara esta
+ * sonda. En Windows eso son 8–16 procesos yt-dlp concurrentes en el arranque;
+ * el SO puede matar algunos, dejando workers permanentemente en modo degraded.
+ * Para evitarlo, la sonda reintenta hasta `retries` veces con backoff antes de
+ * declarar que yt-dlp no está disponible.
+ *
+ * @param {{ retries?: number, delayMs?: number }} opts
+ */
+export async function probeYtDlp({ retries = 3, delayMs = 1000 } = {}) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    if (attempt > 0) {
+      await new Promise((r) => setTimeout(r, delayMs * attempt));
+    }
+    const ok = await _probeOnce();
+    if (ok) return true;
+  }
+  return false;
+}
+
+/** Ejecuta `yt-dlp --version` una vez. Resuelve true si el proceso sale con 0. */
+function _probeOnce() {
   return new Promise((resolve) => {
     let settled = false;
     const done = (v) => {

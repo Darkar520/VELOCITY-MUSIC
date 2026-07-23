@@ -49,3 +49,16 @@ tool-results/
 upload/
 download/
 scratch/
+
+# ── Apple Music Decrypt (tools/amd/) ─────────────────────────────────────────
+# El .venv de Python y las dependencias binarias no se committean (son ~300MB)
+tools/amd/app/.venv/
+tools/amd/app/deps/
+tools/amd/app/downloads/
+tools/amd/app/.git/
+tools/amd/app/.idea/
+tools/amd/app/assets/wrapper-manager.qcow2
+# El ZIP de instalación
+tools/amd/*.zip
+# Caché de archivos descifrados por AMD (generado en runtime)
+tools/amd/cache/

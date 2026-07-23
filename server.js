@@ -146,14 +146,20 @@ export async function bootstrap() {
   });
 
   // Detección de yt-dlp y modo activo (14.1–14.3).
+  // NOTA: se invoca resolveActiveMode UNA SOLA VEZ en el arranque para no
+  // duplicar la sonda de yt-dlp (que ya lleva reintentos internos). En modo
+  // cluster, 8 workers arrancando simultáneamente con 2 sondas cada uno
+  // generaban 16 procesos yt-dlp concurrentes; Windows mataba algunos y el
+  // worker quedaba permanentemente en degraded aunque yt-dlp estuviera disponible.
   let activeMode = 'degraded';
   const refreshMode = async () => {
     const { mode } = await resolveActiveMode({ requested: 'full' }, probeYtDlp);
     activeMode = mode;
     return activeMode;
   };
+  // Una sola sonda; refreshMode la realiza internamente y actualiza activeMode.
   const { notice } = await resolveActiveMode({ requested: 'full' }, probeYtDlp);
-  await refreshMode();
+  activeMode = notice ? 'degraded' : 'full';
 
   // ── Resolución de audio escalable ──
   // 1) Límite de concurrencia: como máximo RESOLVE_CONCURRENCY procesos yt-dlp

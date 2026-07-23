@@ -75,10 +75,22 @@ export function getPool() {
     console.error('[pg-pool] Error inesperado en cliente idle:', err.message);
     // No reasignamos _pool a null aquí: el Pool de node-postgres gestiona
     // internamente la reconexión de clientes idle. Sí lo hacemos en casos
-    // graves (p.ej. ECONNREFUSED continuado) para forzar reinicio del pool.
-    if (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND') {
-      console.error('[pg-pool] Host de base de datos inalcanzable. Reiniciando pool…');
+    // graves para forzar reinicio del pool en el próximo getPool().
+    // "Connection terminated unexpectedly" es el error que aparece cuando
+    // Supabase/Neon cierra la conexión por inactividad o por reinicio del
+    // servidor; el pool debe descartarse para que las queries subsiguientes
+    // abran conexiones frescas.
+    if (
+      err.code === 'ECONNREFUSED' ||
+      err.code === 'ENOTFOUND' ||
+      (err.message || '').includes('Connection terminated') ||
+      (err.message || '').includes('connection timeout')
+    ) {
+      console.error('[pg-pool] Conexión a base de datos interrumpida. El pool se recreará en la próxima query.');
+      const dying = _pool;
       _pool = null;
+      // Intentar cerrar el pool viejo en background; ignorar errores.
+      dying.end().catch(() => {});
     }
   });
 
