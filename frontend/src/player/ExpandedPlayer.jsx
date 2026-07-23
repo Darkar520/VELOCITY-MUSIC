@@ -6,7 +6,7 @@ import { usePersisted, useViewport, useDominantColor, useHSwipe } from '../hooks
 import { FALLBACK_COVER } from '../constants.js';
 import { Icon } from '../Icons.jsx';
 import { EQViz, Spinner, ProgressRing, DownloadAllButton, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider, SettingCard, ToggleRow, ColorField } from '../components.jsx';
-import { cacheTrack, cacheTracks, trackById, allCached, loadMeta, loadPlayerState, saveMeta, normalizeTrack } from '../catalog.js';
+import { cacheTrack, cacheTracks, trackById, allCached, loadMeta, loadPlayerState, saveMeta, normalizeTrack, bestCoverFor } from '../catalog.js';
 import { CoverSwipe } from './CoverSwipe.jsx';
 import { DeviceChip } from './DeviceChip.jsx';
 
@@ -228,6 +228,7 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
               </div>
               <button aria-label="Me gusta" onClick={() => toggleFav(track.id)} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer', padding:6, flexShrink:0 }}><Icon.Heart c={T.accent} filled={faved} sz={26} /></button>
               {onAdd && <button aria-label="Añadir" onClick={() => onAdd(track.id)} className="btn-tap" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:42, height:42, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}><Icon.Plus c="var(--txt-1)" sz={20} /></button>}
+              {onMenu && <button aria-label="Más" onClick={() => onMenu(track.id)} className="btn-tap" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:42, height:42, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}><Icon.Dots c="var(--txt-1)" sz={20} /></button>}
             </div>
           </div>
 
@@ -273,7 +274,7 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
           </div>
           <div style={{ display:'grid', gridTemplateColumns:'1fr auto 1fr', alignItems:'center', gap:16 }}>
             <div style={{ display:'flex', alignItems:'center', gap:12, minWidth:0 }}>
-              <CoverImg src={track.cover} alt="" radius={12} size={128} style={{ width:52, height:52, flexShrink:0, boxShadow:`0 4px 14px ${hex2rgba(T.accent,.3)}` }} />
+              <CoverImg src={bestCoverFor(track.id, track.cover)} alt="" radius={12} size={128} style={{ width:52, height:52, flexShrink:0, boxShadow:`0 4px 14px ${hex2rgba(T.accent,.3)}` }} />
               <div style={{ minWidth:0 }}>
                 <div style={{ fontSize:13, fontWeight:800, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title}</div>
                 <div style={{ fontSize:11, color:'var(--txt-2)', marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.artist}</div>

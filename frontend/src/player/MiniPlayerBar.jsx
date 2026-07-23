@@ -3,6 +3,7 @@ import { hex2rgba, grad } from '../helpers.js';
 import { useHSwipe } from '../hooks.js';
 import { Icon } from '../Icons.jsx';
 import { Spinner, CoverImg } from '../components.jsx';
+import { bestCoverFor } from '../catalog.js';
 import { usePlayerStore } from '../store/playerStore.js';
 
 export function MiniPlayerBar({
@@ -47,7 +48,7 @@ export function MiniPlayerBar({
       >
         <CoverImg
           key={track.id}
-          src={track.cover}
+          src={bestCoverFor(track.id, track.cover)}
           alt=""
           radius={11}
           size={96}
