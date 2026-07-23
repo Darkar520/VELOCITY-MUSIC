@@ -18,13 +18,20 @@ const PAGES_URL = 'https://velocity-music.pages.dev';
 // el usuario ve 502 y no puede ni terminar el login.
 const BACKEND_PREFIXES = ['/api/', '/img/'];
 
+// Rutas de backend EXACTAS (sin subpath). El proxy de carátulas se invoca como
+// `/img?u=...`, cuyo pathname es `/img` SIN barra final — por eso no casaba con
+// el prefijo `/img/` y las portadas caían al index.html de Pages (bug carátula).
+const BACKEND_EXACT = ['/img'];
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const path = url.pathname;
 
     // ── Rutas de backend ──────────────────────────────────────
-    const isBackend = BACKEND_PREFIXES.some(p => path.startsWith(p));
+    const isBackend =
+      BACKEND_PREFIXES.some(p => path.startsWith(p)) ||
+      BACKEND_EXACT.includes(path);
 
     if (isBackend) {
       // Reenviar al tunnel preservando method, headers y body.

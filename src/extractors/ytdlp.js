@@ -26,13 +26,26 @@ export const YT_DLP_BIN_DIR = path.join(__dirname, '..', '..', 'bin');
 //   tv      : cliente de Smart TV, sin PO tokens, alta disponibilidad.
 //   web     : cliente web estándar, amplio soporte pero requiere PO tokens.
 //   mweb    : cliente web móvil, último recurso con límites relajados.
-const EXTRACTOR_ARGS = ['--extractor-args', 'youtube:player_client=android'];
+const EXTRACTOR_ARGS = ['--extractor-args', 'youtube:player_client=default'];
+
+// Clientes de YouTube en orden de preferencia, actualizados para el experimento
+// SABR de YouTube (mediados de 2026). Los clientes clásicos (android/ios/tv/web
+// "puros") empezaron a devolver formatos SIN URL ("SABR-only") o con DRM, o a
+// exigir un GVS PO Token, rompiendo la reproducción de pistas aleatorias.
+//   default    : conjunto mantenido por yt-dlp (incluye android_vr/web_safari);
+//                se auto-actualiza con cada release para esquivar los bloqueos.
+//   android_vr : cliente de Meta Quest, resistente a SABR (sirve itag 140 AAC).
+//   web_safari : cliente Safari con soporte HLS, evita el gate de PO token.
+//   tv         : Smart TV; sigue funcionando para parte del catálogo.
+//   ios        : último recurso (puede requerir PO token en algunas sesiones).
+// Un array de args vacío ([]) significa "no forzar cliente" → yt-dlp usa su set
+// por defecto. Ese es intencionalmente el PRIMER intento (el más robusto).
 const YT_CLIENTS = [
-  ['--extractor-args', 'youtube:player_client=android'],
-  ['--extractor-args', 'youtube:player_client=ios'],
-  ['--extractor-args', 'youtube:player_client=tv'],
-  ['--extractor-args', 'youtube:player_client=web'],
-  ['--extractor-args', 'youtube:player_client=mweb'],
+  { name: 'default', args: [] },
+  { name: 'android_vr', args: ['--extractor-args', 'youtube:player_client=android_vr'] },
+  { name: 'web_safari', args: ['--extractor-args', 'youtube:player_client=web_safari'] },
+  { name: 'tv', args: ['--extractor-args', 'youtube:player_client=tv'] },
+  { name: 'ios', args: ['--extractor-args', 'youtube:player_client=ios'] },
 ];
 
 // User-Agents reales por cliente para rotar fingerprint y evitar bloqueos.
@@ -138,8 +151,7 @@ export function createYtDlpExtractor({ scFallback } = {}) {
       '--force-ipv4', '--extractor-retries', '3', '--socket-timeout', '15'];
 
     for (let i = 0; i < YT_CLIENTS.length; i++) {
-      const clientArgs = YT_CLIENTS[i];
-      const clientName = clientArgs[1].split('=')[1];
+      const { name: clientName, args: clientArgs } = YT_CLIENTS[i];
 
       // Backoff exponencial antes de cada cliente (excepto el primero).
       if (i > 0) await sleep(backoffMs(i));

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../api.js';
 import * as offline from '../offline.js';
-import { THEMES, GENRES, FALLBACK_COVER } from '../constants.js';
+import { THEMES, GENRES, FALLBACK_COVER, APP_VERSION } from '../constants.js';
 import { hex2rgba, grad, hiResCover } from '../helpers.js';
 import { usePersisted, useViewport, useDominantColor, useHSwipe } from '../hooks.js';
 import { Icon } from '../Icons.jsx';
@@ -251,7 +251,7 @@ export function ProfileTab({
         </div>
       )}
 
-      <div style={{ textAlign:'center', fontSize:9.5, color:'var(--txt-3)', marginTop:16 }}>VELOCITY MUSIC · v1.0</div>
+      <div style={{ textAlign:'center', fontSize:9.5, color:'var(--txt-3)', marginTop:16 }}>VELOCITY MUSIC · v{APP_VERSION}</div>
     </div>
   );
 }
