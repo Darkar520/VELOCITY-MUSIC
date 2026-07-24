@@ -21,6 +21,8 @@ import { useLibraryStore } from '../store/libraryStore.js';
 import { api } from '../api.js';
 import { allCached, saveMeta, trackById, normalizeTrack, cacheTrack } from '../catalog.js';
 import { slimTrack } from '../helpers.js';
+import { backfillLibraryLyrics } from '../offlineLibrary.js';
+import * as offline from '../offline.js';
 
 function libCacheKey() {
   return 'velocity.lib.' + (localStorage.getItem('velocity.email') || 'u');
@@ -115,7 +117,21 @@ export function useLibrarySync({ authed } = {}) {
           }
           if (!cancel) {
             saveMeta();
-            writeLibCache(fav, useLibraryStore.getState().playlists, albums || [], savedPls || [], recentIds);
+            const finalPlaylists = useLibraryStore.getState().playlists;
+            writeLibCache(fav, finalPlaylists, albums || [], savedPls || [], recentIds);
+            // Una sola vez por dispositivo: rellena letras offline para todo
+            // lo que el usuario ya tenía en biblioteca antes de esta feature.
+            // downloadedIds se lee directo de IndexedDB (fuente de verdad) en
+            // vez del store, que puede no estar hidratado aún en este punto.
+            offline.listIds().then((downloadedIds) => {
+              if (cancel) return;
+              backfillLibraryLyrics({
+                favs: fav,
+                playlists: finalPlaylists,
+                savedPlaylists: savedPls || [],
+                downloadedIds: downloadedIds || [],
+              });
+            }).catch(() => {});
           }
         }
       } catch { /* silent — offline o backend caído */ }

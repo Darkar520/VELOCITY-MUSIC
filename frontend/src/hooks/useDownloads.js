@@ -19,6 +19,7 @@ import * as offline from '../offline.js';
 import { cacheTrack, saveMeta, trackById } from '../catalog.js';
 import { slimTrack } from '../helpers.js';
 import { usePlayerStore } from '../store/playerStore.js';
+import { scheduleLibraryOfflineSync } from '../offlineLibrary.js';
 
 const QUALITY_MAP = { high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' };
 
@@ -70,6 +71,9 @@ export function useDownloads({ quality, showToast, pendingRef, savePending } = {
       const blob = await fetchTrackBlob(tk);
       await offline.saveTrack(tk, blob);
       addDownloaded(tk.id);
+      // Una pista descargada debe poder verse/cantarse sin conexión: la letra
+      // va en el mismo paquete offline que el audio.
+      scheduleLibraryOfflineSync([tk.id]);
       showToast?.('Descargada · disponible sin conexión');
     } catch { showToast?.(`No se pudo descargar: ${tk.title}`); }
     finally {
@@ -116,6 +120,10 @@ export function useDownloads({ quality, showToast, pendingRef, savePending } = {
     const queue = [...todo];
     const CONC = Math.min(4, queue.length);
     await Promise.all(Array.from({ length: CONC }, async () => { while (queue.length) { await worker(queue.shift()); } }));
+    // Letras del lote completo (solo las que sí descargaron audio); el propio
+    // scheduler limita a 2 workers concurrentes, así que no compite por red/CPU
+    // con las descargas de audio que ya terminaron.
+    scheduleLibraryOfflineSync(todo);
     showToast?.(`${ok}/${todo.length} descargadas`);
   }, [downloaded, downloading, addDownloading, addDownloaded, removeDownloading, fetchTrackBlob, showToast, pendingRef, savePending]);
 

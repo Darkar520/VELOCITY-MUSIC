@@ -66,3 +66,34 @@ export function scheduleLibraryOfflineSync(trackIds) {
   });
   Promise.all(workers).catch(() => {});
 }
+
+const BACKFILL_DONE_KEY = 'velocity.lyricsBackfillDone';
+
+/**
+ * Backfill de letras offline para TODA la biblioteca ya existente
+ * (favoritos + pistas de playlists propias + playlists/mezclas guardadas +
+ * descargas de audio). Pensado para correr una sola vez por dispositivo tras
+ * desplegar esta feature, y de ahí en adelante los triggers puntuales
+ * (like/descargar/guardar) mantienen todo al día de forma incremental.
+ *
+ * No bloquea la UI: reusa el mismo scheduler de 2 workers que ya limita la
+ * tasa de peticiones a /api/lyrics. Silencioso ante fallos individuales.
+ *
+ * @param {{ favs: string[], playlists: {trackIds:string[]}[], savedPlaylists: {trackIds:string[]}[], downloadedIds: string[] }} lib
+ */
+export function backfillLibraryLyrics(lib) {
+  try {
+    if (localStorage.getItem(BACKFILL_DONE_KEY) === '1') return;
+  } catch { /* localStorage inaccesible: seguir sin marca, no bloquear */ }
+
+  const ids = new Set();
+  (lib?.favs || []).forEach((id) => id && ids.add(id));
+  (lib?.playlists || []).forEach((p) => (p.trackIds || []).forEach((id) => id && ids.add(id)));
+  (lib?.savedPlaylists || []).forEach((p) => (p.trackIds || []).forEach((id) => id && ids.add(id)));
+  (lib?.downloadedIds || []).forEach((id) => id && ids.add(id));
+
+  if (!ids.size) return;
+  scheduleLibraryOfflineSync([...ids]);
+
+  try { localStorage.setItem(BACKFILL_DONE_KEY, '1'); } catch { /* best-effort */ }
+}

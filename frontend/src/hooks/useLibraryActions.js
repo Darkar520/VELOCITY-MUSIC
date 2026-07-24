@@ -135,18 +135,22 @@ export function useLibraryActions({ authed, showToast } = {}) {
     return useLibraryStore.getState().savedAlbums.some(a => a.albumId === albumId);
   }, []);
 
-  const saveAlbum = useCallback(async (album) => {
+  // `trackIds` es opcional (best-effort): cuando el caller lo tiene a mano
+  // (p.ej. DetailView ya cargó las canciones del álbum), se usa para
+  // precargar letras offline sin bloquear el guardado del álbum en sí.
+  const saveAlbum = useCallback(async (album, trackIds) => {
     if (!album || !album.albumId) return;
     const store = useLibraryStore.getState();
     if (store.savedAlbums.some(a => a.albumId === album.albumId)) return;
     const entry = { ...album, savedAt: Date.now() };
     store.saveAlbum(entry);
+    if (trackIds?.length) offlinePack(trackIds);
     try { await api.saveAlbum(album); showToast?.('Álbum guardado en tu biblioteca'); }
     catch {
       store.unsaveAlbum(album.albumId);
       showToast?.('No se pudo guardar el álbum');
     }
-  }, [showToast]);
+  }, [showToast, offlinePack]);
 
   const unsaveAlbum = useCallback(async (albumId) => {
     const store = useLibraryStore.getState();
