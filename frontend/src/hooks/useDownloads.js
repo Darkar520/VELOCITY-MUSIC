@@ -39,7 +39,15 @@ export function useDownloads({ quality, showToast, pendingRef, savePending } = {
     });
   }, [quality]);
 
-  const fetchBlobWithTimeout = useCallback(async (url, ms = 90000) => {
+  // 90s era insuficiente: medido en producción, una descarga de ~4.5MB puede
+  // tardar >130s cuando el CDN de origen (YouTube) limita el bandwidth de la
+  // conexión — el fetch entero completaba con status 200 y content-length
+  // correcto, pero el AbortController lo cortaba a mitad de la descarga del
+  // body (net::ERR_ABORTED), dejando la descarga "colgada" indefinidamente en
+  // la UI (el catch silencioso hacía un único retry, que también expiraba).
+  // 4 minutos da margen holgado incluso a conexiones lentas sin bloquear la
+  // UI para siempre: si de verdad no hay red, expira igual y el catch avisa.
+  const fetchBlobWithTimeout = useCallback(async (url, ms = 240000) => {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), ms);
     try {
@@ -52,12 +60,12 @@ export function useDownloads({ quality, showToast, pendingRef, savePending } = {
   const fetchTrackBlob = useCallback(async (tk) => {
     try {
       const url = await streamUrlQ(tk);
-      return await fetchBlobWithTimeout(url, 90000);
+      return await fetchBlobWithTimeout(url, 240000);
     } catch {
       await new Promise(r => setTimeout(r, 1500));
       api._streamSignCache?.clear?.();
       const url = await streamUrlQ(tk);
-      return await fetchBlobWithTimeout(url + (url.includes('?') ? '&' : '?') + '_r=' + Date.now(), 90000);
+      return await fetchBlobWithTimeout(url + (url.includes('?') ? '&' : '?') + '_r=' + Date.now(), 240000);
     }
   }, [streamUrlQ, fetchBlobWithTimeout]);
 
