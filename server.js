@@ -6,7 +6,8 @@ import { StreamCache } from './src/services/streamCache.js';
 import { createLimiter, createInflight } from './src/lib/concurrency.js';
 import { normalizeText } from './src/lib/normalize.js';
 import { resolveActiveMode } from './src/services/resolutionMode.js';
-import { probeYtDlp, createYtDlpExtractor, createYtDlpCatalog, createSoundCloudCatalog, createSoundCloudExtractor, YT_DLP_BIN_DIR } from './src/extractors/ytdlp.js';
+import { probeYtDlp, createYtDlpExtractor, createYtDlpCatalog, createSoundCloudCatalog, createSoundCloudExtractor, YT_DLP_BIN_DIR, resolveYtDlpBin } from './src/extractors/ytdlp.js';
+import { startYtDlpAutoUpdate } from './src/services/ytdlpUpdater.js';
 import { createYTMusicCatalog, createYTMusicArtist, createYTMusicAlbum, createYTMusicLyrics, createYTMusicSearchAll, createYTMusicRadio, createYTMusicSong, readyPromise as ytMusicReadyPromise } from './src/extractors/ytmusic.js';
 import { installYtDlpByDownload } from './src/services/extractorSetup.js';
 import {
@@ -208,6 +209,12 @@ export async function bootstrap() {
     retentionServiceModule.start(query);
   }
 
+  // Auto-actualización de yt-dlp — solo worker 0 (o proceso único) para no
+  // lanzar N self-updates simultáneos que se pisen el binario en cluster.
+  if (process.env.WORKER_ID === '0' || !process.env.WORKER_ID) {
+    startYtDlpAutoUpdate({ resolveBin: resolveYtDlpBin });
+  }
+
   const app = createApp({
     cache,
     // Catálogo: YouTube Music API (rápido, portadas de álbum, solo canciones).
@@ -225,10 +232,20 @@ export async function bootstrap() {
       const scCatalog = createSoundCloudCatalog();
       // YT Music principal; SoundCloud solo como cola y solo si título/artista
       // se parecen a la query (evita basura que no reproduce y "Charyl - System of a Down").
+      // SoundCloud (scsearch vía yt-dlp subproceso) tarda ~5-6 s y arrastraba
+      // toda la búsqueda combinada, mientras que YouTube Music responde en <1 s.
+      // Se le pone un tope duro (SC_SEARCH_CAP_MS): si SoundCloud no responde a
+      // tiempo, la búsqueda devuelve solo YouTube Music sin bloquearse. Esto
+      // elimina el "No se pudo buscar" intermitente causado por latencia.
+      const SC_SEARCH_CAP_MS = Number(process.env.SC_SEARCH_CAP_MS || 1200);
+      const scCapped = (query, lim) => Promise.race([
+        scCatalog(query, lim),
+        new Promise((resolve) => setTimeout(() => resolve([]), SC_SEARCH_CAP_MS)),
+      ]);
       return async (q, limit) => {
         const [ytData, scTracks] = await Promise.allSettled([
           ytSearchAll(q, limit),
-          scCatalog(q, Math.min(limit ?? 8, 8)),
+          scCapped(q, Math.min(limit ?? 8, 8)),
         ]);
         const yt = ytData.status === 'fulfilled' ? ytData.value : { songs: [], albums: [], artists: [] };
         const scRaw = scTracks.status === 'fulfilled' ? scTracks.value : [];
