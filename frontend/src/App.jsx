@@ -1570,6 +1570,7 @@ export default function App() {
     favs.includes(track.id)
     || playlists.some((p) => (p.trackIds || []).includes(track.id))
     || (savedPlaylists || []).some((p) => (p.trackIds || []).includes(track.id))
+    || (savedAlbums || []).some((a) => (a.trackIds || []).includes(track.id))
   ));
   useEffect(() => {
     if (!authed || !track?.id || !trackInLibrary) return;

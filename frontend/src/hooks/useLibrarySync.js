@@ -40,6 +40,8 @@ function writeLibCache(favIds, pls, albums, savedPls, recentIds) {
   try {
     const libIds = new Set([...(favIds || []), ...(recentIds || [])]);
     (pls || []).forEach(p => (p.trackIds || []).forEach(id => libIds.add(id)));
+    (albums || []).forEach(a => (a.trackIds || []).forEach(id => libIds.add(id)));
+    (savedPls || []).forEach(p => (p.trackIds || []).forEach(id => libIds.add(id)));
     // Filtrar covers data:/blob: para no exceder quota de localStorage.
     const tracks = [...libIds].map(trackById).filter(Boolean).map(t =>
       (typeof t.cover === 'string' && (t.cover.startsWith('data:') || t.cover.startsWith('blob:')))
@@ -54,6 +56,34 @@ function writeLibCache(favIds, pls, albums, savedPls, recentIds) {
       tracks,
     }));
   } catch { /* quota excedido */ }
+}
+
+async function hydrateSavedAlbums(albums) {
+  const result = (Array.isArray(albums) ? albums : []).map((album) => ({ ...album }));
+  const queue = result
+    .map((album, index) => ({ album, index }))
+    .filter(({ album }) => album?.albumId && (!Array.isArray(album.trackIds) || !album.trackIds.length || album.trackIds.some((id) => !trackById(id))));
+
+  const worker = async () => {
+    while (queue.length) {
+      const item = queue.shift();
+      if (!item) return;
+      try {
+        const detail = await api.album(item.album.albumId);
+        const tracks = Array.isArray(detail?.tracks) ? detail.tracks : [];
+        tracks.forEach(normalizeTrack);
+        if (tracks.length) {
+          result[item.index] = {
+            ...item.album,
+            trackIds: tracks.map((track) => track.id).filter(Boolean),
+          };
+        }
+      } catch { /* se reintentará en el siguiente arranque */ }
+    }
+  };
+
+  await Promise.all([worker(), worker()]);
+  return result;
 }
 
 export function useLibrarySync({ authed } = {}) {
@@ -92,7 +122,6 @@ export function useLibrarySync({ authed } = {}) {
         const store = useLibraryStore.getState();
         if (fav !== null)      store.setFavs(fav);
         if (hist !== null)     store.setRecent(hist.map(h => h.trackId));
-        if (albums !== null)   store.setSavedAlbums(albums);
         if (savedPls !== null) store.setSavedPlaylists(savedPls);
         if (pls !== null) {
           const withTracks = await Promise.all(pls.map(async p => {
@@ -101,15 +130,48 @@ export function useLibrarySync({ authed } = {}) {
           }));
           if (!cancel) store.setPlaylists(withTracks);
         }
-        // Subir metadatos locales al backend (sync cross-device)
+
+        // Los álbumes antiguos solo guardan metadata en backend. Expandirlos a
+        // trackIds permite que el backfill alcance sus canciones y que el
+        // resultado quede cacheado localmente para el siguiente arranque.
+        let hydratedAlbums = null;
+        if (albums !== null) {
+          const cachedAlbums = store.savedAlbums || [];
+          const mergedAlbums = albums.map((album) => ({
+            ...(cachedAlbums.find((cached) => cached.albumId === album.albumId) || {}),
+            ...album,
+          }));
+          hydratedAlbums = await hydrateSavedAlbums(mergedAlbums);
+          if (!cancel) store.setSavedAlbums(hydratedAlbums);
+        }
+        if (cancel) return;
+
+        // Las descargas son otra fuente de verdad: sus metadatos deben entrar
+        // al catálogo antes de programar letras, aunque nunca hayan sido parte
+        // de favoritos o playlists.
+        const [downloadedIds, downloadedMetas] = await Promise.all([
+          offline.listIds().catch(() => []),
+          offline.listMetas().catch(() => []),
+        ]);
+        downloadedMetas.forEach(cacheTrack);
+
+        // Subir metadatos locales al backend (sync cross-device).
         const local = allCached().map(slimTrack).filter(Boolean);
         if (local.length) api.saveTracks(local).catch(() => {});
-        // Hidratar metadatos faltantes
-        if (fav !== null) {
-          const recentIds = (hist || []).map(h => h.trackId);
-          const allIds = new Set([...fav, ...recentIds]);
-          const currentPls = useLibraryStore.getState().playlists;
+
+        // Hidratar metadatos de todas las colecciones que alimentan el
+        // backfill: favoritos, playlists propias/guardadas, álbumes guardados
+        // y descargas. Antes solo se cubrían favoritos y playlists propias.
+        if (fav !== null || pls !== null || albums !== null || savedPls !== null || downloadedIds.length) {
+          const libraryState = useLibraryStore.getState();
+          const finalFavs = fav !== null ? fav : (libraryState.favs || []);
+          const recentIds = hist !== null ? hist.map(h => h.trackId) : (libraryState.recent || []);
+          const currentPls = libraryState.playlists;
+          const currentAlbums = libraryState.savedAlbums;
+          const allIds = new Set([...finalFavs, ...recentIds, ...(downloadedIds || [])]);
           currentPls.forEach(p => (p.trackIds || []).forEach(id => allIds.add(id)));
+          (savedPls || []).forEach(p => (p.trackIds || []).forEach(id => allIds.add(id)));
+          (currentAlbums || []).forEach(a => (a.trackIds || []).forEach(id => allIds.add(id)));
           const missing = [...allIds].filter(id => id && !trackById(id));
           for (let i = 0; i < missing.length && !cancel; i += 300) {
             const metas = await api.getTracks(missing.slice(i, i + 300)).catch(() => []);
@@ -118,20 +180,18 @@ export function useLibrarySync({ authed } = {}) {
           if (!cancel) {
             saveMeta();
             const finalPlaylists = useLibraryStore.getState().playlists;
-            writeLibCache(fav, finalPlaylists, albums || [], savedPls || [], recentIds);
-            // Una sola vez por dispositivo: rellena letras offline para todo
-            // lo que el usuario ya tenía en biblioteca antes de esta feature.
-            // downloadedIds se lee directo de IndexedDB (fuente de verdad) en
-            // vez del store, que puede no estar hidratado aún en este punto.
-            offline.listIds().then((downloadedIds) => {
-              if (cancel) return;
-              backfillLibraryLyrics({
-                favs: fav,
-                playlists: finalPlaylists,
-                savedPlaylists: savedPls || [],
-                downloadedIds: downloadedIds || [],
-              });
-            }).catch(() => {});
+            const finalAlbums = useLibraryStore.getState().savedAlbums;
+            writeLibCache(finalFavs, finalPlaylists, finalAlbums, savedPls || [], recentIds);
+            // Sincronización silenciosa por cuenta y por pista. Las fallidas
+            // permanecen pendientes y se reintentan en el siguiente arranque.
+            backfillLibraryLyrics({
+              scope: localStorage.getItem('velocity.email') || 'anonymous',
+              favs: finalFavs,
+              playlists: finalPlaylists,
+              savedAlbums: finalAlbums,
+              savedPlaylists: savedPls || [],
+              downloadedIds: downloadedIds || [],
+            });
           }
         }
       } catch { /* silent — offline o backend caído */ }

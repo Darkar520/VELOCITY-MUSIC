@@ -52,48 +52,100 @@ export async function ensureLyricsOffline(track) {
  * Solo letras (ligero). No descarga audio.
  * @param {string|string[]} trackIds
  */
-export function scheduleLibraryOfflineSync(trackIds) {
-  const ids = [...new Set((Array.isArray(trackIds) ? trackIds : [trackIds]).filter(Boolean))];
-  if (!ids.length) return;
+const activeSyncs = new Map();
+const BACKFILL_STATE_PREFIX = 'velocity.lyricsBackfill.v2.';
 
-  const lyricQueue = [...ids];
-  const workers = Array.from({ length: Math.min(2, lyricQueue.length) }, async () => {
-    while (lyricQueue.length) {
-      const id = lyricQueue.shift();
-      const tk = trackById(id);
-      if (tk) await ensureLyricsOffline(tk);
-    }
-  });
-  Promise.all(workers).catch(() => {});
+function syncScope(scope) {
+  const value = String(scope || (() => {
+    try { return localStorage.getItem('velocity.email') || 'anonymous'; } catch { return 'anonymous'; }
+  })()).trim().toLowerCase();
+  return encodeURIComponent(value || 'anonymous');
 }
 
-const BACKFILL_DONE_KEY = 'velocity.lyricsBackfillDone';
+function stateKey(scope) {
+  return BACKFILL_STATE_PREFIX + syncScope(scope);
+}
+
+function readState(scope) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(stateKey(scope)) || '{}');
+    return {
+      completed: new Set(Array.isArray(parsed.completed) ? parsed.completed : []),
+      pending: new Set(Array.isArray(parsed.pending) ? parsed.pending : []),
+      failed: parsed.failed && typeof parsed.failed === 'object' ? parsed.failed : {},
+    };
+  } catch {
+    return { completed: new Set(), pending: new Set(), failed: {} };
+  }
+}
+
+function writeState(scope, state) {
+  try {
+    localStorage.setItem(stateKey(scope), JSON.stringify({
+      completed: [...state.completed],
+      pending: [...state.pending],
+      failed: state.failed,
+      updatedAt: Date.now(),
+    }));
+  } catch { /* best-effort: IndexedDB sigue siendo la fuente de letras */ }
+}
 
 /**
- * Backfill de letras offline para TODA la biblioteca ya existente
- * (favoritos + pistas de playlists propias + playlists/mezclas guardadas +
- * descargas de audio). Pensado para correr una sola vez por dispositivo tras
- * desplegar esta feature, y de ahí en adelante los triggers puntuales
- * (like/descargar/guardar) mantienen todo al día de forma incremental.
+ * Descarga letras en segundo plano y conserva el resultado por pista y por
+ * cuenta. Las fallidas no se marcan como completadas: una sincronización
+ * posterior las vuelve a intentar, incluso tras cerrar el navegador.
+ */
+export function scheduleLibraryOfflineSync(trackIds, { scope } = {}) {
+  const ids = [...new Set((Array.isArray(trackIds) ? trackIds : [trackIds]).filter(Boolean))];
+  if (!ids.length) return Promise.resolve([]);
+  const key = syncScope(scope);
+  if (activeSyncs.has(key)) {
+    return activeSyncs.get(key).then(() => scheduleLibraryOfflineSync(ids, { scope }));
+  }
+
+  const state = readState(scope);
+  ids.forEach((id) => { if (!state.completed.has(id)) state.pending.add(id); });
+  writeState(scope, state);
+  const queue = [...state.pending];
+
+  const run = Promise.all(Array.from({ length: Math.min(2, queue.length) }, async () => {
+    while (queue.length) {
+      const id = queue.shift();
+      const tk = trackById(id);
+      const ok = !!tk && await ensureLyricsOffline(tk);
+      state.pending.delete(id);
+      if (ok) {
+        state.completed.add(id);
+        delete state.failed[id];
+      } else {
+        state.failed[id] = { attempts: Number(state.failed[id]?.attempts || 0) + 1, at: Date.now() };
+      }
+      writeState(scope, state);
+    }
+  })).then(() => [...state.completed]).finally(() => activeSyncs.delete(key));
+
+  activeSyncs.set(key, run);
+  return run;
+}
+
+/**
+ * Backfill de letras offline para toda la biblioteca ya existente:
+ * favoritos, playlists propias, playlists/mezclas guardadas, álbumes guardados
+ * ya expandidos a trackIds y audios descargados.
  *
- * No bloquea la UI: reusa el mismo scheduler de 2 workers que ya limita la
- * tasa de peticiones a /api/lyrics. Silencioso ante fallos individuales.
+ * No utiliza un booleano global. El progreso queda por cuenta y por pista, por
+ * lo que las letras fallidas/pendientes se reintentan en el siguiente arranque.
  *
- * @param {{ favs: string[], playlists: {trackIds:string[]}[], savedPlaylists: {trackIds:string[]}[], downloadedIds: string[] }} lib
+ * @param {{ scope?: string, favs: string[], playlists: {trackIds:string[]}[], savedPlaylists: {trackIds:string[]}[], savedAlbums: {trackIds:string[]}[], downloadedIds: string[] }} lib
  */
 export function backfillLibraryLyrics(lib) {
-  try {
-    if (localStorage.getItem(BACKFILL_DONE_KEY) === '1') return;
-  } catch { /* localStorage inaccesible: seguir sin marca, no bloquear */ }
-
   const ids = new Set();
   (lib?.favs || []).forEach((id) => id && ids.add(id));
   (lib?.playlists || []).forEach((p) => (p.trackIds || []).forEach((id) => id && ids.add(id)));
   (lib?.savedPlaylists || []).forEach((p) => (p.trackIds || []).forEach((id) => id && ids.add(id)));
+  (lib?.savedAlbums || []).forEach((a) => (a.trackIds || []).forEach((id) => id && ids.add(id)));
   (lib?.downloadedIds || []).forEach((id) => id && ids.add(id));
 
-  if (!ids.size) return;
-  scheduleLibraryOfflineSync([...ids]);
-
-  try { localStorage.setItem(BACKFILL_DONE_KEY, '1'); } catch { /* best-effort */ }
+  if (!ids.size) return Promise.resolve([]);
+  return scheduleLibraryOfflineSync([...ids], { scope: lib?.scope });
 }

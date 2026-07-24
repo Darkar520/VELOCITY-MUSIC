@@ -142,7 +142,11 @@ export function useLibraryActions({ authed, showToast } = {}) {
     if (!album || !album.albumId) return;
     const store = useLibraryStore.getState();
     if (store.savedAlbums.some(a => a.albumId === album.albumId)) return;
-    const entry = { ...album, savedAt: Date.now() };
+    const entry = {
+      ...album,
+      ...(trackIds?.length ? { trackIds: [...new Set(trackIds.filter(Boolean))] } : {}),
+      savedAt: Date.now(),
+    };
     store.saveAlbum(entry);
     if (trackIds?.length) offlinePack(trackIds);
     try { await api.saveAlbum(album); showToast?.('Álbum guardado en tu biblioteca'); }
