@@ -25,17 +25,37 @@ import rateLimit from 'express-rate-limit';
  * @param {number} opts.max Máximo de peticiones por IP en la ventana.
  * @param {string} [opts.message] Mensaje de error 429.
  */
+/**
+ * Clave de rate-limit = IP REAL del cliente.
+ *
+ * Detrás de Cloudflare, `req.ip` (con trust proxy=1) puede resolver a la IP del
+ * túnel/edge y NO a la del usuario final, lo que haría que TODOS los usuarios
+ * compartieran el mismo bucket y se bloquearan entre sí con 429 intermitentes.
+ * Cloudflare envía la IP real en `CF-Connecting-IP`; si no está, caemos al
+ * primer valor de `X-Forwarded-For` y por último a `req.ip`.
+ */
+export function clientIpKey(req) {
+  const cf = req.headers['cf-connecting-ip'];
+  if (cf) return String(cf).trim();
+  const xff = req.headers['x-forwarded-for'];
+  if (xff) return String(xff).split(',')[0].trim();
+  return req.ip || 'unknown';
+}
+
 export function createRateLimiter({ windowMs = 60_000, max = 120, message = 'Demasiadas peticiones. Intenta de nuevo en un momento.' } = {}) {
   return rateLimit({
     windowMs,
     max,
     message: { error: message },
-    // Headers estándar X-RateLimit-* (compatible con el comportamiento anterior).
+    // Headers estándar RateLimit-* + legacy X-RateLimit-*.
     standardHeaders: true,
     legacyHeaders: true,
+    // Clave por IP real del cliente (ver clientIpKey) para no mezclar usuarios
+    // detrás del túnel de Cloudflare.
+    keyGenerator: clientIpKey,
+    // Evita el warning de express-rate-limit por keyGenerator custom.
+    validate: { keyGeneratorIpFallback: false, trustProxy: false },
     // No fallar si req.ip no se puede determinar (p.ej. sockets de test).
-    skip: (req) => !req.ip && !req.socket,
-    // En cluster, el conteo es por worker. No es perfecto pero sirve como
-    // válvula de seguridad. Para límites compartidos usar rate-limit-redis.
+    skip: (req) => !req.ip && !req.socket && !req.headers['cf-connecting-ip'],
   });
 }

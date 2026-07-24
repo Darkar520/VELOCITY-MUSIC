@@ -47,27 +47,30 @@ export const api = {
       return res.ok;
     } catch { return false; }
   },
-  async search(q, signal) {
-    const attempt = () => fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal, headers: authHeaders() });
-    let res = await attempt();
-    // Reintento silencioso ante 502 (catálogo lento / cold-start del servidor).
-    // No reintentamos ante otros errores para no enmascarar problemas reales.
-    if (res.status === 502 && !(signal && signal.aborted)) {
-      await new Promise(r => setTimeout(r, 1500));
-      if (!(signal && signal.aborted)) res = await attempt();
+  // Reintenta ante estados transitorios: 502/503 (catálogo lento/cold-start) y
+  // 429 (rate limit). Respeta Retry-After si el servidor lo envía (acotado a 3s
+  // para no congelar la UI). Devuelve la respuesta final (ok o no).
+  async _fetchWithRetry(url, { signal, retries = 2 } = {}) {
+    const transient = new Set([429, 502, 503]);
+    let res = await fetch(url, { signal, headers: authHeaders() });
+    for (let i = 0; i < retries && transient.has(res.status); i++) {
+      if (signal && signal.aborted) break;
+      const ra = Number(res.headers.get('retry-after'));
+      const wait = Number.isFinite(ra) && ra > 0 ? Math.min(ra * 1000, 3000) : (700 + i * 800);
+      await new Promise((r) => setTimeout(r, wait));
+      if (signal && signal.aborted) break;
+      res = await fetch(url, { signal, headers: authHeaders() });
     }
+    return res;
+  },
+  async search(q, signal) {
+    const res = await this._fetchWithRetry(`/api/search?q=${encodeURIComponent(q)}`, { signal });
     const data = await jsonOrThrow(res);
     return data.results || [];
   },
   // Búsqueda combinada: { songs, albums, artists }
   async searchAll(q, signal) {
-    const attempt = () => fetch(`/api/search/all?q=${encodeURIComponent(q)}`, { signal, headers: authHeaders() });
-    let res = await attempt();
-    // Reintento silencioso ante 502 (catálogo lento / cold-start del servidor).
-    if (res.status === 502 && !(signal && signal.aborted)) {
-      await new Promise(r => setTimeout(r, 1500));
-      if (!(signal && signal.aborted)) res = await attempt();
-    }
+    const res = await this._fetchWithRetry(`/api/search/all?q=${encodeURIComponent(q)}`, { signal });
     return jsonOrThrow(res);
   },
   // URL base del proxy (sin firma). Preferir ensureStreamUrl para <audio>/descargas.

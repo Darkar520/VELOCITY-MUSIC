@@ -7,7 +7,7 @@
 // trazabilidad visible al usuario (se muestra en Perfil). Al subirla, subir
 // también CACHE en frontend/public/sw.js (velocity-vN) para forzar la
 // actualización del service worker en los clientes.
-export const APP_VERSION = '1.2';
+export const APP_VERSION = '1.3';
 
 export const CSS = `
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');

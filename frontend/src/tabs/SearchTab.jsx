@@ -80,9 +80,10 @@ export function SearchTab({ T, play, addToTarget, onMenu, recentSearches, addSea
         });
       } catch (e) {
         if (!aborted(e) && alive) {
-          // Distinguir error de catálogo (backend lento/no disponible) de error de red real.
-          const isCatalogError = e?.status === 502 || e?.status === 503;
-          setErr(isCatalogError
+          // Distinguir error transitorio (backend lento / rate limit) de error
+          // de red real. 429/502/503 → mensaje suave (no es culpa del usuario).
+          const isTransient = e?.status === 429 || e?.status === 502 || e?.status === 503;
+          setErr(isTransient
             ? 'El catálogo tarda en responder. Inténtalo de nuevo en unos segundos.'
             : 'No se pudo buscar. Revisa tu conexión e inténtalo de nuevo.');
         }

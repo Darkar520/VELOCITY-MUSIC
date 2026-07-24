@@ -197,7 +197,14 @@ export function createApp(deps = {}) {
   // ── Rate limiting por IP (protege endpoints costosos/sensibles) ──
   // No se aplica a /api/stream-proxy ni /img para no afectar la reproducción.
   const authLimiter = createRateLimiter({ windowMs: 5 * 60_000, max: 40, message: 'Demasiados intentos. Espera unos minutos.' });
-  const apiLimiter = createRateLimiter({ windowMs: 60_000, max: 150 });
+  // Búsqueda/catálogo: 150/min era demasiado bajo. Un solo usuario activo
+  // (búsqueda-al-escribir + feed + radio) supera 150/min y empieza a recibir
+  // 429 → "No se pudo buscar" intermitente. Se sube a 600/min (10/s sostenido).
+  const apiLimiter = createRateLimiter({ windowMs: 60_000, max: 600 });
+  // Firma de stream: la reproducción NO debe compartir bucket con la búsqueda.
+  // Cada play + prefetch de la siguiente pista consume firmas; con un límite
+  // holgado propio se evita el 429 → "No se pudo obtener el audio".
+  const streamSignLimiter = createRateLimiter({ windowMs: 60_000, max: 600, message: 'Demasiadas peticiones de reproducción. Espera un momento.' });
   // Admin endpoints: límite más estricto (30 req/min) para mitigar brute-force
   // de ADMIN_KEY aunque la comparación sea timing-safe.
   const adminLimiter = createRateLimiter({ windowMs: 60_000, max: 30, message: 'Demasiadas peticiones admin. Espera un minuto.' });
@@ -629,7 +636,7 @@ export function createApp(deps = {}) {
   // ---- Firma de URL de stream (JWT → exp+sig para <audio src>) ----
   // El elemento media no envía Authorization; el cliente pide firma y monta la URL.
   if (requireAuth) {
-    app.get('/api/stream-sign', requireAuth, apiLimiter, (req, res) => {
+    app.get('/api/stream-sign', requireAuth, streamSignLimiter, (req, res) => {
       const artist = String(req.query.artist || '').trim();
       const title = String(req.query.title || '').trim();
       if (!artist || !title) {
