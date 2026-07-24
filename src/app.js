@@ -1228,7 +1228,17 @@ export function createApp(deps = {}) {
       res.write(': connected\n\n');
       const cleanup = nowPlayingSvc.subscribe(req.userId, res);
       const hb = setInterval(() => { try { res.write(': hb\n\n'); } catch {} }, 30000);
-      req.on('close', () => { cleanup(); clearInterval(hb); });
+      // Cierre proactivo antes del límite duro de Cloudflare (~100s en conexiones
+      // por túnel). Sin esto, la conexión muere por 524 (timeout del edge) en vez
+      // de un cierre limpio — el 524 aparece como error feo en consola aunque el
+      // cliente reconecta igual. Cerrando nosotros a los 45s, el cliente recibe
+      // un cierre normal de stream y reconecta via su lógica existente (onerror
+      // -> reconnect en 3s), sin que Cloudflare llegue a intervenir.
+      const proactiveClose = setTimeout(() => {
+        clearInterval(hb);
+        try { res.end(); } catch {}
+      }, 45000);
+      req.on('close', () => { cleanup(); clearInterval(hb); clearTimeout(proactiveClose); });
     });
   }
 
