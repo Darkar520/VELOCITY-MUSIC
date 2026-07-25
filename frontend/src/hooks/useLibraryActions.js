@@ -10,48 +10,124 @@
  * El store solo muta state; este hook orquesta store + api + persistencia.
  *
  * Uso:
- *   const { toggleFav, createPlaylist, ... } = useLibraryActions({ authed, showToast });
+ *   const { toggleFav, createPlaylist, ... } = useLibraryActions({ authed, email, showToast });
  */
 import { useEffect, useRef, useCallback } from 'react';
-import { api } from '../api.js';
+import { api, getToken, getAuthGeneration } from '../api.js';
 import { trackById } from '../catalog.js';
 import { slimTrack } from '../helpers.js';
 import { useLibraryStore } from '../store/libraryStore.js';
 import { scheduleLibraryOfflineSync } from '../offlineLibrary.js';
+import {
+  loadPendingFavs,
+  savePendingFavs,
+  cacheIdentity,
+  noteFavoriteIntent,
+  acknowledgeFavoriteIntent,
+} from '../favoriteOutbox.js';
 
-const PENDING_FAVS_KEY = 'velocity.pendingFavs';
+const RETRY_BASE_MS = 1000;
+const RETRY_MAX_MS = 30_000;
 
 /**
- * @param {{ authed?: boolean, showToast?: function }} opts
+ * @param {{ authed?: boolean, email?: string, showToast?: function }} opts
  * Al añadir a biblioteca: solo letra offline (ligero). Audio = botón Descargar.
  */
-export function useLibraryActions({ authed, showToast } = {}) {
-  const pendingFavsRef = useRef(null);
-  if (!pendingFavsRef.current) {
-    pendingFavsRef.current = new Map(); // id → 'add' | 'remove'
-    try {
-      const saved = JSON.parse(localStorage.getItem(PENDING_FAVS_KEY) || '[]');
-      saved.forEach(([id, op]) => pendingFavsRef.current.set(id, op));
-    } catch {}
+export function useLibraryActions({ authed, email = '', showToast } = {}) {
+  const pendingScope = authed ? cacheIdentity(email, getToken()) : '';
+  const pendingAuthGeneration = getAuthGeneration();
+  const scopeStateRef = useRef(null);
+  if (!scopeStateRef.current
+    || scopeStateRef.current.scope !== pendingScope
+    || scopeStateRef.current.authGeneration !== pendingAuthGeneration) {
+    const previous = scopeStateRef.current;
+    previous?.timers.forEach((timer) => clearTimeout(timer));
+    scopeStateRef.current = {
+      scope: pendingScope,
+      authGeneration: pendingAuthGeneration,
+      pending: loadPendingFavs(globalThis.localStorage, pendingScope),
+      workers: new Map(),
+      timers: new Map(),
+      attempts: new Map(),
+    };
   }
 
-  const savePendingFavs = () => {
-    try {
-      localStorage.setItem(PENDING_FAVS_KEY, JSON.stringify([...pendingFavsRef.current.entries()]));
-    } catch {}
-  };
+  const isCurrentScope = useCallback((state) => (
+    scopeStateRef.current === state && state.authGeneration === getAuthGeneration()
+  ), []);
+  const persistPendingFavs = useCallback((state) => {
+    savePendingFavs(state.pending, globalThis.localStorage, state.scope);
+  }, []);
+
+  const runFavoriteIntent = useCallback(async (state, id, op) => {
+    if (!isCurrentScope(state)) return false;
+    if (op === 'add') {
+      const tk = trackById(id);
+      if (!tk) throw new Error(`No hay metadatos para ${id}`);
+      // El backend valida existencia: completar metadatos es parte del add.
+      await api.saveTracks([slimTrack(tk)], { throwOnError: true });
+      // No permitimos que una respuesta de la cuenta anterior continúe con
+      // addFavorite después de que cambió la identidad activa.
+      if (!isCurrentScope(state)) return false;
+      await api.addFavorite(id);
+    } else {
+      await api.removeFavorite(id);
+    }
+    return isCurrentScope(state);
+  }, [isCurrentScope]);
+
+  const queueFavorite = useCallback((id) => {
+    if (!id) return Promise.resolve();
+    const state = scopeStateRef.current;
+    const previous = state.workers.get(id) || Promise.resolve();
+    const worker = previous.catch(() => {}).then(async () => {
+      while (isCurrentScope(state) && state.pending.has(id)) {
+        const op = state.pending.get(id);
+        try {
+          const completed = await runFavoriteIntent(state, id, op);
+          if (!completed || !isCurrentScope(state)) return;
+          if (state.pending.get(id) === op) {
+            state.pending.delete(id);
+            state.attempts.delete(id);
+            acknowledgeFavoriteIntent(state.scope, id, op);
+            persistPendingFavs(state);
+          }
+        } catch (error) {
+          if (!isCurrentScope(state)) return;
+          const attempt = (state.attempts.get(id) || 0) + 1;
+          state.attempts.set(id, attempt);
+          // No revert: la outbox y la caché local son la garantía de durabilidad.
+          if (navigator.onLine !== false && error?.status !== 401 && error?.status !== 400 && !state.timers.has(id)) {
+            const delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * (2 ** Math.min(attempt - 1, 5)));
+            const timer = setTimeout(() => {
+              state.timers.delete(id);
+              if (isCurrentScope(state)) queueFavorite(id);
+            }, delay);
+            state.timers.set(id, timer);
+          }
+          return;
+        }
+      }
+    });
+    state.workers.set(id, worker);
+    worker.then(() => {
+      if (state.workers.get(id) === worker) state.workers.delete(id);
+    }, () => {
+      if (state.workers.get(id) === worker) state.workers.delete(id);
+    });
+    return worker;
+  }, [isCurrentScope, persistPendingFavs, runFavoriteIntent]);
 
   const flushPendingFavs = useCallback(async () => {
-    if (!pendingFavsRef.current.size) return;
-    const entries = [...pendingFavsRef.current.entries()];
-    for (const [id, op] of entries) {
-      try {
-        if (op === 'add') await api.addFavorite(id);
-        else await api.removeFavorite(id);
-        pendingFavsRef.current.delete(id);
-      } catch { break; }
-    }
-    savePendingFavs();
+    const state = scopeStateRef.current;
+    const ids = [...state.pending.keys()];
+    await Promise.all(ids.map((id) => queueFavorite(id)));
+  }, [queueFavorite]);
+
+  // Limpiar temporizadores cuando el hook deja de existir.
+  useEffect(() => () => {
+    scopeStateRef.current?.timers.forEach((timer) => clearTimeout(timer));
+    scopeStateRef.current?.timers.clear();
   }, []);
 
   // Sincronizar al recuperar conexión
@@ -69,30 +145,28 @@ export function useLibraryActions({ authed, showToast } = {}) {
   }, []);
 
   const toggleFav = useCallback(async (id) => {
+    if (!id) return;
+    const state = scopeStateRef.current;
     const store = useLibraryStore.getState();
     const has = store.favs.includes(id);
-    // Optimistic update via store wrapper
+    const op = has ? 'remove' : 'add';
+
+    // Optimista y durable: la caché/outbox se actualizan antes de cualquier red.
     store.toggleFav(id);
-    if (!has) {
-      const tk = trackById(id);
-      if (tk) api.saveTracks([slimTrack(tk)]).catch(() => {});
+    // Registrar también la última intención fuera de la outbox: una respuesta
+    // remota iniciada antes de este toggle no puede sobrescribir el estado local.
+    noteFavoriteIntent(state.scope, id, op);
+    state.pending.set(id, op);
+    persistPendingFavs(state);
+    if (op === 'add') {
       // Me gusta → offline (letra + audio). Quitar like no borra descargas.
       offlinePack([id]);
     }
-    try {
-      has ? await api.removeFavorite(id) : await api.addFavorite(id);
-      pendingFavsRef.current.delete(id);
-      savePendingFavs();
-    } catch {
-      pendingFavsRef.current.set(id, has ? 'remove' : 'add');
-      savePendingFavs();
-      if (navigator.onLine) {
-        // Revertir solo con red
-        store.toggleFav(id);
-        showToast?.('No se pudo actualizar Me gusta');
-      }
+    await queueFavorite(id);
+    if (isCurrentScope(state) && state.pending.has(id)) {
+      showToast?.('Se sincronizará Me gusta cuando el servidor responda');
     }
-  }, [showToast, offlinePack]);
+  }, [isCurrentScope, persistPendingFavs, queueFavorite, showToast, offlinePack]);
 
   const createPlaylist = useCallback(async (name) => {
     const store = useLibraryStore.getState();

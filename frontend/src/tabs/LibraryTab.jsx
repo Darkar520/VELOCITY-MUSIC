@@ -8,10 +8,9 @@ import { useListSearch } from './useListSearch.js';
 import { useLibraryStore } from '../store/libraryStore.js';
 import { usePlayerStore } from '../store/playerStore.js';
 
-export function LibraryTab({ T, play, openPlaylist, setOpenPlaylist, addToTarget, onMenu, downloadMany, goAlbum, goMix, selecting, selection, toggleSelect, startSelection, addToQueue, removeFromQueue, setShowImport, hydrateTracks, createPlaylist, removeFromPlaylist, deletePlaylist, savePlaylist, unsavePlaylist }) {
+export function LibraryTab({ T, play, openPlaylist, setOpenPlaylist, addToTarget, onMenu, onToggleFav, downloadMany, goAlbum, goMix, selecting, selection, toggleSelect, startSelection, addToQueue, removeFromQueue, setShowImport, hydrateTracks, createPlaylist, removeFromPlaylist, deletePlaylist, savePlaylist, unsavePlaylist }) {
   // Library store
   const favs = useLibraryStore((s) => s.favs);
-  const toggleFavInStore = useLibraryStore((s) => s.toggleFav);
   const playlists = useLibraryStore((s) => s.playlists);
   const savedAlbums = useLibraryStore((s) => s.savedAlbums);
   const savedPlaylists = useLibraryStore((s) => s.savedPlaylists);
@@ -21,8 +20,7 @@ export function LibraryTab({ T, play, openPlaylist, setOpenPlaylist, addToTarget
   const playing = usePlayerStore((s) => s.playing);
   const downloaded = usePlayerStore((s) => s.downloaded);
   const downloading = usePlayerStore((s) => s.downloading);
-  // Wrapper
-  const toggleFav = (id) => toggleFavInStore(id);
+  const toggleFav = onToggleFav || (() => {});
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
   // Búsqueda dentro de la playlist abierta. Hook al nivel superior (no dentro

@@ -187,3 +187,22 @@ test('App uses usePlaybackController; no dual machineRef reduce loop', () => {
   assert.match(store, /dispatchPolicy/);
   assert.match(store, /getMachineState/);
 });
+
+test('ended playback never waits for network continuation', () => {
+  const app = readFileSync(src('App.jsx'), 'utf8');
+  const start = app.indexOf('const onEnded =');
+  const end = app.indexOf('// ── Acciones de biblioteca', start);
+  assert.ok(start >= 0 && end > start, 'App must contain a bounded onEnded handler');
+  const handler = app.slice(start, end);
+  assert.match(handler, /const onEnded = \(\) =>/);
+  assert.doesNotMatch(handler, /await\s+buildContinuation|api\.radio|api\.search/);
+  assert.match(handler, /continuationRef/);
+});
+
+test('preload completion is invalidated across visibility changes', () => {
+  const app = readFileSync(src('App.jsx'), 'utf8');
+  assert.match(app, /preloadEpochRef/);
+  assert.match(app, /setPreloadEpoch/);
+  assert.match(app, /isPreloadCurrent/);
+  assert.match(app, /\[track\?\.id, queue, quality, preloadEpoch\]/);
+});

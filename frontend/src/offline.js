@@ -22,22 +22,37 @@ function openDB() {
   });
 }
 
-/** Guarda letra (LRC y/o plain) para reproducción offline. */
-export async function saveLyrics(id, data) {
+function lyricsStatus(data) {
+  if (data?.synced) return 'synced';
+  if (data?.plain) return 'plain';
+  return ['pending', 'failed'].includes(data?.status) ? data.status : 'pending';
+}
+
+function lyricsRecord(id, data = {}, previous = null) {
+  const synced = data.synced || previous?.synced || null;
+  const plain = data.plain || previous?.plain || null;
+  return {
+    ...(previous || {}),
+    id,
+    synced,
+    plain,
+    source: data.source || previous?.source || null,
+    status: lyricsStatus({ ...data, synced, plain }),
+    error: data.error || null,
+    attempts: Number.isFinite(data.attempts) ? data.attempts : Number(previous?.attempts || 0),
+    lastAttemptAt: data.lastAttemptAt || previous?.lastAttemptAt || null,
+    at: Date.now(),
+  };
+}
+
+async function putLyricsRecord(id, data) {
   if (!id || !data) return false;
   try {
     const db = await openDB();
-    // Asegurar store en DBs antiguas abiertas sin upgrade (edge case).
     if (!db.objectStoreNames.contains(LYRICS_STORE)) return false;
     await new Promise((resolve, reject) => {
       const tx = db.transaction(LYRICS_STORE, 'readwrite');
-      tx.objectStore(LYRICS_STORE).put({
-        id,
-        synced: data.synced || null,
-        plain: data.plain || null,
-        source: data.source || null,
-        at: Date.now(),
-      });
+      tx.objectStore(LYRICS_STORE).put(data);
       tx.oncomplete = () => resolve(true);
       tx.onerror = () => reject(tx.error);
     });
@@ -45,7 +60,28 @@ export async function saveLyrics(id, data) {
   } catch { return false; }
 }
 
-/** Lee letra cacheada (offline). */
+/** Guarda letra (LRC y/o plain) para reproducción offline. */
+export async function saveLyrics(id, data) {
+  if (!id || !data) return false;
+  const previous = await getLyrics(id);
+  return putLyricsRecord(id, lyricsRecord(id, data, previous));
+}
+
+/** Persiste el estado de resolución aunque aún no haya letra disponible. */
+export async function saveLyricsStatus(id, status, details = {}) {
+  if (!id || !['pending', 'synced', 'plain', 'failed'].includes(status)) return false;
+  const previous = await getLyrics(id);
+  const record = lyricsRecord(id, {
+    ...details,
+    status,
+    synced: status === 'synced' ? details.synced : previous?.synced,
+    plain: status === 'plain' ? details.plain : previous?.plain,
+  }, previous);
+  record.status = record.synced ? 'synced' : record.plain ? 'plain' : status;
+  return putLyricsRecord(id, record);
+}
+
+/** Lee letra cacheada (offline), incluyendo el estado persistido. */
 export async function getLyrics(id) {
   if (!id) return null;
   try {
@@ -54,10 +90,27 @@ export async function getLyrics(id) {
     return await new Promise((resolve) => {
       const tx = db.transaction(LYRICS_STORE, 'readonly');
       const rq = tx.objectStore(LYRICS_STORE).get(id);
-      rq.onsuccess = () => resolve(rq.result || null);
+      rq.onsuccess = () => {
+        const value = rq.result || null;
+        resolve(value ? { ...value, status: lyricsStatus(value) } : null);
+      };
       rq.onerror = () => resolve(null);
     });
   } catch { return null; }
+}
+
+/** Lista estados de letras para construir un reporte de cobertura real. */
+export async function listLyrics() {
+  try {
+    const db = await openDB();
+    if (!db.objectStoreNames.contains(LYRICS_STORE)) return [];
+    return await new Promise((resolve) => {
+      const tx = db.transaction(LYRICS_STORE, 'readonly');
+      const rq = tx.objectStore(LYRICS_STORE).getAll();
+      rq.onsuccess = () => resolve((rq.result || []).map((value) => ({ ...value, status: lyricsStatus(value) })));
+      rq.onerror = () => resolve([]);
+    });
+  } catch { return []; }
 }
 
 export async function deleteLyrics(id) {

@@ -10,10 +10,9 @@ import { useListSearch } from './useListSearch.js';
 import { useLibraryStore } from '../store/libraryStore.js';
 import { usePlayerStore } from '../store/playerStore.js';
 
-export function DetailView({ view, T, play, addToTarget, onMenu, goArtist, goAlbum, setView, detailLoading, detailData, downloadMany, saveAlbum, unsaveAlbum, savePlaylist, unsavePlaylist, selecting, selection, toggleSelect, startSelection, addToQueue, removeFromQueue }) {
+export function DetailView({ view, T, play, addToTarget, onMenu, onToggleFav, goArtist, goAlbum, setView, detailLoading, detailData, downloadMany, saveAlbum, unsaveAlbum, savePlaylist, unsavePlaylist, selecting, selection, toggleSelect, startSelection, addToQueue, removeFromQueue }) {
   // Library store
   const favs = useLibraryStore((s) => s.favs);
-  const toggleFavInStore = useLibraryStore((s) => s.toggleFav);
   const isAlbumSaved = useLibraryStore((s) => s.isAlbumSaved);
   const isPlaylistSaved = useLibraryStore((s) => s.isPlaylistSaved);
   // Player store
@@ -21,8 +20,7 @@ export function DetailView({ view, T, play, addToTarget, onMenu, goArtist, goAlb
   const playing = usePlayerStore((s) => s.playing);
   const downloaded = usePlayerStore((s) => s.downloaded);
   const downloading = usePlayerStore((s) => s.downloading);
-  // Wrapper
-  const toggleFav = (id) => toggleFavInStore(id);
+  const toggleFav = onToggleFav || (() => {});
   const [showAll, setShowAll] = useState(false);
   // Búsqueda dentro de la vista de detalle (mix, álbum, artista). Hook al nivel
   // superior para cumplir con las Rules of Hooks de React.

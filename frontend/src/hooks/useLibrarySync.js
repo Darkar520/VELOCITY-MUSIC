@@ -8,35 +8,42 @@
  *   2. Cuando authed=true, hacer fetch inicial de favs/playlists/recent/saved.
  *   3. Re-persistir cache cuando el store cambia.
  *
- * NO maneja:
- *   - SSE now-playing (eso queda en App.jsx, es del dominio player)
+ *   - Eventos remotos now-playing: no se consumen en el frontend; el backend conserva solo telemetría compatible.
  *   - Feed personalizado (depende de too many inputs, queda en App.jsx)
- *   - Upload de pendingFavs offline (sigue en App.jsx, requiere refs)
+ *   - Upload de pendingFavs offline: lo maneja useLibraryActions con outbox por cuenta.
  *
  * Uso:
  *   useLibrarySync({ authed });
  */
 import { useEffect, useRef } from 'react';
 import { useLibraryStore } from '../store/libraryStore.js';
-import { api } from '../api.js';
+import { api, getToken, getAuthGeneration } from '../api.js';
 import { allCached, saveMeta, trackById, normalizeTrack, cacheTrack } from '../catalog.js';
 import { slimTrack } from '../helpers.js';
+import {
+  loadPendingFavs,
+  mergeFavoriteIds,
+  cacheIdentity,
+  favoriteIntentVersion,
+  loadFavoriteIntents,
+  pruneAcknowledgedFavoriteIntents,
+} from '../favoriteOutbox.js';
 import { backfillLibraryLyrics } from '../offlineLibrary.js';
 import * as offline from '../offline.js';
 
-function libCacheKey() {
-  return 'velocity.lib.' + (localStorage.getItem('velocity.email') || 'u');
+function libCacheKey(email) {
+  return 'velocity.lib.' + cacheIdentity(email, getToken());
 }
 
-function readLibCache() {
+function readLibCache(email) {
   try {
-    const raw = localStorage.getItem(libCacheKey());
+    const raw = localStorage.getItem(libCacheKey(email));
     if (!raw) return null;
     return JSON.parse(raw);
   } catch { return null; }
 }
 
-function writeLibCache(favIds, pls, albums, savedPls, recentIds) {
+function writeLibCache(favIds, pls, albums, savedPls, recentIds, email) {
   try {
     const libIds = new Set([...(favIds || []), ...(recentIds || [])]);
     (pls || []).forEach(p => (p.trackIds || []).forEach(id => libIds.add(id)));
@@ -47,7 +54,7 @@ function writeLibCache(favIds, pls, albums, savedPls, recentIds) {
       (typeof t.cover === 'string' && (t.cover.startsWith('data:') || t.cover.startsWith('blob:')))
         ? { ...t, cover: '' } : t
     );
-    localStorage.setItem(libCacheKey(), JSON.stringify({
+    localStorage.setItem(libCacheKey(email), JSON.stringify({
       favs: favIds || [],
       playlists: pls || [],
       savedAlbums: albums || [],
@@ -86,29 +93,49 @@ async function hydrateSavedAlbums(albums) {
   return result;
 }
 
-export function useLibrarySync({ authed } = {}) {
-  const didInitRef = useRef(false);
+export function useLibrarySync({ authed, email = '' } = {}) {
+  const cacheKey = libCacheKey(email);
+  const didInitRef = useRef(null);
 
-  // ─── 1. Hidratar desde localStorage al montar (una sola vez) ─────
+  // ─── 1. Hidratar desde localStorage al montar/cambiar de cuenta ────
   useEffect(() => {
-    if (didInitRef.current) return;
-    didInitRef.current = true;
-    const c = readLibCache();
-    if (!c) return;
-    // Poblar catálogo primero (los tracks cacheados) — restoreLibCache original hacía esto
-    if (Array.isArray(c.tracks)) c.tracks.forEach(cacheTrack);
     const store = useLibraryStore.getState();
-    if (Array.isArray(c.favs))          store.setFavs(c.favs);
+    if (!authed) {
+      // La biblioteca es sensible a la cuenta: nunca conservamos el estado
+      // anterior mientras la sesión está cerrada o cambia de identidad.
+      if (didInitRef.current !== null || store.favs.length || store.playlists.length || store.recent.length || store.savedAlbums.length || store.savedPlaylists.length) store.reset();
+      didInitRef.current = null;
+      return;
+    }
+    if (didInitRef.current === cacheKey) return;
+    didInitRef.current = cacheKey;
+    store.reset();
+    const c = readLibCache(email);
+    if (!c) return;
+    const scope = cacheIdentity(email, getToken());
+    const pending = loadPendingFavs(globalThis.localStorage, scope);
+    const localIntents = loadFavoriteIntents(scope);
+    if (Array.isArray(c.tracks))        c.tracks.forEach(cacheTrack);
+    if (Array.isArray(c.favs))          store.setFavs(mergeFavoriteIds(mergeFavoriteIds(c.favs, pending), localIntents));
     if (Array.isArray(c.playlists))     store.setPlaylists(c.playlists);
     if (Array.isArray(c.savedAlbums))   store.setSavedAlbums(c.savedAlbums);
     if (Array.isArray(c.savedPlaylists)) store.setSavedPlaylists(c.savedPlaylists);
     if (Array.isArray(c.recent))        store.setRecent(c.recent);
-  }, []);
+  }, [authed, cacheKey, email]);
 
   // ─── 2. Fetch inicial cuando authed ───────────────────────────────
   useEffect(() => {
     if (!authed) return;
     let cancel = false;
+    const requestCacheKey = cacheKey;
+    const requestAuthGeneration = getAuthGeneration();
+    const requestScope = cacheIdentity(email, getToken());
+    const requestIntentVersion = favoriteIntentVersion(requestScope);
+    const isCurrent = () => (
+      !cancel
+      && didInitRef.current === requestCacheKey
+      && getAuthGeneration() === requestAuthGeneration
+    );
     (async () => {
       try {
         const [fav, pls, hist, albums, savedPls] = await Promise.all([
@@ -118,9 +145,20 @@ export function useLibrarySync({ authed } = {}) {
           api.savedAlbums().catch(() => null),
           api.savedPlaylists().catch(() => null),
         ]);
-        if (cancel) return;
+        if (!isCurrent()) return;
         const store = useLibraryStore.getState();
-        if (fav !== null)      store.setFavs(fav);
+        const pending = loadPendingFavs(globalThis.localStorage, requestScope);
+        // Incluir intenciones posteriores al inicio de esta petición: el
+        // response puede representar el estado remoto anterior al toggle.
+        const recentIntents = loadFavoriteIntents(requestScope, requestIntentVersion);
+        if (fav !== null) {
+          // El backend confirma la cuenta, pero la outbox y la última intención
+          // local conservan operaciones que todavía no aparecen en la respuesta.
+          store.setFavs(mergeFavoriteIds(mergeFavoriteIds(fav, pending), recentIntents));
+        } else {
+          store.setFavs(mergeFavoriteIds(mergeFavoriteIds(store.favs, pending), recentIntents));
+        }
+        pruneAcknowledgedFavoriteIntents(requestScope, requestIntentVersion);
         if (hist !== null)     store.setRecent(hist.map(h => h.trackId));
         if (savedPls !== null) store.setSavedPlaylists(savedPls);
         if (pls !== null) {
@@ -128,7 +166,7 @@ export function useLibrarySync({ authed } = {}) {
             const ids = await api.playlistTracks(p.id).catch(() => []);
             return { id: p.id, name: p.name, trackIds: ids };
           }));
-          if (!cancel) store.setPlaylists(withTracks);
+          if (isCurrent()) store.setPlaylists(withTracks);
         }
 
         // Los álbumes antiguos solo guardan metadata en backend. Expandirlos a
@@ -142,9 +180,9 @@ export function useLibrarySync({ authed } = {}) {
             ...album,
           }));
           hydratedAlbums = await hydrateSavedAlbums(mergedAlbums);
-          if (!cancel) store.setSavedAlbums(hydratedAlbums);
+          if (isCurrent()) store.setSavedAlbums(hydratedAlbums);
         }
-        if (cancel) return;
+        if (!isCurrent()) return;
 
         // Las descargas son otra fuente de verdad: sus metadatos deben entrar
         // al catálogo antes de programar letras, aunque nunca hayan sido parte
@@ -164,32 +202,33 @@ export function useLibrarySync({ authed } = {}) {
         // y descargas. Antes solo se cubrían favoritos y playlists propias.
         if (fav !== null || pls !== null || albums !== null || savedPls !== null || downloadedIds.length) {
           const libraryState = useLibraryStore.getState();
-          const finalFavs = fav !== null ? fav : (libraryState.favs || []);
+          const finalFavs = libraryState.favs || [];
           const recentIds = hist !== null ? hist.map(h => h.trackId) : (libraryState.recent || []);
           const currentPls = libraryState.playlists;
           const currentAlbums = libraryState.savedAlbums;
+          const finalSavedPlaylists = libraryState.savedPlaylists;
           const allIds = new Set([...finalFavs, ...recentIds, ...(downloadedIds || [])]);
           currentPls.forEach(p => (p.trackIds || []).forEach(id => allIds.add(id)));
           (savedPls || []).forEach(p => (p.trackIds || []).forEach(id => allIds.add(id)));
           (currentAlbums || []).forEach(a => (a.trackIds || []).forEach(id => allIds.add(id)));
           const missing = [...allIds].filter(id => id && !trackById(id));
-          for (let i = 0; i < missing.length && !cancel; i += 300) {
+          for (let i = 0; i < missing.length && isCurrent(); i += 300) {
             const metas = await api.getTracks(missing.slice(i, i + 300)).catch(() => []);
-            if (!cancel && metas.length) metas.forEach(normalizeTrack);
+            if (isCurrent() && metas.length) metas.forEach(normalizeTrack);
           }
-          if (!cancel) {
+          if (isCurrent()) {
             saveMeta();
             const finalPlaylists = useLibraryStore.getState().playlists;
             const finalAlbums = useLibraryStore.getState().savedAlbums;
-            writeLibCache(finalFavs, finalPlaylists, finalAlbums, savedPls || [], recentIds);
+            writeLibCache(finalFavs, finalPlaylists, finalAlbums, finalSavedPlaylists, recentIds, email);
             // Sincronización silenciosa por cuenta y por pista. Las fallidas
             // permanecen pendientes y se reintentan en el siguiente arranque.
             backfillLibraryLyrics({
-              scope: localStorage.getItem('velocity.email') || 'anonymous',
+              scope: cacheIdentity(email, getToken()),
               favs: finalFavs,
               playlists: finalPlaylists,
               savedAlbums: finalAlbums,
-              savedPlaylists: savedPls || [],
+              savedPlaylists: finalSavedPlaylists,
               downloadedIds: downloadedIds || [],
             });
           }
@@ -197,7 +236,7 @@ export function useLibrarySync({ authed } = {}) {
       } catch { /* silent — offline o backend caído */ }
     })();
     return () => { cancel = true; };
-  }, [authed]);
+  }, [authed, email, cacheKey]);
 
   // ─── 3. Re-persistir cache cuando el store cambia ────────────────
   const favs = useLibraryStore((s) => s.favs);
@@ -207,9 +246,9 @@ export function useLibrarySync({ authed } = {}) {
   const recent = useLibraryStore((s) => s.recent);
 
   useEffect(() => {
-    if (!authed) return;
-    writeLibCache(favs, playlists, savedAlbums, savedPlaylists, recent);
-  }, [authed, favs, playlists, savedAlbums, savedPlaylists, recent]);
+    if (!authed || didInitRef.current !== cacheKey) return;
+    writeLibCache(favs, playlists, savedAlbums, savedPlaylists, recent, email);
+  }, [authed, cacheKey, email, favs, playlists, savedAlbums, savedPlaylists, recent]);
 }
 
 export default useLibrarySync;

@@ -29,6 +29,7 @@ Repo-specific guidance for OpenCode sessions. Read this first; the README and `d
 ## Environment / deploy
 
 - **`.env` is gitignored, single source of secrets.** Required in prod: `JWT_SECRET` (long random), `ADMIN_KEY` (≥8 chars, no default — admin panel disabled if unset), `ALLOWED_ORIGIN` (CORS fail-closed in prod if missing — DO NOT add `*`).
+- **Deezer fallback is disabled by default** (`DEEZER_ENABLED=0`). Configure `DEEZER_ARL_TOKEN` (or rotated `DEEZER_ARL_TOKENS`), `DEEZER_QUALITY`, and `DEEZER_TIMEOUT_MS` only through the runtime environment or an approved secret manager; never commit credentials, place them in source, or expose them in logs. Rotate/revoke ARL credentials in the secret manager and update the active environment value(s). Follow Deezer terms of service and applicable laws.
 - **Default storage is JSON** (`data/velocity-db.json`); PostgreSQL is opt-in via `USE_POSTGRES=1` (+ `DATABASE_URL`). **Cluster mode requires Postgres** — JSON corrupts across processes.
 - **Backend restart only needed for `src/**` changes.** Touching `frontend/**` does NOT require backend restart. After backend changes: stop the Node process; the guardian (`scripts/velocity-guardian.ps1`) revives it in ~30s. Verify with `GET /api/status` → `{"status":"operational"}`.
 - **Staging sandbox:** `npm run start:staging` (port 3001, isolated `data-staging/`). Don't run the prod backend against `data/` when testing.

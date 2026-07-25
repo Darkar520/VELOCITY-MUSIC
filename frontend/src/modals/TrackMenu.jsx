@@ -6,10 +6,11 @@ import { CoverImg } from '../components.jsx';
 import { useLibraryStore } from '../store/libraryStore.js';
 import { usePlayerStore } from '../store/playerStore.js';
 
-export function TrackMenu({ trackId, onClose, T, addToTarget, goArtist, goAlbum, shareTrack, addToQueue, download, removeDownload, playingFrom, goToPlayingPlaylist }) {
+export function TrackMenu({ trackId, onClose, T, addToTarget, onToggleFav, goArtist, goAlbum, shareTrack, addToQueue, download, removeDownload, playingFrom, goToPlayingPlaylist }) {
   // Library store
   const favs = useLibraryStore((s) => s.favs);
-  const toggleFavInStore = useLibraryStore((s) => s.toggleFav);
+  // La mutación duradera llega desde App/useLibraryActions; el store solo expone el estado.
+  const toggleFav = onToggleFav || (() => {});
   // Player store
   const track = usePlayerStore((s) => s.track);
   const downloaded = usePlayerStore((s) => s.downloaded);
@@ -19,7 +20,7 @@ export function TrackMenu({ trackId, onClose, T, addToTarget, goArtist, goAlbum,
   if (!tk) return null;
   const faved = favs.includes(trackId);
   const isDl = downloaded.has(trackId);
-  const toggleFav = (id) => { toggleFavInStore(id); /* App.jsx escucha cambios para llamar api */ };
+  // `toggleFav` conserva la última intención en la outbox por pista.
   const items = [
     { icon: Icon.Queue, label:'Añadir a la cola', action: () => { addToQueue(trackId); onClose(); } },
     { icon: Icon.Disc,  label:'Ir al álbum',      action: () => { goAlbum(tk.albumId, tk.album, tk.artist, tk.title, tk.cover); onClose(); } },

@@ -28,6 +28,12 @@ import { createFavoritesService, FavoritesError } from './services/favoritesServ
 import { createHistoryService, HistoryError } from './services/historyService.js';
 import { extractorStatus } from './services/extractorSetup.js';
 import { updateNowPlaying, getNowPlaying, subscribeNowPlaying } from './services/nowPlayingService.js';
+import {
+  setupDeezerProvider,
+  createDeezerExtractor,
+  createDeezerCatalog,
+} from './services/deezerIntegration.js';
+import { loadDeezerConfig, validateConfig } from './extractors/deezerConfig.js';
 
 let _importClient = null;
 let _importClientInit = null;
@@ -82,6 +88,14 @@ export function createApp(deps = {}) {
     setActiveMode = null,
     extractorProbe = null,
     installExtractorImpl = null,
+    // ── Integración Deezer opcional ──
+    // Los overrides permiten probar el wiring sin crear clientes de red.
+    deezerConfig = undefined,
+    deezerProvider = undefined,
+    deezerExtractorImpl = null,
+    deezerCatalogImpl = null,
+    deezerMetrics = null,
+    deezerStats = null,
     startTime = Date.now(),
     userRepo,
     playlistRepo,
@@ -269,6 +283,70 @@ export function createApp(deps = {}) {
     : null;
   const historyService = historyRepo ? createHistoryService({ historyRepo, trackRepo }) : null;
 
+  // ── Deezer opcional ───────────────────────────────────────────
+  // Se inicializa dentro de createApp porque server.js ya ha cargado el
+  // entorno. Una configuración ausente o inválida nunca debe impedir que
+  // arranquen YouTube Music y SoundCloud.
+  const deezerOptions = deezerConfig === undefined ? loadDeezerConfig() : deezerConfig;
+  const deezerConfigErrors = validateConfig(deezerOptions);
+  const deezerEnabled = isObject(deezerOptions) && deezerOptions.enabled !== false;
+  const hasDeezerOverride = typeof deezerExtractorImpl === 'function'
+    || typeof deezerCatalogImpl === 'function'
+    || deezerProvider !== undefined
+    || (isObject(deezerOptions) && (
+      typeof deezerOptions.providerFactory === 'function'
+      || deezerOptions.provider !== undefined
+      || deezerOptions.deezerProvider !== undefined
+    ));
+  // Sin ARL/configuración válida el proveedor queda degradado y no se crean
+  // clientes de red por defecto. Los dobles explícitos siguen permitidos para
+  // tests y para instalaciones que usan un gestor de credenciales propio.
+  const canInitializeDeezer = deezerEnabled
+    && (deezerConfigErrors.length === 0 || hasDeezerOverride);
+  let deezerProviderInstance = null;
+  if (canInitializeDeezer) {
+    try {
+      deezerProviderInstance = deezerProvider === undefined
+        ? setupDeezerProvider(deezerOptions)
+        : setupDeezerProvider(deezerProvider);
+    } catch {
+      // setupDeezerProvider ya es tolerante; este guard protege también a
+      // futuros adaptadores inyectados que puedan fallar durante el arranque.
+      deezerProviderInstance = null;
+    }
+  }
+
+  const activeDeezerExtractor = canInitializeDeezer
+    ? (typeof deezerExtractorImpl === 'function'
+      ? deezerExtractorImpl
+      : deezerProviderInstance ? createDeezerExtractor(deezerProviderInstance) : null)
+    : null;
+  const activeDeezerCatalog = canInitializeDeezer
+    ? (typeof deezerCatalogImpl === 'function'
+      ? deezerCatalogImpl
+      : deezerProviderInstance ? createDeezerCatalog(deezerProviderInstance) : null)
+    : null;
+  const deezerConfigured = deezerConfigErrors.length === 0;
+  const deezerAvailable = Boolean(deezerEnabled && deezerConfigured && (activeDeezerExtractor || activeDeezerCatalog));
+  const deezerStatus = Object.freeze({
+    enabled: deezerEnabled,
+    configured: deezerConfigured,
+    available: deezerAvailable,
+    mode: !deezerEnabled ? 'disabled' : deezerAvailable ? 'full' : 'degraded',
+    statistics: readDeezerStatistics(
+      deezerStats,
+      deezerMetrics,
+      deezerOptions?.statistics,
+      deezerOptions?.metrics,
+      deezerProviderInstance?.statistics,
+      deezerProviderInstance?.metrics,
+    ),
+    disclaimer: 'Uso exclusivamente educativo/testing y no comercial; respeta los términos de Deezer y la legislación aplicable.',
+  });
+  // Estado seguro para 9.3: no se conserva ni se expone ningún ARL/token/URL.
+  app.locals.deezer = deezerStatus;
+  app.locals.deezerStatus = deezerStatus;
+
   // Resolver compartido para /api/resolve y el proxy. `opts.forceRefresh` re-resuelve
   // ignorando la caché (para recuperarse de URLs de audio expiradas/403).
   const doResolve = (params, opts = {}) =>
@@ -276,6 +354,7 @@ export function createApp(deps = {}) {
       cache,
       mode: getActiveMode(),
       extractorImpl,
+      deezerExtractorImpl: activeDeezerExtractor,
       catalogImpl,
       timeoutMs: resolveTimeoutMs,
       forceRefresh: !!opts.forceRefresh,
@@ -306,6 +385,7 @@ export function createApp(deps = {}) {
     const doSearch = () => searchTracks(qRaw, {
       limit: req.query.limit,
       catalogImpl,
+      deezerCatalogImpl: activeDeezerCatalog,
       timeoutMs: catalogTimeoutMs,
     });
     let results;
@@ -668,13 +748,14 @@ export function createApp(deps = {}) {
 
   // ---- Estado ----
   app.get('/api/status', (req, res) => {
-    res.json(
-      buildStatus({
+    res.json({
+      ...buildStatus({
         resolutionMode: getActiveMode(),
         cacheSize: cache.size(),
         uptime: (Date.now() - startTime) / 1000,
       }),
-    );
+      deezer: { ...app.locals.deezerStatus },
+    });
   });
 
   // ---- Calidades de audio disponibles ----
@@ -1275,6 +1356,77 @@ export function createApp(deps = {}) {
   }
 
   return app;
+}
+
+/** Indica si un valor es una configuración/registro Deezer seguro de inspeccionar. */
+function isObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+const SAFE_DEEZER_METRICS = Object.freeze([
+  'deezer_resolution_success_total',
+  'deezer_resolution_duration_seconds',
+  'deezer_cache_hit_ratio',
+  'deezer_auth_token_expiry_seconds',
+  'deezer_api_error_by_type',
+]);
+
+/**
+ * Takes a local metrics snapshot only. It deliberately whitelists metric names
+ * and scalar fields, so status can never serialize ARL, tokens, URLs, or error
+ * objects supplied by a provider. No provider/network method is invoked here.
+ */
+function readDeezerStatistics(...sources) {
+  for (const source of sources) {
+    if (!isObject(source)) continue;
+    let snapshot = source;
+    try {
+      if (typeof source.getAll === 'function') snapshot = source.getAll();
+      else if (typeof source.getMetrics === 'function') snapshot = source.getMetrics();
+    } catch {
+      continue;
+    }
+    if (!isObject(snapshot)) continue;
+
+    const result = {};
+    for (const name of SAFE_DEEZER_METRICS) {
+      if (!Object.prototype.hasOwnProperty.call(snapshot, name)) continue;
+      const value = snapshot[name];
+      if (name === 'deezer_resolution_duration_seconds') {
+        const histogram = pickFiniteFields(value, ['count', 'sum', 'min', 'max', 'average']);
+        if (isObject(value) && isObject(value.buckets)) {
+          const buckets = {};
+          for (const [bucket, count] of Object.entries(value.buckets)) {
+            if (Number.isFinite(Number(count))) buckets[String(bucket)] = Number(count);
+          }
+          if (Object.keys(buckets).length > 0) histogram.buckets = buckets;
+        }
+        result[name] = histogram;
+      } else if (name === 'deezer_api_error_by_type') {
+        const errors = {};
+        if (isObject(value)) {
+          for (const [type, count] of Object.entries(value)) {
+            if (Number.isFinite(Number(count))) errors[String(type).slice(0, 64)] = Number(count);
+          }
+        }
+        result[name] = errors;
+      } else if (Number.isFinite(Number(value))) {
+        result[name] = Number(value);
+      }
+    }
+    if (Object.keys(result).length > 0) return result;
+  }
+  return null;
+}
+
+function pickFiniteFields(value, fields) {
+  const result = {};
+  if (!isObject(value)) return result;
+  for (const field of fields) {
+    if (Number.isFinite(Number(value[field]))) result[field] = Number(value[field]);
+    else if (value[field] === null) result[field] = null;
+  }
+  return result;
 }
 
 /** Envuelve un handler async mapeando errores tipados a su código HTTP. */

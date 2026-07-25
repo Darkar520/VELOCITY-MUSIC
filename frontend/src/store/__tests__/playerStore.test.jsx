@@ -25,7 +25,6 @@ function reset() {
     playSrc: null,
     outputs: [],
     sinkId: '',
-    remotePlaying: null,
     mediaInterrupted: false,
     downloaded: new Set(),
     downloading: new Set(),

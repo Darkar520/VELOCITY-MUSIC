@@ -8,8 +8,12 @@ import { normalizeText, isUsableUrl } from '../lib/normalize.js';
  *   1. Stream_Cache (clave normalizada). Hit → devuelve URL.
  *   2. URL `stream` http(s) explícita válida → usar sin invocar yt-dlp.
  *   3. Full_Mode + yt-dlp resuelve pista completa ≤ 10 s → usar esa URL.
- *   4. yt-dlp inalcanzable/error/timeout → degradar (modo efectivo `degraded`).
- *   5. Sin fuente reproducible → 404 (no cachear).
+ *   4. Si YouTube Music falla, el extractor Deezer opcional puede resolverla.
+ *   5. Fallo de extractores → degradar; sin fuente reproducible → 404.
+ *
+ * Deezer es opt-in: el resolver solo lo intenta cuando el caller inyecta
+ * `ctx.deezerExtractorImpl`. SoundCloud/catálogo no forman parte de esta
+ * cadena de audio.
  *
  * El extractor se inyecta como `extractorImpl({ artist, title })` que devuelve
  * una URL directa o lanza/retorna null. El emparejamiento de candidatos del
@@ -29,9 +33,10 @@ export class ResolveError extends Error {
 
 /**
  * Resultado de resolución:
- *  { status: 302, url, fromCache, mode }                         éxito
+ *  { status: 302, url, fromCache, mode }                         éxito YT/URL explícita
+ *  { status: 302, url, provider: 'deezer', fromCache, mode }     éxito Deezer
  *  lanza ResolveError(400) parámetros inválidos
- *  { status: 'degraded', mode: 'degraded', message }             fallo extractor en full
+ *  { status: 'degraded', mode: 'degraded', message }             fallo de extractores en full
  *  lanza ResolveError(404) sin fuente reproducible
  */
 export async function resolve(params = {}, ctx = {}) {
@@ -40,6 +45,7 @@ export async function resolve(params = {}, ctx = {}) {
     cache,
     mode = 'full',
     extractorImpl,
+    deezerExtractorImpl,
     catalogImpl,
     timeoutMs = EXTRACTOR_TIMEOUT_MS,
     forceRefresh = false,
@@ -61,23 +67,32 @@ export async function resolve(params = {}, ctx = {}) {
       : `${normalizeText(artist)}:${normalizeText(title)}`;
   const key = quality ? `${baseKey}#${quality}` : baseKey;
 
-  // 1) Caché. Con forceRefresh se omite (la URL cacheada expiró/falló): se
-  //    re-resuelve y el cache.set posterior sobrescribe con la URL fresca.
+  const deezerKey = `deezer:${key}`;
+
+  // 1) Caché primaria (histórica/YouTube). Se consulta antes de cualquier
+  // proveedor para conservar el contrato y evitar re-resolver URLs vigentes.
+  // Con forceRefresh se omiten todas las cachés y la resolución empieza de
+  // nuevo, incluida la caché específica de Deezer.
   if (cache && !forceRefresh) {
     const cached = cache.get(key);
-    if (cached) {
+    if (isUsableUrl(cached)) {
       return { status: 302, url: cached, fromCache: true, mode };
     }
   }
 
-  // 2) URL de stream explícita válida (2.4) — sin invocar yt-dlp.
+  // 2) URL de stream explícita válida (2.4) — sin invocar extractores. Esto
+  // conserva las pistas de SoundCloud ya materializadas como URL directa;
+  // SoundCloud no se introduce como fallback automático aquí.
   if (isUsableUrl(stream)) {
     if (cache) cache.set(key, stream);
     return { status: 302, url: stream, fromCache: false, mode };
   }
 
-  // 3) Full_Mode + yt-dlp (2.3, 2.5–2.7, 2.11).
+  // 3) Full_Mode + YouTube Music (2.3, 2.5–2.7, 2.11). Solo un fallo
+  // resoluble (null, excepción o timeout) permite avanzar a Deezer.
+  let youtubeAttempted = false;
   if (mode === 'full' && typeof extractorImpl === 'function') {
+    youtubeAttempted = true;
     let url = null;
     try {
       url = await withTimeout(extractorImpl({ artist, title, videoId: params.videoId, quality }), timeoutMs);
@@ -88,7 +103,52 @@ export async function resolve(params = {}, ctx = {}) {
       if (cache) cache.set(key, url);
       return { status: 302, url, fromCache: false, mode: 'full' };
     }
-    // 4) Degradación ante fallo del extractor (2.8).
+  }
+
+  // 4) Fallback opt-in a Deezer. La clave separada evita que una URL Deezer
+  // sustituya una entrada YouTube existente y permite conservar el proveedor
+  // en el resultado sin cambiar el formato string del StreamCache actual.
+  if (mode === 'full' && typeof deezerExtractorImpl === 'function') {
+    if (cache && !forceRefresh) {
+      const cachedDeezer = cache.get(deezerKey);
+      if (isUsableUrl(cachedDeezer)) {
+        return {
+          status: 302,
+          url: cachedDeezer,
+          provider: 'deezer',
+          fromCache: true,
+          mode: 'full',
+        };
+      }
+    }
+
+    let deezerUrl = null;
+    try {
+      // El adaptador recibe la misma forma de argumentos que el extractor YT;
+      // el proveedor puede usar artist/title para buscar y quality para elegir
+      // el formato, sin acoplar el resolver a endpoints o metadatos Deezer.
+      deezerUrl = await withTimeout(
+        deezerExtractorImpl({ artist, title, videoId: params.videoId, quality }),
+        timeoutMs,
+      );
+    } catch {
+      deezerUrl = null;
+    }
+    if (isUsableUrl(deezerUrl)) {
+      if (cache) cache.set(deezerKey, deezerUrl);
+      return {
+        status: 302,
+        url: deezerUrl,
+        provider: 'deezer',
+        fromCache: false,
+        mode: 'full',
+      };
+    }
+  }
+
+  // 5) Degradación ante fallo del extractor (2.8). Se conserva el resultado
+  // histórico cuando YouTube fue intentado, incluso si Deezer también falla.
+  if (youtubeAttempted) {
     return {
       status: 'degraded',
       mode: 'degraded',
@@ -97,7 +157,7 @@ export async function resolve(params = {}, ctx = {}) {
     };
   }
 
-  // 5) Sin fuente reproducible (2.9) — no cachear (3.7).
+  // 6) Sin fuente reproducible (2.9) — no cachear (3.7).
   void catalogImpl;
   throw new ResolveError(
     404,

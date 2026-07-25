@@ -11,17 +11,15 @@ import { useLibraryStore } from '../store/libraryStore.js';
 import { usePlayerStore } from '../store/playerStore.js';
 import { enrichTracksInBackground } from '../coverEnrich.js';
 
-export function SearchTab({ T, play, addToTarget, onMenu, recentSearches, addSearch, removeSearch, goArtist, goAlbum, goMix, selecting, selection, toggleSelect, startSelection, addToQueue, removeFromQueue, backendDown, setTab }) {
+export function SearchTab({ T, play, addToTarget, onMenu, onToggleFav, recentSearches, addSearch, removeSearch, goArtist, goAlbum, goMix, selecting, selection, toggleSelect, startSelection, addToQueue, removeFromQueue, backendDown, setTab }) {
   // Library store
   const favs = useLibraryStore((s) => s.favs);
-  const toggleFavInStore = useLibraryStore((s) => s.toggleFav);
   // Player store
   const track = usePlayerStore((s) => s.track);
   const playing = usePlayerStore((s) => s.playing);
   const downloaded = usePlayerStore((s) => s.downloaded);
   const downloading = usePlayerStore((s) => s.downloading);
-  // Wrapper
-  const toggleFav = (id) => toggleFavInStore(id);
+  const toggleFav = onToggleFav || (() => {});
   const [q, setQ] = useState('');
   const [res, setRes] = useState({ songs: [], albums: [], artists: [] });
   const [relatedMixes, setRelatedMixes] = useState([]);

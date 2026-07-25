@@ -76,7 +76,6 @@ export function usePlayerStoreBindings() {
   const mediaInterrupted = usePlayerStore((s) => s.mediaInterrupted);
   const outputs = usePlayerStore((s) => s.outputs);
   const sinkId = usePlayerStore((s) => s.sinkId);
-  const remotePlaying = usePlayerStore((s) => s.remotePlaying);
   const downloaded = usePlayerStore((s) => s.downloaded);
   const downloading = usePlayerStore((s) => s.downloading);
 
@@ -102,7 +101,6 @@ export function usePlayerStoreBindings() {
   const setMediaInterrupted = useCallback(makeSetter('mediaInterrupted'), []);
   const setOutputs = useCallback(makeSetter('outputs'), []);
   const setSinkId = useCallback(makeSetter('sinkId'), []);
-  const setRemotePlaying = useCallback(makeSetter('remotePlaying'), []);
   const setDownloaded = useCallback(makeSetter('downloaded'), []);
   const setDownloading = useCallback(makeSetter('downloading'), []);
 
@@ -130,7 +128,6 @@ export function usePlayerStoreBindings() {
     mediaInterrupted, setMediaInterrupted,
     outputs, setOutputs,
     sinkId, setSinkId,
-    remotePlaying, setRemotePlaying,
     downloaded, setDownloaded,
     downloading, setDownloading,
   };

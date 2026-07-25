@@ -17,10 +17,10 @@ export function isTrackInLibrary(trackId, { favs = [], playlists = [], savedPlay
 }
 
 export async function ensureLyricsOffline(track) {
-  if (!track?.id) return false;
+  if (!track?.id) return { status: 'failed', error: 'missing_track' };
   try {
     const existing = await offline.getLyrics(track.id);
-    if (existing?.synced) return true;
+    if (existing?.synced) return { status: 'synced', record: existing };
 
     const base = {
       artist: track.artist,
@@ -33,18 +33,20 @@ export async function ensureLyricsOffline(track) {
     let d = await api.lyrics({ ...base, sync: true }).catch(() => null);
     if (!d?.synced) d = await api.lyrics(base).catch(() => null);
     if (!d || (!d.synced && !d.plain)) {
-      if (existing?.plain) return true;
-      return false;
+      if (existing?.plain) return { status: 'plain', record: existing };
+      return { status: 'failed', error: 'lyrics_not_found' };
     }
 
-    await offline.saveLyrics(track.id, {
+    const saved = await offline.saveLyrics(track.id, {
       synced: d.synced || existing?.synced || null,
       plain: d.plain || existing?.plain || null,
       source: d.source || existing?.source || null,
     });
-    return true;
-  } catch {
-    return false;
+    if (!saved) return { status: 'failed', error: 'storage_error' };
+    const record = await offline.getLyrics(track.id);
+    return { status: record?.synced ? 'synced' : 'plain', record };
+  } catch (error) {
+    return { status: 'failed', error: error?.message || 'lyrics_request_failed' };
   }
 }
 

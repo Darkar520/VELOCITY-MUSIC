@@ -9,10 +9,9 @@ import { useLibraryStore } from '../store/libraryStore.js';
 import { usePlayerStore } from '../store/playerStore.js';
 import { api } from '../api.js';
 
-export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMenu, goMix, displayName, avatar, email, setTab, startAiDj, onboardPrefs, setOnboardPrefs, backendDown }) {
+export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMenu, onToggleFav, goMix, displayName, avatar, email, setTab, startAiDj, onboardPrefs, setOnboardPrefs, backendDown }) {
   // Library store
   const favs = useLibraryStore((s) => s.favs);
-  const toggleFavInStore = useLibraryStore((s) => s.toggleFav);
   const recent = useLibraryStore((s) => s.recent);
   const playlists = useLibraryStore((s) => s.playlists);
   const homeRows = useLibraryStore((s) => s.homeRows);
@@ -24,8 +23,7 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
   const downloaded = usePlayerStore((s) => s.downloaded);
   const track = trackProp ?? storeTrack;
   const playing = playingProp ?? storePlaying;
-  // Wrapper para toggleFav (App.jsx escuchara para llamar api)
-  const toggleFav = (id) => toggleFavInStore(id);
+  const toggleFav = onToggleFav || (() => {});
   const [djBusy, setDjBusy] = useState(false);
   const [onboardSel, setOnboardSel] = useState([]);
   const [onboardStep, setOnboardStep] = useState(1); // 1=géneros, 2=artistas

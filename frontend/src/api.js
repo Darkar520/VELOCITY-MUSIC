@@ -3,14 +3,19 @@
 // En producción, el backend sirve este frontend como estático, así que /api es el mismo origen.
 
 let token = localStorage.getItem('velocity.token') || null;
+let authGeneration = 0;
 
 export function setToken(t) {
+  if (token !== t) authGeneration += 1;
   token = t;
   if (t) localStorage.setItem('velocity.token', t);
   else localStorage.removeItem('velocity.token');
 }
 export function getToken() {
   return token;
+}
+export function getAuthGeneration() {
+  return authGeneration;
 }
 export function isAuthed() {
   return !!token;
@@ -405,14 +410,17 @@ export const api = {
   // ── Metadatos de pistas (sincronización entre dispositivos) ──
   // Sube los metadatos de un lote de pistas para que otros dispositivos puedan
   // renderizar la biblioteca del usuario. Silencioso ante errores.
-  async saveTracks(tracks) {
+  async saveTracks(tracks, { throwOnError = false } = {}) {
     if (!tracks || !tracks.length) return;
     try {
-      await fetch('/api/tracks', {
+      const res = await fetch('/api/tracks', {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ tracks }),
       });
-    } catch {}
+      if (throwOnError) return jsonOrThrow(res);
+    } catch (error) {
+      if (throwOnError) throw error;
+    }
   },
   // Recupera (hidrata) metadatos de pistas por sus IDs.
   async getTracks(ids) {
@@ -423,7 +431,7 @@ export const api = {
     } catch { return []; }
   },
 
-  // ── Now Playing: sincronización en tiempo real entre dispositivos ──
+  // ── Now Playing: telemetría compatible con otros dispositivos ──
   async updateNowPlaying(state) {
     try {
       await fetch('/api/now-playing', {
@@ -432,17 +440,5 @@ export const api = {
         body: JSON.stringify(state),
       });
     } catch {}
-  },
-  async getNowPlaying() {
-    try {
-      return await jsonOrThrow(await fetch('/api/now-playing', { headers: authHeaders() }));
-    } catch { return { nowPlaying: null }; }
-  },
-  // SSE: stream de actualizaciones en tiempo real. Retorna el EventSource.
-  // EventSource no soporta headers custom, así que pasamos el token por query param.
-  subscribeNowPlaying() {
-    const t = getToken();
-    const url = t ? `/api/now-playing/events?token=${encodeURIComponent(t)}` : '/api/now-playing/events';
-    return new EventSource(url, { withCredentials: false });
   },
 };

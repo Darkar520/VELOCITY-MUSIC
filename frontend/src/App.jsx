@@ -45,7 +45,6 @@ import { MiniPlayerBar } from './player/MiniPlayerBar.jsx';
 import { ExpandedPlayer } from './player/ExpandedPlayer.jsx';
 import { PlayerBar } from './player/PlayerBar.jsx';
 import { QueuePanel } from './player/QueuePanel.jsx';
-import { DeviceChip } from './player/DeviceChip.jsx';
 import { AddToPlaylistModal } from './modals/AddToPlaylistModal.jsx';
 import { ImportPlaylistModal } from './modals/ImportPlaylistModal.jsx';
 import { ImportBanner } from './modals/ImportBanner.jsx';
@@ -153,11 +152,9 @@ export default function App() {
     mediaInterrupted, setMediaInterrupted,
     outputs, setOutputs,
     sinkId, setSinkId,
-    remotePlaying, setRemotePlaying,
     downloaded, setDownloaded,
     downloading, setDownloading,
   } = usePlayerStoreBindings();
-  const sseRef = useRef(null);
   const objUrlRef = useRef(null);
   // Espejo de session (A12); la fuente de verdad es audioMachine.
   const sessionResumeRef = useRef(null);
@@ -205,7 +202,7 @@ export default function App() {
   } = useLibraryStoreBindings();
 
   // Hook de sincronización con backend (reemplaza los 3 useEffect de biblio)
-  useLibrarySync({ authed });
+  useLibrarySync({ authed, email });
 
   // UI transitoria
   const [openPlaylist, setOpenPlaylist] = useState(null);
@@ -453,6 +450,8 @@ export default function App() {
   // Dos <audio> ocultos que pre-descargan las siguientes 2 pistas de la cola.
   const preloadAudioRef = useRef(null);
   const preloadAudio2Ref = useRef(null);
+  const preloadEpochRef = useRef(0);
+  const [preloadEpoch, setPreloadEpoch] = useState(0);
   // Reintento por pista ante error de reproducción (URL de audio expirada, etc.).
   const playErrorRef = useRef({ id: null, n: 0 });
   const consecutiveFailsRef = useRef(0);
@@ -547,7 +546,11 @@ export default function App() {
 
   // Cargar descargas offline + manejar expiración de sesión (401 → re-login)
   useEffect(() => {
-    setOnUnauthorized(() => { setAuthed(false); showToast('Tu sesión expiró. Inicia sesión de nuevo.'); });
+    setOnUnauthorized(() => {
+      useLibraryStore.getState().reset();
+      setAuthed(false);
+      showToast('Tu sesión expiró. Inicia sesión de nuevo.');
+    });
     homeRows.forEach(sec => (sec.mixes || []).forEach(m => (m.tracks || []).forEach(cacheTrack))); // hidratar caché del feed guardado
     (async () => {
       try {
@@ -633,38 +636,8 @@ export default function App() {
     return () => { cancelled = true; unsub(); };
   }, [authed]);
 
-  // ── SSE: escuchar "now playing" de otros dispositivos en tiempo real ──
-  // Con reconexión automática: si la conexión se cae, se reintententa tras 3s.
-  useEffect(() => {
-    if (!authed) return;
-    let es = null;
-    let reconnectTimer = null;
-    let stopped = false;
-    const connect = () => {
-      if (stopped) return;
-      try {
-        es = api.subscribeNowPlaying();
-        es.onmessage = (e) => {
-          try {
-            const data = JSON.parse(e.data);
-            if (data.stopped || !data.playing) { setRemotePlaying(null); return; }
-            // No mostrar si es mi propio dispositivo reproduciendo la misma pista.
-            if (data.trackId === trackRef.current?.id && data.playing) return;
-            setRemotePlaying(data);
-          } catch {}
-        };
-        es.onerror = () => {
-          try { es.close(); } catch {}
-          if (!stopped) reconnectTimer = setTimeout(connect, 3000);
-        };
-        sseRef.current = es;
-      } catch {
-        if (!stopped) reconnectTimer = setTimeout(connect, 3000);
-      }
-    };
-    connect();
-    return () => { stopped = true; clearTimeout(reconnectTimer); try { es?.close(); } catch {} };
-  }, [authed]);
+  // La reproducción entre dispositivos no interviene en el reproductor local.
+  // El backend conserva now-playing para compatibilidad con otros clientes.
 
   // ── Re-persistir la caché al modificar biblioteca: lo maneja useLibrarySync ──
   // (antes había un useEffect acá que llamaba persistLibCache — eliminado por duplicación)
@@ -830,43 +803,10 @@ export default function App() {
     if (!a || !playingRef.current || a.ended) return;
     reacquireInFlight.current = true;
     if (a.volume < vol * 0.5) a.volume = vol;
-    const pin = Number.isFinite(a.currentTime) ? a.currentTime : 0;
-
-    const p1 = a.play();
-    if (p1 && p1.then) {
-      p1.then(() => {
-        // Si el browser rebobinó al re-play, reponer SOLO este pin local (no ancla global).
-        try {
-          if (pin > 1.25 && (a.currentTime || 0) < pin - 1.25) {
-            a.currentTime = pin;
-            setTime(pin);
-          }
-        } catch {}
-        reacquireInFlight.current = false;
-        clearYieldedFocus();
-      }).catch(() => {
-        selfPauseRef.current = true;
-        try { a.pause(); } catch {}
-        selfPauseRef.current = false;
-        setTimeout(() => {
-          if (!playingRef.current || !canForceReacquire(isDocumentVisible())) {
-            reacquireInFlight.current = false;
-            return;
-          }
-          const a2 = audioRef.current;
-          if (!a2 || a2.ended) { reacquireInFlight.current = false; return; }
-          if (a2.volume < vol * 0.5) a2.volume = vol;
-          try { if (pin > 0) a2.currentTime = pin; } catch {}
-          const p2 = a2.play();
-          if (p2 && p2.then) {
-            p2.then(() => {
-              reacquireInFlight.current = false;
-              clearYieldedFocus();
-            }).catch(() => { reacquireInFlight.current = false; });
-          } else { reacquireInFlight.current = false; }
-        }, 100);
-      });
-    } else { reacquireInFlight.current = false; }
+    // La máquina/runner vuelve a afirmar la reproducción en foreground;
+    // App no invoca directamente el elemento multimedia.
+    dispatchAudio({ type: 'PIPELINE_DEAD', hidden: false, position: a.currentTime || 0 });
+    reacquireInFlight.current = false;
   };
 
   useEffect(() => {
@@ -895,10 +835,14 @@ export default function App() {
 
     const onVis = () => {
       if (document.visibilityState === 'visible') {
+        preloadEpochRef.current += 1;
+        setPreloadEpoch((value) => value + 1);
         setTimeout(tryResume, 40);
         setTimeout(tryResume, 350);
         setTimeout(tryResume, 1000);
       } else {
+        preloadEpochRef.current += 1;
+        setPreloadEpoch((value) => value + 1);
         const a = audioRef.current;
         dispatchAudio({
           type: 'DOC_HIDDEN',
@@ -990,11 +934,18 @@ export default function App() {
   // URLs firmadas (HMAC): el proxy rechaza sin exp/sig.
   useEffect(() => {
     let cancelled = false;
+    const effectEpoch = preloadEpoch;
+    const isPreloadCurrent = () => (
+      !cancelled
+      && preloadEpochRef.current === effectEpoch
+      && isDocumentVisible()
+    );
     const ids = queue.length ? queue : (track ? [track.id] : []);
     const i = track ? ids.indexOf(track.id) : -1;
     const qualityMap = { high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' };
     const qParam = qualityMap[quality] || 'high';
     const preload = async (el, offset) => {
+      if (!isDocumentVisible()) { if (el) el.removeAttribute('src'); return; }
       if (!el || !track || i === -1 || ids.length < 2) { if (el) el.removeAttribute('src'); return; }
       const nextId = ids[(i + offset) % ids.length];
       if (!nextId || nextId === track.id || downloaded.has(nextId)) { el.removeAttribute('src'); return; }
@@ -1006,10 +957,10 @@ export default function App() {
         // Evita que la siguiente pista arranque con una URL a punto de expirar.
         let url = api.peekStreamUrl({ artist: nt.artist, title: nt.title, id: nt.id, quality: qParam }, 300);
         if (!url) url = await api.ensureStreamUrl({ artist: nt.artist, title: nt.title, id: nt.id, quality: qParam });
-        if (cancelled || !el) return;
+        if (!isPreloadCurrent() || !el) return;
         if (el.getAttribute('src') !== url) { el.src = url; try { el.load(); } catch {} }
       } catch {
-        if (!cancelled && el) el.removeAttribute('src');
+        if (isPreloadCurrent() && el) el.removeAttribute('src');
       }
     };
     preload(preloadAudioRef.current, 1);
@@ -1019,12 +970,13 @@ export default function App() {
     if (preloadAudio2Ref.current) preloadAudio2Ref.current.volume = 0;
     return () => { cancelled = true; };
     // NO depender de downloaded: causa re-renders que limpian el buffer.
-  }, [track?.id, queue, quality]);
+  }, [track?.id, queue, quality, preloadEpoch]);
 
   // ── Continuidad en segundo plano: extender la cola ANTES de que acabe ──
   // Última O penúltima pista → anexar relacionadas YA (en primer plano),
   // para que onEnded/next() sea síncrono con pantalla bloqueada.
   const autoExtendRef = useRef(null);
+  const continuationRef = useRef({ key: null, ids: [] });
   useEffect(() => {
     if (!track || !settings.autoplay) return;
     const ids = queue.length ? queue : [track.id];
@@ -1034,10 +986,12 @@ export default function App() {
     const key = `${track.id}:${ids.length}`;
     if (autoExtendRef.current === key) return;
     autoExtendRef.current = key;
+    continuationRef.current = { key, ids: [] };
     (async () => {
       try {
         const addIds = await buildContinuation(track, ids);
-        if (!addIds.length) return;
+        if (!addIds.length || trackRef.current?.id !== track.id) return;
+        continuationRef.current = { key, ids: addIds };
         setQueue(q => {
           const base = q && q.length ? q : [track.id];
           const merged = [...base];
@@ -1106,13 +1060,21 @@ export default function App() {
     return [];
   };
 
-  // ── Fin de pista: repeat / autoplay / radio de relacionadas ──
-  const onEnded = async () => {
+  // ── Fin de pista: repeat / autoplay / continuación ya precargada ──
+  // Este handler debe ser síncrono: con la pantalla bloqueada no puede esperar
+  // radio/búsqueda de red. La continuación se prepara por autoExtend mientras
+  // la app está activa; si no está lista, se detiene honestamente.
+  const onEnded = () => {
     const currentTrack = trackRef.current;
     const currentQueue = queueRef.current;
     const currentSettings = settingsRef.current;
 
-    if (repeat && audioRef.current) { audioRef.current.currentTime = 0; audioRef.current.volume = vol; audioRef.current.play().catch(() => {}); return; }
+    if (repeat && audioRef.current) {
+      audioRef.current.volume = vol;
+      dispatchAudio({ type: 'USER_SEEK', position: 0 });
+      dispatchAudio({ type: 'USER_PLAY' });
+      return;
+    }
     if (!currentSettings.autoplay) {
       api.updateNowPlaying({ trackId: '', title: '', artist: '', cover: '', position: 0, duration: 0, playing: false, deviceName: '', quality: '' });
       setPlaying(false); return;
@@ -1121,19 +1083,18 @@ export default function App() {
     const ids = currentQueue.length ? currentQueue : (currentTrack ? [currentTrack.id] : []);
     const i = ids.indexOf(currentTrack?.id);
 
-    // Hay siguiente en la cola → reproducir
+    // Hay siguiente en la cola → reproducir.
     if (i !== -1 && i < ids.length - 1) { next(); return; }
 
-    // Fin de la cola → continuar: otra mezcla relacionada (si venías de una) o
-    // radio de relacionadas. keepMix preserva la sesión para seguir encadenando.
-    if (currentTrack) {
-      const addIds = await buildContinuation(currentTrack, ids);
-      if (addIds.length) {
-        const nxt = trackById(addIds[0]);
-        if (nxt) { play(nxt, [...ids, ...addIds], { keepMix: true }); return; }
-      }
-    }
-    // Fin de la cola sin continuación → notificar stop a otros dispositivos.
+    // Solo usar una continuación que ya terminó de resolverse mientras estaba
+    // en foreground. Nunca bloquear onEnded con llamadas de red.
+    const prepared = continuationRef.current;
+    const continuationKey = `${currentTrack?.id || ''}:${ids.length}`;
+    const addIds = prepared.key === continuationKey ? prepared.ids : [];
+    const nxt = trackById(addIds[0]);
+    if (nxt) { play(nxt, [...ids, ...addIds], { keepMix: true }); return; }
+
+    // Fin de la cola sin continuación preparada → notificar stop.
     api.updateNowPlaying({ trackId: '', title: '', artist: '', cover: '', position: 0, duration: 0, playing: false, deviceName: '', quality: '' });
     setPlaying(false);
   };
@@ -1142,7 +1103,7 @@ export default function App() {
     toggleFav, createPlaylist, addToPlaylist, removeFromPlaylist, deletePlaylist,
     isAlbumSaved, saveAlbum, unsaveAlbum,
     isPlaylistSaved, savePlaylist, unsavePlaylist,
-  } = useLibraryActions({ authed, showToast });
+  } = useLibraryActions({ authed, email, showToast });
 
   // Búsquedas recientes (UI local, no libraryStore)
   const addSearch = (term) => setRecentSearches(s => [term, ...s.filter(x => x.toLowerCase() !== term.toLowerCase())].slice(0, 8));
@@ -1400,6 +1361,7 @@ export default function App() {
   const onLogout = () => {
     api.sessionEnd(); // fire-and-forget: cerrar sesión en PG antes de limpiar token
     api.logout();
+    useLibraryStore.getState().reset();
     localStorage.removeItem('velocity.email');
     localStorage.removeItem('velocity.name');
     localStorage.removeItem('velocity.avatar');
@@ -1412,6 +1374,8 @@ export default function App() {
     if (name != null) { setDisplayName(name); localStorage.setItem('velocity.name', name); }
     // Registrar inicio de sesión en PG para trazabilidad de tiempo de sesión activa.
     api.sessionStart();
+    // Limpiar cualquier estado de la sesión anterior antes de hidratar la nueva.
+    useLibraryStore.getState().reset();
     // Forzar regeneración del feed al hacer login (borra el feed del usuario anterior).
     useLibraryStore.getState().setHomeRows([]);
     useLibraryStore.getState().bumpFeedNonce();
@@ -1592,13 +1556,13 @@ export default function App() {
 
   const TabContent = (
     <>
-      {tab === 'home' && <HomeTab T={T} play={play} track={track} playing={playing} onMenu={setMenuTarget} goMix={goMix} displayName={displayName} avatar={avatar} email={email} setTab={setTab} startAiDj={startAiDj} onboardPrefs={onboardPrefs} setOnboardPrefs={setOnboardPrefs} backendDown={backendDown} />}
-      {tab === 'search' && <SearchTab T={T} play={play} addToTarget={setAddTarget} onMenu={setMenuTarget} recentSearches={recentSearches} addSearch={addSearch} removeSearch={removeSearch} goArtist={goArtist} goAlbum={goAlbum} goMix={goMix} selecting={selecting} selection={selection} toggleSelect={toggleSelect} startSelection={startSelection} addToQueue={addToQueue} removeFromQueue={removeFromQueueToast} backendDown={backendDown} setTab={setTab} />}
-      {tab === 'library' && <LibraryTab T={T} play={play} openPlaylist={openPlaylist} setOpenPlaylist={setOpenPlaylist} addToTarget={setAddTarget} onMenu={setMenuTarget} downloadMany={downloadMany} goAlbum={goAlbum} goMix={goMix} selecting={selecting} selection={selection} toggleSelect={toggleSelect} startSelection={startSelection} addToQueue={addToQueue} removeFromQueue={removeFromQueueToast} setShowImport={setShowImport} hydrateTracks={hydrateTracks} createPlaylist={createPlaylist} removeFromPlaylist={removeFromPlaylist} deletePlaylist={deletePlaylist} savePlaylist={savePlaylist} unsavePlaylist={unsavePlaylist} />}
+      {tab === 'home' && <HomeTab T={T} play={play} track={track} playing={playing} onMenu={setMenuTarget} onToggleFav={toggleFav} goMix={goMix} displayName={displayName} avatar={avatar} email={email} setTab={setTab} startAiDj={startAiDj} onboardPrefs={onboardPrefs} setOnboardPrefs={setOnboardPrefs} backendDown={backendDown} />}
+      {tab === 'search' && <SearchTab T={T} play={play} addToTarget={setAddTarget} onMenu={setMenuTarget} onToggleFav={toggleFav} recentSearches={recentSearches} addSearch={addSearch} removeSearch={removeSearch} goArtist={goArtist} goAlbum={goAlbum} goMix={goMix} selecting={selecting} selection={selection} toggleSelect={toggleSelect} startSelection={startSelection} addToQueue={addToQueue} removeFromQueue={removeFromQueueToast} backendDown={backendDown} setTab={setTab} />}
+      {tab === 'library' && <LibraryTab T={T} play={play} openPlaylist={openPlaylist} setOpenPlaylist={setOpenPlaylist} addToTarget={setAddTarget} onMenu={setMenuTarget} onToggleFav={toggleFav} downloadMany={downloadMany} goAlbum={goAlbum} goMix={goMix} selecting={selecting} selection={selection} toggleSelect={toggleSelect} startSelection={startSelection} addToQueue={addToQueue} removeFromQueue={removeFromQueueToast} setShowImport={setShowImport} hydrateTracks={hydrateTracks} createPlaylist={createPlaylist} removeFromPlaylist={removeFromPlaylist} deletePlaylist={deletePlaylist} savePlaylist={savePlaylist} unsavePlaylist={unsavePlaylist} />}
       {tab === 'profile' && <ProfileTab T={T} themeKey={themeKey} setThemeKey={setThemeKey} quality={quality} setQuality={setQuality} glow={glow} setGlow={setGlow} eq={eq} setEq={setEq} settings={settings} setSettings={setSettings} setOpenPlaylist={setOpenPlaylist} setTab={setTab} email={email} onLogout={onLogout} installApp={installApp} canInstall={!!installEvt} isIOS={isIOS} isStandalone={isStandalone} goWrapped={goWrapped} customPalettes={customPalettes} activeCustomId={activeCustomId} setActiveCustomId={setActiveCustomId} activePalette={activePalette} addPalette={addPalette} updatePalette={updatePalette} deletePalette={deletePalette} displayName={displayName} saveProfileName={saveProfileName} deleteAccount={deleteAccount} avatar={avatar} saveAvatar={saveAvatar} removeDownload={removeDownload} clearDownloads={clearDownloads} getDownloads={getDownloads} />}
     </>
   );
-  const Content = view ? (view.type === 'wrapped' ? <WrappedView T={T} setView={setView} play={play} playStats={playStatsRef.current} /> : <DetailView view={view} T={T} play={play} addToTarget={setAddTarget} onMenu={setMenuTarget} goArtist={goArtist} goAlbum={goAlbum} setView={setView} detailLoading={detailLoading} detailData={detailData} downloadMany={downloadMany} saveAlbum={saveAlbum} unsaveAlbum={unsaveAlbum} savePlaylist={savePlaylist} unsavePlaylist={unsavePlaylist} selecting={selecting} selection={selection} toggleSelect={toggleSelect} startSelection={startSelection} addToQueue={addToQueue} removeFromQueue={removeFromQueueToast} />) : TabContent;
+  const Content = view ? (view.type === 'wrapped' ? <WrappedView T={T} setView={setView} play={play} playStats={playStatsRef.current} /> : <DetailView view={view} T={T} play={play} addToTarget={setAddTarget} onMenu={setMenuTarget} onToggleFav={toggleFav} goArtist={goArtist} goAlbum={goAlbum} setView={setView} detailLoading={detailLoading} detailData={detailData} downloadMany={downloadMany} saveAlbum={saveAlbum} unsaveAlbum={unsaveAlbum} savePlaylist={savePlaylist} unsavePlaylist={unsavePlaylist} selecting={selecting} selection={selection} toggleSelect={toggleSelect} startSelection={startSelection} addToQueue={addToQueue} removeFromQueue={removeFromQueueToast} />) : TabContent;
 
   // Manejo resiliente de errores de reproducción: reintenta una vez con URL
   // fresca (evade caché de borde) y, si vuelve a fallar, salta a la siguiente
@@ -1651,10 +1615,10 @@ export default function App() {
           const base = await api.ensureStreamUrl(sp);
           if (!playingRef.current || trackRef.current?.id !== cur) { setLoadingAudio(false); return; }
           const url = attempt >= 2 ? (base + (base.includes('?') ? '&' : '?') + '_r=' + Date.now()) : base;
-          audioRef.current.src = url;
-          setPlaySrc(url);
-          audioRef.current.load();
-          const p = audioRef.current.play(); if (p && p.catch) p.catch(() => {});
+          setTrack((prev) => (prev && prev.id === cur ? { ...prev, url } : prev));
+          // STREAM_READY delega setSrc/load/play al pipeline unificado y
+          // conserva el gate de playingRef para A13.
+          dispatchAudio({ type: 'STREAM_READY', trackId: cur, url });
         } catch {
           if (!playingRef.current) setLoadingAudio(false);
         }
@@ -1712,9 +1676,8 @@ export default function App() {
                   // Solo actualizar si la pista no cambió durante la re-firma.
                   if (!a || trackRef.current?.id !== tk?.id || !playingRef.current) return;
                   if (freshUrl && freshUrl !== currentSrc) {
-                    // Asignar la nueva URL sin interrumpir: NO llamar a.load().
-                    a.setAttribute('src', freshUrl);
-                    if (typeof setPlaySrc === 'function') setPlaySrc(freshUrl);
+                    setTrack((prev) => (prev && prev.id === tk?.id ? { ...prev, url: freshUrl } : prev));
+                    dispatchAudio({ type: 'STREAM_READY', trackId: tk?.id, url: freshUrl });
                   }
                 }).catch(() => {}).finally(() => { if (a) a._resignInFlight = false; });
               }
@@ -1858,7 +1821,7 @@ export default function App() {
       lyricOffset={lyricOffset} setLyricOffset={setLyricOffset} inLibrary={trackInLibrary} />
   );
   const addModal = <AddToPlaylistModal trackId={addTarget} onClose={() => { setAddTarget(null); if (selecting) clearSelection(); }} playlists={playlists} createPlaylist={createPlaylist} addToPlaylist={addToPlaylist} removeFromPlaylist={removeFromPlaylist} T={T} />;
-  const trackMenu = <TrackMenu trackId={menuTarget} onClose={() => setMenuTarget(null)} T={T} addToTarget={setAddTarget} goArtist={goArtist} goAlbum={goAlbum} shareTrack={shareTrack} addToQueue={addToQueue} download={download} removeDownload={removeDownload} playingFrom={playingFrom} goToPlayingPlaylist={goToPlayingPlaylist} />;
+  const trackMenu = <TrackMenu trackId={menuTarget} onClose={() => setMenuTarget(null)} T={T} addToTarget={setAddTarget} onToggleFav={toggleFav} goArtist={goArtist} goAlbum={goAlbum} shareTrack={shareTrack} addToQueue={addToQueue} download={download} removeDownload={removeDownload} playingFrom={playingFrom} goToPlayingPlaylist={goToPlayingPlaylist} />;
   const queuePanel = <QueuePanel open={showQueue} onClose={() => setShowQueue(false)} queue={queue} current={track} play={play} T={T} reorder={reorderQueue} remove={removeFromQueue} />;
   const selectionBar = selecting ? (
     <div className="fade-up glass" style={{ position:'fixed', left:'50%', transform:'translateX(-50%)', bottom:'calc(env(safe-area-inset-bottom, 16px) + 92px)', zIndex:100, display:'flex', alignItems:'center', gap:12, background:'var(--surf-1)', border:`1px solid ${hex2rgba(T.accent,.4)}`, borderRadius:99, padding:'8px 10px 8px 16px', boxShadow:'0 12px 34px #000a' }}>
@@ -1942,17 +1905,6 @@ export default function App() {
         </div>
       </div>
       {expandedPlayer}{addModal}{trackMenu}{queuePanel}{selectionBar}{updateBanner}{offlineBanner}{importModal}{importBanner}{importResultModal}
-      {remotePlaying && remotePlaying.trackId && remotePlaying.trackId !== track?.id && (
-        <div className="fade-up" style={{ position:'fixed', bottom:80, left:12, right:12, zIndex:80, background:'var(--surf-0)', border:`1px solid ${hex2rgba(T.accent,.3)}`, borderRadius:16, padding:'12px 14px', display:'flex', alignItems:'center', gap:12, boxShadow:'0 8px 24px #000a' }}>
-          <CoverImg src={remotePlaying.cover} alt="" radius={10} size={64} style={{ width:44, height:44, flexShrink:0 }} />
-          <div style={{ flex:1, minWidth:0 }}>
-            <div style={{ fontSize:11, fontWeight:800, color:T.accent }}>Reproduciendo en {remotePlaying.deviceName || 'otro dispositivo'}</div>
-            <div style={{ fontSize:13, fontWeight:700, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{remotePlaying.title}</div>
-            <div style={{ fontSize:10.5, color:'var(--txt-2)' }}>{remotePlaying.artist}</div>
-          </div>
-          {remotePlaying.trackId && <button onClick={() => { const t = trackById(remotePlaying.trackId); if (t) play(t); setRemotePlaying(null); }} className="btn-tap" style={{ background:grad(T), border:'none', borderRadius:99, padding:'8px 16px', cursor:'pointer', color:'#04060a', fontSize:11, fontWeight:800, flexShrink:0 }}>Reproducir aquí</button>}
-        </div>
-      )}
       <Toast msg={toast} T={T} />
     </div>
   );

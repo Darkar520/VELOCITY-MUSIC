@@ -23,7 +23,7 @@ Estado del reproductor, cola, salida de audio, interrupciones.
 | `playSrc` | string \| null | `useState(loadPlayerState)` | `playerStore.playSrc` |
 | `outputs` | MediaDeviceInfo[] | `useState([])` | `playerStore.outputs` |
 | `sinkId` | string | `useState('')` | `playerStore.sinkId` |
-| `remotePlaying` | object \| null | `useState(null)` | `playerStore.remotePlaying` |
+| `remotePlaying` | object \| null | `useState(null)` | **Retirado**: el handoff remoto fue eliminado del runtime |
 | `mediaInterrupted` | boolean | `useState(false)` | `playerStore.mediaInterrupted` |
 | `downloaded` | Set | `useState(new Set())` | `playerStore.downloaded` |
 | `downloading` | Set | `useState(new Set())` | `playerStore.downloading` |
@@ -37,7 +37,7 @@ Refs de DOM, de proceso, de policy de audio. No son estado reactivo.
 | `objUrlRef`, `playErrorRef`, `consecutiveFailsRef`, `sustainedPlayRef` | `useAudioElementSync` |
 | `playingRef`, `selfPauseRef`, `fadeRafRef`, `fadeSafetyRef`, `pendingFadeRef` | `useAudioElementSync` |
 | `queueRef`, `trackRef`, `settingsRef` | `useAudioElementSync` (mirrors del store para acceso síncrono en handlers) |
-| `sseRef` | `useSSESession` |
+| `sseRef` | **Retirado**: no hay suscripción SSE de handoff en el frontend |
 | `sessionResumeRef`, `radioRef`, `radioSeedRef`, `mixSessionRef` | `usePlayerPersistence` |
 | `homeRowsRef`, `libReadyRef`, `persistRef`, `pendingRef`, `resumedRef`, `playStatsRef` | `usePlayerPersistence` |
 | `mountedAtRef`, `runningBundleRef`, `toastTimer`, `systemPausedRef` | App.jsx (UI lifecycle, no mover) |
@@ -64,10 +64,9 @@ Refs de DOM, de proceso, de policy de audio. No son estado reactivo.
 - Refs que managea: `audioRef`, `preloadAudioRef`, `objUrlRef`, `playErrorRef`, `fadeRafRef`, `playingRef`, `selfPauseRef`
 - Expone: `dispatch(event)` que corre `audioMachine.reduce()` y aplica effects al DOM + store
 
-### `useSSESession` — suscripción a eventos remotos
-- Línea 802 (SSE setup), 977 (visibilitychange para feed)
-- Refs que managea: `sseRef`
-- Recibe: `onRemotePlay`, `onRemotePause`, `onSyncLibrary`
+### `useSSESession` — suscripción a eventos remotos (histórico)
+- El handoff now-playing fue retirado del runtime; esta sección conserva el registro del diseño anterior.
+- La telemetría `api.updateNowPlaying()` permanece disponible para compatibilidad de backend, pero no controla la UI ni la reproducción local.
 
 ### `usePlayerPersistence` — persistir estado a localStorage/DB
 - Líneas 587, 599, 695, 748 (save player state + meta), 1001 (load profile)
@@ -118,4 +117,5 @@ El `audioMachine` emite `effects` que mutan React state vía `syncReact`. Ese pa
 - [ ] App.jsx < 1500 líneas (target aspiracional <800)
 - [ ] 0 referencias a `ctx` en tabs/player/modals/layout/screens
 - [ ] Tests del store: play, pause, next, prev, queue push (5 casos)
+- [x] Handoff remoto `remotePlaying` retirado; `DeviceChip` sigue en `ExpandedPlayer`
 - [ ] audioMachine.js sin modificar (regla MUST del prompt)

@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, copyFil
 import { writeFile, mkdir as mkdirAsync, copyFile as copyFileAsync, rename as renameAsync } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { mergeTrackMetadata } from './trackMetaMerge.js';
 
 /**
  * Repositorios persistentes en un único archivo JSON.
@@ -369,17 +370,6 @@ export function createJsonSavedAlbumsRepo() {
  */
 export function createJsonTrackMetaRepo() {
   const MAX_TRACKS = 5000; // tope para que el archivo no crezca sin límite
-  const slim = (t) => ({
-    id: t.id,
-    title: t.title || '',
-    artist: t.artist || '',
-    artistId: t.artistId || null,
-    album: t.album || '',
-    albumId: t.albumId || null,
-    genre: t.genre || '',
-    cover: t.cover || '',
-    durationSeconds: t.durationSeconds || t.duration || 0,
-  });
   return {
     async upsertMany(tracks) {
       if (!Array.isArray(tracks)) return;
@@ -387,9 +377,7 @@ export function createJsonTrackMetaRepo() {
       for (const t of tracks.slice(0, 500)) {
         if (t && t.id) {
           const prev = store.tracks[t.id];
-          const newCover = t.cover || '';
-          const cover = newCover !== '' ? newCover : (prev && prev.cover) || '';
-          store.tracks[t.id] = { ...prev, ...slim(t), cover };
+          store.tracks[t.id] = mergeTrackMetadata(prev, t);
           changed = true;
         }
       }

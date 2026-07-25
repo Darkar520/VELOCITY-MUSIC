@@ -116,10 +116,15 @@ export function createPgTrackMetaRepo(query) {
           `INSERT INTO track_meta (id, title, artist, artist_id, album, album_id, genre, cover, duration_seconds, updated_at)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
            ON CONFLICT (id) DO UPDATE SET
-             title=EXCLUDED.title, artist=EXCLUDED.artist, artist_id=EXCLUDED.artist_id,
-             album=EXCLUDED.album, album_id=EXCLUDED.album_id, genre=EXCLUDED.genre,
+             title=COALESCE(NULLIF(EXCLUDED.title, ''), track_meta.title),
+             artist=COALESCE(NULLIF(EXCLUDED.artist, ''), track_meta.artist),
+             artist_id=COALESCE(EXCLUDED.artist_id, track_meta.artist_id),
+             album=COALESCE(NULLIF(EXCLUDED.album, ''), track_meta.album),
+             album_id=COALESCE(EXCLUDED.album_id, track_meta.album_id),
+             genre=COALESCE(NULLIF(EXCLUDED.genre, ''), track_meta.genre),
              cover=CASE WHEN EXCLUDED.cover IS NOT NULL AND EXCLUDED.cover <> '' THEN EXCLUDED.cover ELSE track_meta.cover END,
-             duration_seconds=EXCLUDED.duration_seconds, updated_at=now()`,
+             duration_seconds=CASE WHEN EXCLUDED.duration_seconds > 0 THEN EXCLUDED.duration_seconds ELSE track_meta.duration_seconds END,
+             updated_at=now()`,
           [t.id, t.title || '', t.artist || '', t.artistId || null, t.album || '', t.albumId || null, t.genre || '', t.cover || '', t.durationSeconds || t.duration || 0],
         );
       }
