@@ -7,7 +7,7 @@
 // trazabilidad visible al usuario (se muestra en Perfil). Al subirla, subir
 // también CACHE en frontend/public/sw.js (velocity-vN) para forzar la
 // actualización del service worker en los clientes.
-export const APP_VERSION = '1.8';
+export const APP_VERSION = '1.9';
 
 export const CSS = `
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
@@ -21,14 +21,23 @@ export const CSS = `
   @keyframes eqBar       { from { transform:scaleY(.16); } to { transform:scaleY(1); } }
   @keyframes breathe     { 0%,100%{ opacity:.26; transform:translate(-50%,-50%) scale(.9); } 50%{ opacity:.6; transform:translate(-50%,-50%) scale(1.12); } }
   @keyframes spinSlow    { to { transform:rotate(360deg); } }
-  @keyframes spin360     { to { transform:rotate(360deg); } }
+  @keyframes spin360     { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }
   @keyframes coverInLeft  { from { opacity:.4; transform:scale(.94) translateX(60px);  } to { opacity:1; transform:scale(1) translateX(0); } }
   @keyframes coverInRight { from { opacity:.4; transform:scale(.94) translateX(-60px); } to { opacity:1; transform:scale(1) translateX(0); } }
   .fade-up { animation: fadeUp .5s cubic-bezier(.22,1,.36,1) both; }
   .eq-bar  { transform-origin: bottom; animation: eqBar .55s ease-in-out infinite alternate; }
   .breathe { animation: breathe 5s ease-in-out infinite; }
   .spin    { animation: spinSlow 22s linear infinite; }
-  .loader  { animation: spin360 .8s linear infinite; }
+  .loader  {
+    display:block;
+    transform-box:fill-box;
+    transform-origin:center;
+    will-change:transform;
+    animation:spin360 .72s linear infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .loader { animation-duration:1.2s; }
+  }
   ::-webkit-scrollbar { display:none; }
   * { -ms-overflow-style:none; scrollbar-width:none; }
   input[type=range] { -webkit-appearance:none; appearance:none; background:transparent; width:100%; cursor:pointer; }

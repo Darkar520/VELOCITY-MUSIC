@@ -239,8 +239,18 @@ export function usePlaybackController(deps) {
           return;
         }
       }
-      // Warm resolve en paralelo (no bloquear firma).
-      api.prefetchStream(sp);
+      // Warm resolve en paralelo (no bloquear firma). No repetirlo si la
+      // siguiente pista ya fue precalentada por prefetchNext: duplicar esta
+      // petición durante el arranque hace que el spinner parpadee y compite
+      // por CPU/red con la resolución que sí necesita la pista actual.
+      const warmKey = `${trackId}:${qParam}`;
+      if (!prefetchedRef.current.has(warmKey)) {
+        prefetchedRef.current.add(warmKey);
+        api.prefetchStream(sp);
+        if (prefetchedRef.current.size > 40) {
+          prefetchedRef.current = new Set([...prefetchedRef.current].slice(-20));
+        }
+      }
       let url = api.peekStreamUrl(sp, 30);
       if (!url) url = await api.ensureStreamUrl(sp);
       if (getMachine().trackId !== trackId || getMachine().intent !== 'play') return;
@@ -451,8 +461,8 @@ export function usePlaybackController(deps) {
     afterPlaySideEffects(t, trackWithQuality, initialQueue, qParam, opts);
 
     // UN solo camino de firma: TRACK_SET → ensureStream (arriba).
-    // Si ya hay firma en caché, STREAM_READY inmediato (sin 2ª petición ni toast).
-    api.prefetchStream(sp);
+    // El warm resolve también vive en ensureStream, para no lanzar una
+    // segunda resolución en paralelo cada vez que se pulsa play.
     const peeked = api.peekStreamUrl(sp, 45);
     if (peeked) {
       dispatchAudio({ type: 'STREAM_READY', trackId: t.id, url: peeked });

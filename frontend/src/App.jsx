@@ -1691,7 +1691,9 @@ export default function App() {
         applySessionResume(audioRef.current);
       }}
       onCanPlay={() => {
-        setLoadingAudio(false);
+        // canplay solo indica que hay datos suficientes; play() todavía puede
+        // estar pendiente o ser rechazado. El spinner se apaga en onPlay/
+        // onPlaying o cuando el reloj empieza a avanzar.
         flushPendingSeek(effectCtxRef.current);
         applySessionResume(audioRef.current);
       }}

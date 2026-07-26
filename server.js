@@ -223,6 +223,14 @@ export async function bootstrap() {
     catalogTimeoutMs: 20000,
     resolveTimeoutMs: 95000, // 5 clientes YT(15s c/u) + backoff(7s) + SC(15s) + margen
     extractorImpl,
+    // YouTube Music/yt-dlp vuelve a ser el proveedor principal y único de
+    // reproducción. Deezer queda deshabilitado en el wiring de producción.
+    deezerConfig: {
+      enabled: false,
+      arlTokens: [],
+      quality: 'MP3_320',
+      timeoutMs: 5000,
+    },
     artistImpl: createYTMusicArtist(),
     albumImpl: createYTMusicAlbum(),
     radioImpl: createYTMusicRadio(),
