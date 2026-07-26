@@ -7,7 +7,7 @@
 // trazabilidad visible al usuario (se muestra en Perfil). Al subirla, subir
 // también CACHE en frontend/public/sw.js (velocity-vN) para forzar la
 // actualización del service worker en los clientes.
-export const APP_VERSION = '1.9';
+export const APP_VERSION = '2.0';
 
 export const CSS = `
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
@@ -28,15 +28,19 @@ export const CSS = `
   .eq-bar  { transform-origin: bottom; animation: eqBar .55s ease-in-out infinite alternate; }
   .breathe { animation: breathe 5s ease-in-out infinite; }
   .spin    { animation: spinSlow 22s linear infinite; }
-  .loader  {
-    display:block;
-    transform-box:fill-box;
-    transform-origin:center;
+  .loader-ring {
+    display:inline-block;
+    box-sizing:border-box;
+    border-style:solid;
+    border-color:transparent;
+    border-radius:50%;
+    animation:spin360 .7s linear infinite;
     will-change:transform;
-    animation:spin360 .72s linear infinite;
+    transform:translateZ(0);
+    contain:layout style paint;
   }
   @media (prefers-reduced-motion: reduce) {
-    .loader { animation-duration:1.2s; }
+    .loader-ring { animation-duration:1.2s; }
   }
   ::-webkit-scrollbar { display:none; }
   * { -ms-overflow-style:none; scrollbar-width:none; }

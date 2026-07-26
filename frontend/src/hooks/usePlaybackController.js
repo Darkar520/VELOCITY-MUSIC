@@ -17,6 +17,24 @@ import { enrichCoverIfNeeded } from '../coverEnrich.js';
 const QUALITY_MAP = { high: 'high', medium: 'medium', low: 'low', HQ: 'high', Standard: 'medium', FLAC: 'low' };
 
 /**
+ * Ejecuta trabajo NO crítico (persistencia en localStorage, telemetría) fuera
+ * del camino crítico de arranque de audio. Sin esto, serializar el catálogo y
+ * el estado del player de forma síncrona al pulsar play bloquea el hilo
+ * principal justo cuando aparece el spinner y retrasa el play() real.
+ */
+function runWhenIdle(fn) {
+  try {
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(() => { try { fn(); } catch { /* ignore */ } }, { timeout: 800 });
+    } else {
+      setTimeout(() => { try { fn(); } catch { /* ignore */ } }, 0);
+    }
+  } catch {
+    try { fn(); } catch { /* ignore */ }
+  }
+}
+
+/**
  * @param {object} deps
  */
 export function usePlaybackController(deps) {
@@ -354,10 +372,14 @@ export function usePlaybackController(deps) {
       duration: t.durationSeconds || 0, playing: true,
       deviceName: navigator.userAgent.includes('Mobile') ? 'Móvil' : 'Web', quality: qParam,
     });
-    api.saveTracks([slimTrack(t)]);
-    try {
-      localStorage.setItem('velocity.player', JSON.stringify({ track: trackWithQuality, queue: initialQueue, t: 0 }));
-    } catch { /* ignore */ }
+    // Persistencia pesada (serializa catálogo + estado) fuera del camino
+    // crítico: no debe bloquear el arranque del audio ni el spinner.
+    runWhenIdle(() => {
+      api.saveTracks([slimTrack(t)]);
+      try {
+        localStorage.setItem('velocity.player', JSON.stringify({ track: trackWithQuality, queue: initialQueue, t: 0 }));
+      } catch { /* ignore */ }
+    });
     prefetchNext(t.id, initialQueue, qParam);
     if (opts.radio) { radioRef.current = true; ensureRadioFull(t, initialQueue); }
     else { radioRef.current = false; radioSeedRef.current = null; }
@@ -371,7 +393,7 @@ export function usePlaybackController(deps) {
     const best = bestCoverFor(t.id, t.cover || t.artworkUrl || '');
     if (best && best !== t.cover) t = { ...t, cover: best };
     else if (!t.cover && t.artworkUrl) t = { ...t, cover: t.artworkUrl };
-    cacheTrack(t); saveMeta();
+    cacheTrack(t); runWhenIdle(saveMeta);
     playSnapRef.current = t;
 
     // Enriquecimiento de carátula: si es un thumbnail de YouTube, buscar en

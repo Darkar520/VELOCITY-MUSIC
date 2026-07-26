@@ -25,9 +25,20 @@ export function EQViz({ color, color2, playing, bars = 10, h = 24, gap = 2.5 }) 
   );
 }
 
-export function Spinner({ c, sz = 22 }) {
-  return <svg className="loader" width={sz} height={sz} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2.4" strokeLinecap="round"><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>;
-}
+// Spinner basado en border (no SVG stroke): la rotación es una animación de
+// `transform` que el navegador compone en la GPU, así que sigue girando fluida
+// aunque el hilo principal esté ocupado (ráfaga de peticiones al cargar una
+// pista). Memoizado para no re-renderizar en cada timeupdate del reproductor.
+export const Spinner = React.memo(function Spinner({ c, sz = 22 }) {
+  const bw = Math.max(2, Math.round(sz / 8));
+  return (
+    <span
+      className="loader-ring"
+      aria-hidden="true"
+      style={{ width: sz, height: sz, borderWidth: bw, borderTopColor: c, borderRightColor: c }}
+    />
+  );
+});
 
 // Anillo de progreso de descarga (estilo Spotify).
 export function ProgressRing({ pct = 0, active = false, done = false, T, size = 22 }) {
