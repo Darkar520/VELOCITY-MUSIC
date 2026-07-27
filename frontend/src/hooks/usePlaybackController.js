@@ -93,6 +93,8 @@ export function usePlaybackController(deps) {
   const signFailRef = useRef({ id: null, n: 0 });
   /** Snapshot de la pista pedida en play() (por si trackById aún no la tiene). */
   const playSnapRef = useRef(null);
+  /** Evita fan-out duplicado al iniciar/reponer una misma radio. */
+  const radioRequestRef = useRef(null);
 
   const getMachine = useCallback(() => usePlayerStore.getState().getMachineState(), []);
   const patchMachine = useCallback((p) => usePlayerStore.getState().patchMachine(p), []);
@@ -326,13 +328,19 @@ export function usePlaybackController(deps) {
   const ensureRadioFull = useCallback(async (seed, existingIds = []) => {
     if (!seed?.id) return;
     radioSeedRef.current = seed.id;
+    if (radioRequestRef.current === seed.id) return;
+    radioRequestRef.current = seed.id;
+    const existing = new Set(existingIds);
     try {
-      const raw = await api.radio(seed.id);
+      const raw = await api.radio(seed.id, 40);
       if (radioSeedRef.current !== seed.id) return;
       const more = capPerArtist(dedupeByTitle(raw.map(normalizeTrack)), 3)
-        .filter((t) => t.id && t.id !== seed.id && !existingIds.includes(t.id));
+        .filter((t) => t.id && t.id !== seed.id && !existing.has(t.id));
       if (!more.length) return;
-      const addIds = more.slice(0, 30).map((t) => t.id);
+      // Cachear las pistas para que trackById las resuelva al reproducirlas.
+      more.forEach(cacheTrack);
+      // Objetivo de cola coherente (TARGET_QUEUE_LENGTH). Req 6.1, 6.5.
+      const addIds = more.slice(0, 40).map((t) => t.id);
       setQueue((q) => {
         const base = q && q.length ? q : [seed.id];
         const merged = [...base];
@@ -340,7 +348,10 @@ export function usePlaybackController(deps) {
         return merged;
       });
     } catch { /* ignore */ }
-  }, [radioSeedRef, setQueue]);
+    finally {
+      if (radioRequestRef.current === seed.id) radioRequestRef.current = null;
+    }
+  }, [radioSeedRef, radioRequestRef, setQueue]);
 
   const applyOnlineSrc = useCallback((t, sp, gen, fallbackTrack) => {
     const peeked = api.peekStreamUrl(sp, 90);
@@ -381,8 +392,23 @@ export function usePlaybackController(deps) {
       } catch { /* ignore */ }
     });
     prefetchNext(t.id, initialQueue, qParam);
-    if (opts.radio) { radioRef.current = true; ensureRadioFull(t, initialQueue); }
-    else { radioRef.current = false; radioSeedRef.current = null; }
+    if (opts.radio) {
+      radioRef.current = true;
+      ensureRadioFull(t, initialQueue);
+    } else if (!opts.keepMix) {
+      radioRef.current = false;
+      radioSeedRef.current = null;
+    } else if (radioRef.current && radioSeedRef.current) {
+      // Sesión de radio en curso (avance por next/keepMix): reponer la cola
+      // coherente cuando quedan < 5 pistas pendientes. Req 6.4, 6.5.
+      const q = (queueRef.current && queueRef.current.length) ? queueRef.current : initialQueue;
+      const idx = Array.isArray(q) ? q.indexOf(t.id) : -1;
+      const pending = idx >= 0 ? q.length - idx - 1 : 0;
+      if (pending < 5) {
+        const seedTrack = trackById(radioSeedRef.current) || t;
+        ensureRadioFull(seedTrack, q);
+      }
+    }
     if (opts.mixLabel) mixSessionRef.current = { label: opts.mixLabel, used: new Set([opts.mixLabel]) };
     else if (!opts.keepMix) mixSessionRef.current = { label: null, used: new Set() };
   }, [setRecent, recordPlayStat, prefetchNext, radioRef, radioSeedRef, mixSessionRef, ensureRadioFull]);

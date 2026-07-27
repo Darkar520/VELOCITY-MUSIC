@@ -14,6 +14,12 @@ import YTMusic from 'ytmusic-api';
 
 import { normalizeText } from '../lib/normalize.js';
 import { artistNameMatches } from '../lib/lyricsMatch.js';
+import {
+  RADIO_CONFIG,
+  assembleRadio,
+  classifyCandidate,
+  buildNeighborArtistSet,
+} from '../lib/radioCohesion.js';
 
 let _client = null;
 // Mutex de inicialización: una sola Promise compartida entre peticiones concurrentes
@@ -136,6 +142,20 @@ function cleanTitle(raw) {
  * Mapea un resultado de ytmusic-api a nuestro formato TrackMetadata.
  * Prioriza portadas de álbum en alta resolución.
  */
+function extractGenre(song) {
+  const raw = song?.genre ?? (Array.isArray(song?.genres) ? song.genres[0] : null);
+  if (typeof raw === 'string' && raw.trim()) return raw.trim();
+  if (raw && typeof raw === 'object' && typeof raw.name === 'string' && raw.name.trim()) return raw.name.trim();
+  return null;
+}
+
+function extractPopularity(song) {
+  if (!song || typeof song !== 'object') return false;
+  if (song.mainstream === true || song.popular === true || song.isPopular === true) return true;
+  const popularity = Number(song.popularity ?? song.views);
+  return Number.isFinite(popularity) && popularity >= 1_000_000;
+}
+
 function mapYTMusicSong(song) {
   const thumb = pickBestThumb(song.thumbnails) || pickBestThumb(song.album?.thumbnails) || null;
   return {
@@ -148,7 +168,8 @@ function mapYTMusicSong(song) {
     durationSeconds: song.duration ?? null,
     artworkUrl: thumb,
     releaseDate: song.year ? `${song.year}-01-01` : null,
-    genre: null,
+    genre: extractGenre(song),
+    mainstream: extractPopularity(song),
   };
 }
 
@@ -301,6 +322,11 @@ export async function getArtistData(artistId) {
       thumbnail: pickBestThumb(a.thumbnails),
       topSongs,
       albums: mappedAlbums,
+      similarArtists: Array.isArray(a.similarArtists)
+        ? a.similarArtists
+          .map((x) => ({ id: x?.artistId ?? null, name: x?.name ?? null }))
+          .filter((x) => x.id && x.name)
+        : [],
     };
   });
 }
@@ -381,7 +407,8 @@ function mapUpNext(s) {
     durationSeconds: parseDuration(s.duration),
     artworkUrl,
     releaseDate: null,
-    genre: null,
+    genre: extractGenre(s),
+    mainstream: extractPopularity(s),
   };
 }
 
@@ -397,90 +424,221 @@ function mapUpNext(s) {
  *    y máximo 5 canciones en total por artista (antes sin límite).
  *  - Deduplicación estricta por videoId.
  */
-export async function getRadio(videoId, limit = 100) {
+/** Timeout por llamada de red que resuelve a `fallback` si expira. (Req 9.4) */
+function withTimeoutPerCall(promise, ms, fallback) {
+  return new Promise((resolve) => {
+    let done = false;
+    const timer = setTimeout(() => { if (!done) { done = true; resolve(fallback); } }, ms);
+    Promise.resolve(promise)
+      .then((v) => { if (!done) { done = true; clearTimeout(timer); resolve(v); } })
+      .catch(() => { if (!done) { done = true; clearTimeout(timer); resolve(fallback); } });
+  });
+}
+
+/**
+ * Construye el Seed_Profile de la radio: artista + género + Neighbor_Artist_Set
+ * (artistas relacionados) + mainstreamIds (topSongs del artista semilla).
+ * Tolerante a fallos: si no hay relacionados, el vecindario es solo la semilla.
+ * (Req 1.3, 2.1, 2.5, 4.1, 7.1, 9.2, 9.4)
+ */
+async function getRadioArtistProfile(client, artistId) {
+  if (!artistId) return null;
+  const artist = await client.getArtist(artistId);
+  if (!artist) return null;
+  return {
+    name: artist.name ?? null,
+    topSongs: Array.isArray(artist.topSongs)
+      ? artist.topSongs.map(mapYTMusicSong).filter((s) => s.id && s.title)
+      : [],
+    similarArtists: Array.isArray(artist.similarArtists)
+      ? artist.similarArtists
+        .map((a) => ({ id: a?.artistId ?? null, name: a?.name ?? null }))
+        .filter((a) => a.id && a.name)
+      : [],
+  };
+}
+
+/**
+ * Construye el Seed_Profile usando la respuesta real de getArtist().similarArtists.
+ * No usa searchArtists como sustituto de relaciones: esa búsqueda devuelve
+ * resultados nominales, no necesariamente artistas del mismo vecindario.
+ */
+async function buildSeedProfile(client, videoId, config) {
+  const seed = await getSongByIdWithClient(client, videoId);
+  if (!seed) throw new Error(`No se encontró la semilla ${videoId}`);
+
+  const seedArtist = seed.artist || '';
+  const seedArtistId = seed.artistId || null;
+  const genre = seed.genre || null;
+  const artistData = seedArtistId
+    ? await withTimeoutPerCall(getRadioArtistProfile(client, seedArtistId), 5000, null)
+    : null;
+  const relatedArtists = (Array.isArray(artistData?.similarArtists) ? artistData.similarArtists : [])
+    // VLRDCLAK... son playlists/estaciones de YT Music, no artistas reales.
+    .filter((a) => a?.id && a?.name && !String(a.id).startsWith('VLR'));
+
+  // Las señales mainstream de artistas relacionados se obtienen en paralelo y
+  // con un tope pequeño: enriquecen la radio sin convertir cada solicitud en un
+  // fan-out de 25 llamadas. Si fallan, la radio conserva las pistas del perfil.
+  const relatedProfiles = await Promise.allSettled(
+    relatedArtists.slice(0, 8).map((a) =>
+      withTimeoutPerCall(getRadioArtistProfile(client, a.id), 4000, null)),
+  );
+
+  const mainstreamIds = new Set();
+  const relatedNames = relatedArtists.map((a, i) => ({
+    id: a.id,
+    name: a.name,
+    relevance: Math.max(0.1, 0.95 - i * (0.75 / Math.max(1, relatedArtists.length))),
+  }));
+  const addArtistSignals = (profile) => {
+    if (!profile) return;
+    for (const song of profile.topSongs || []) {
+      if (song?.id) mainstreamIds.add(String(song.id));
+      const parts = String(song?.artist || '')
+        .split(/\s*(?:,|&|\/|feat\.?|ft\.?)\s*/i)
+        .map((x) => x.trim())
+        .filter(Boolean);
+      for (const name of parts) relatedNames.push({ name });
+    }
+  };
+  addArtistSignals(artistData);
+  for (const result of relatedProfiles) {
+    if (result.status === 'fulfilled') addArtistSignals(result.value);
+  }
+
+  const neighbors = buildNeighborArtistSet(
+    { id: seedArtistId, name: seedArtist },
+    relatedNames,
+    config,
+  );
+
+  return {
+    seedVideoId: String(videoId),
+    artist: seedArtist,
+    artistNorm: normalizeText(seedArtist),
+    artistId: seedArtistId,
+    genre,
+    hasGenre: Boolean(genre && String(genre).trim()),
+    neighbors,
+    mainstreamIds,
+    neighborsFromCatalog: relatedArtists.length > 0,
+  };
+}
+
+
+/**
+ * Expansión de grafo por rondas (graphDistance 0/1/2). Las semillas intermedias
+ * se eligen SOLO entre In_Profile de la ronda previa (corta la deriva). Cada
+ * llamada de expansión es tolerante a fallos y con timeout. (Req 3.1, 3.2, 8.1,
+ * 9.2, 9.3, 9.4, 9.5)
+ * @returns {object[]} RawCandidates con graphDistance anotada
+ */
+async function expandRounds(client, seedProfile, videoId, config) {
+  const out = [];
+  const seen = new Set();
+  const ingest = (ups, dist) => {
+    for (const u of (Array.isArray(ups) ? ups : [])) {
+      if (!u || !u.videoId) continue;
+      if (u.type && u.type !== 'SONG') continue;
+      if (seen.has(u.videoId)) continue;
+      const t = mapUpNext(u);
+      if (!t.id || !t.title) continue;
+      seen.add(u.videoId);
+      out.push({ ...t, graphDistance: dist, seedArtistNorm: seedProfile.artistNorm });
+    }
+  };
+
+  // La respuesta directa es la señal más fiable de vecindario disponible en
+  // ytmusic-api: suele contener bandas reales, mientras similarArtists puede
+  // contener estaciones/playlists con IDs VLRDCLAK... . Se incorporan sus
+  // artistas al perfil antes de elegir semillas para la expansión.
+  const directUpNexts = await client.getUpNexts(videoId);
+  const directArtists = (Array.isArray(directUpNexts) ? directUpNexts : [])
+    .map((u) => {
+      const name = typeof u?.artists === 'string'
+        ? u.artists
+        : Array.isArray(u?.artists)
+          ? u.artists.map((a) => typeof a === 'string' ? a : a?.name || '').filter(Boolean).join(', ')
+          : u?.artists?.name || u?.artist || '';
+      return { name };
+    })
+    .filter((a) => a.name);
+  if (directArtists.length) {
+    const existingNeighbors = (seedProfile.neighbors || [])
+      .filter((n) => !n.isSeed)
+      .map((n) => ({ id: n.id, name: n.name, relevance: n.relevance }));
+    seedProfile.neighbors = buildNeighborArtistSet(
+      { id: seedProfile.artistId, name: seedProfile.artist },
+      [...existingNeighbors, ...directArtists],
+      config,
+    );
+    seedProfile.neighborsFromCatalog = true;
+  }
+  ingest(directUpNexts, 0);
+
+  const inProfileSeedsAt = (dist) => out
+    .filter((c) => c.graphDistance === dist && classifyCandidate(seedProfile, c).inProfile)
+    .slice(0, config.EXPANSION_SEEDS_PER_ROUND)
+    .map((c) => c.id)
+    .filter((id) => id && id !== videoId);
+
+  for (let dist = 1; dist <= config.MAX_GRAPH_DISTANCE; dist++) {
+    const seeds = inProfileSeedsAt(dist - 1);
+    if (!seeds.length) break;
+    const batches = await Promise.allSettled(
+      seeds.map((id) => withTimeoutPerCall(Promise.resolve(client.getUpNexts(id)).catch(() => []), 5000, [])),
+    );
+    for (const b of batches) {
+      ingest(b.status === 'fulfilled' ? b.value : [], dist);
+    }
+  }
+  return out;
+}
+
+/**
+ * Radio / "reproducir a continuación" con cohesión de género/artista sostenida.
+ * Orquesta: perfil de semilla → expansión por rondas (solo In_Profile) →
+ * ensamblado puro con cuotas (radioCohesion.assembleRadio). Conserva la firma y
+ * el retorno (array de TrackMetadata). (Req 1.3, 6.1, 8.1, 8.4)
+ */
+export async function getRadio(videoId, limit = RADIO_CONFIG.TARGET_QUEUE_LENGTH) {
+  const requestedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0
+    ? Math.min(RADIO_CONFIG.TARGET_QUEUE_LENGTH, Math.floor(Number(limit)))
+    : RADIO_CONFIG.TARGET_QUEUE_LENGTH;
   return withClient(async (client) => {
-    const seen = new Set();
-    const out = [];
-
-    // Helpers de diversidad
-    const artistCount = new Map();
-    const MAX_PER_ARTIST = 5;
-
-    // Incorpora un lote de "Up Nexts" respetando unicidad, el límite y la
-    // diversidad de artistas.
-    const ingest = (ups) => {
-      for (const u of (Array.isArray(ups) ? ups : [])) {
-        if (out.length >= limit) break;
-        if (!u || !u.videoId) continue;
-        if (u.type && u.type !== 'SONG') continue;
-        if (seen.has(u.videoId)) continue;
-        const t = mapUpNext(u);
-        if (!t.id || !t.title) continue;
-        const artistKey = (t.artist || '').toLowerCase();
-        const count = artistCount.get(artistKey) || 0;
-        if (count >= MAX_PER_ARTIST) continue;
-        seen.add(u.videoId);
-        artistCount.set(artistKey, count + 1);
-        out.push(t);
-      }
-    };
-
-    // Semilla principal. NO se traga el error: si el cliente está stale, el
-    // throw sube a withClient() para re-inicializar y reintentar (evita radios
-    // vacías por sesión caducada). Las expansiones secundarias sí toleran fallos.
-    ingest(await client.getUpNexts(videoId));
-
-    // Expansión del grafo: usar hasta 10 pistas como semillas secundarias.
-    // Se hace en paralelo para ser rápido; se ingestan en orden para mantener
-    // relevancia (las pistas más cercanas a la semilla primero).
-    if (out.length < limit) {
-      const secondary = out.slice(0, 10).map((t) => t.id).filter((id) => id && id !== videoId);
-      const batches = await Promise.all(secondary.map((id) => client.getUpNexts(id).catch(() => [])));
-      for (const b of batches) {
-        if (out.length >= limit) break;
-        ingest(b);
-      }
-    }
-
-    // Si aún no llegamos al límite, hacer una segunda ronda con semillas de la
-    // parte media del grafo (distancia 2 desde la semilla original).
-    if (out.length < limit) {
-      const tertiary = out.slice(10, 20).map((t) => t.id).filter((id) => id && id !== videoId);
-      const batches2 = await Promise.all(tertiary.map((id) => client.getUpNexts(id).catch(() => [])));
-      for (const b of batches2) {
-        if (out.length >= limit) break;
-        ingest(b);
-      }
-    }
-
-    return out.slice(0, limit);
+    const config = RADIO_CONFIG;
+    const seedProfile = await buildSeedProfile(client, videoId, config);
+    const raw = await expandRounds(client, seedProfile, videoId, config);
+    const { tracks } = assembleRadio(seedProfile, raw, requestedLimit, config);
+    // Devolver TrackMetadata sin los campos internos de clasificación.
+    return tracks.map(({ inProfile, mainstream, score, graphDistance, seedArtistNorm, ...meta }) => meta);
   });
 }
 
 export function createYTMusicRadio() { return (videoId, limit) => getRadio(videoId, limit); }
 
-/**
- * Metadatos de una canción por su videoId. Se usa para recuperar (hidratar) los
- * datos de pistas que un usuario tiene en su biblioteca (favoritos, playlists,
- * historial) cuando el dispositivo no los tiene en caché local.
- */
+async function getSongByIdWithClient(client, videoId) {
+  if (!videoId) return null;
+  const s = await client.getSong(videoId);
+  if (!s) return null;
+  return {
+    id: s.videoId ?? videoId,
+    title: cleanTitle(s.name ?? null),
+    artist: s.artist?.name ?? null,
+    artistId: s.artist?.artistId ?? null,
+    album: s.album?.name ?? null,
+    albumId: s.album?.albumId ?? null,
+    cover: pickBestThumb(s.thumbnails) || null,
+    durationSeconds: s.duration ?? null,
+    genre: extractGenre(s),
+    mainstream: extractPopularity(s),
+  };
+}
+
 export async function getSongById(videoId) {
   if (!videoId) return null;
-  return withClient(async (client) => {
-    const s = await client.getSong(videoId);
-    if (!s) return null;
-    return {
-      id: s.videoId ?? videoId,
-      title: cleanTitle(s.name ?? null),
-      artist: s.artist?.name ?? null,
-      artistId: s.artist?.artistId ?? null,
-      album: null,
-      albumId: null,
-      cover: pickBestThumb(s.thumbnails) || null,
-      durationSeconds: s.duration ?? null,
-      genre: null,
-    };
-  });
+  return withClient((client) => getSongByIdWithClient(client, videoId));
 }
 
 export function createYTMusicSong() { return (videoId) => getSongById(videoId); }
