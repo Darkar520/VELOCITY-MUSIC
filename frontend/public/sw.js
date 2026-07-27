@@ -9,7 +9,7 @@
 //  - El audio descargado NO lo maneja el SW: vive en IndexedDB (offline.js).
 // ═══════════════════════════════════════════════════════════════
 
-const CACHE = 'velocity-v60';
+const CACHE = 'velocity-v61';
 const APP_SHELL = ['/', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'];
 
 self.addEventListener('install', (event) => {
