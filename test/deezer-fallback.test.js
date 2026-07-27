@@ -153,6 +153,9 @@ test('fallback: las claves primaria y Deezer no colisionan', async () => {
   assert.equal(cache.get(deezer), DEEZER_URL);
 });
 
+// El host del `stream` explícito importa: desde el arreglo del SSRF solo se
+// aceptan los de la allowlist (src/lib/streamUrlPolicy.js), así que el fixture
+// usa un host real de SoundCloud en vez de uno inventado.
 test('fallback: SoundCloud y expansión de catálogo no entran en la cadena de audio', async () => {
   const cache = new StreamCache();
   let catalogCalls = 0;
@@ -160,11 +163,11 @@ test('fallback: SoundCloud y expansión de catálogo no entran en la cadena de a
 
   const catalogImpl = async () => {
     catalogCalls += 1;
-    return [{ source: 'soundcloud', streamUrl: 'https://soundcloud.example/audio' }];
+    return [{ source: 'soundcloud', streamUrl: 'https://soundcloud.com/example/audio' }];
   };
   const soundCloudLikeExtractor = async () => {
     soundCloudLikeCalls += 1;
-    return 'https://soundcloud.example/audio';
+    return 'https://soundcloud.com/example/audio';
   };
 
   const fallbackResult = await resolve(TRACK, {
@@ -181,7 +184,7 @@ test('fallback: SoundCloud y expansión de catálogo no entran en la cadena de a
   assert.equal(soundCloudLikeCalls, 0);
 
   const explicitSoundCloud = await resolve(
-    { ...TRACK, stream: 'https://soundcloud.example/audio' },
+    { ...TRACK, stream: 'https://soundcloud.com/example/audio' },
     {
       cache: new StreamCache(),
       mode: 'full',
@@ -191,7 +194,7 @@ test('fallback: SoundCloud y expansión de catálogo no entran en la cadena de a
     },
   );
 
-  assert.equal(explicitSoundCloud.url, 'https://soundcloud.example/audio');
+  assert.equal(explicitSoundCloud.url, 'https://soundcloud.com/example/audio');
   assert.equal(explicitSoundCloud.provider, undefined);
   assert.equal(soundCloudLikeCalls, 0);
   assert.equal(catalogCalls, 0);
