@@ -1,4 +1,5 @@
 import { normalizeText, isUsableUrl } from '../lib/normalize.js';
+import { isAllowedStreamUrl } from '../lib/streamUrlPolicy.js';
 
 /**
  * Audio_Resolver — resuelve una URL de pista completa reproducible para
@@ -6,7 +7,7 @@ import { normalizeText, isUsableUrl } from '../lib/normalize.js';
  *
  * Orden de resolución (Requisitos 2.1–2.11, 3.1, 3.2, 3.7):
  *   1. Stream_Cache (clave normalizada). Hit → devuelve URL.
- *   2. URL `stream` http(s) explícita válida → usar sin invocar yt-dlp.
+ *   2. URL `stream` explícita en la allowlist de hosts → usar sin invocar yt-dlp.
  *   3. Full_Mode + yt-dlp resuelve pista completa ≤ 10 s → usar esa URL.
  *   4. Si YouTube Music falla, el extractor Deezer opcional puede resolverla.
  *   5. Fallo de extractores → degradar; sin fuente reproducible → 404.
@@ -83,7 +84,13 @@ export async function resolve(params = {}, ctx = {}) {
   // 2) URL de stream explícita válida (2.4) — sin invocar extractores. Esto
   // conserva las pistas de SoundCloud ya materializadas como URL directa;
   // SoundCloud no se introduce como fallback automático aquí.
-  if (isUsableUrl(stream)) {
+  //
+  // `stream` lo elige el CLIENTE, así que se valida contra la allowlist de
+  // hosts (isAllowedStreamUrl) y no solo por sintaxis: este `return` es lo que
+  // el Stream_Proxy va a `fetch` desde el servidor y lo que se guarda en el
+  // Stream_Cache compartido. Un destino no permitido se ignora en silencio y la
+  // resolución continúa por los extractores, igual que si no se hubiera pasado.
+  if (isAllowedStreamUrl(stream)) {
     if (cache) cache.set(key, stream);
     return { status: 302, url: stream, fromCache: false, mode };
   }
