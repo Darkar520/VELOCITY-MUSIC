@@ -91,7 +91,9 @@ test('GET /api/resolve redirige a la URL del extractor (modo full)', async () =>
 });
 
 test('GET /api/resolve usa la URL de stream explícita sin extractor', async () => {
-  const url = 'https://audio.example.com/explicit.webm';
+  // El host importa: solo los de la allowlist (src/lib/streamUrlPolicy.js)
+  // cortocircuitan el resolver desde el arreglo del SSRF.
+  const url = 'https://cf-media.sndcdn.com/explicit.128.mp3';
   const app = buildTestApp();
   const token = await loginToken(app, 'stream-explicit@example.com');
   const res = await request(app)
@@ -100,6 +102,28 @@ test('GET /api/resolve usa la URL de stream explícita sin extractor', async () 
     .query({ artist: 'A', title: 'B', stream: url })
     .expect(302);
   assert.equal(res.headers.location, url);
+});
+
+// Regresión P0 (SSRF) end-to-end: el destino que elige el cliente en `stream`
+// no debe salir por Location ni provocar un fetch del servidor a la red interna.
+// Los tests unitarios cubren la política; este cubre el endpoint real.
+test('GET /api/resolve ignora un `stream` fuera de la allowlist (SSRF)', async () => {
+  const app = buildTestApp();
+  const token = await loginToken(app, 'stream-ssrf@example.com');
+  for (const evil of [
+    'http://169.254.169.254/latest/meta-data/',
+    'http://127.0.0.1:5432/',
+    'https://soundcloud.com.evil.tld/x',
+  ]) {
+    const res = await request(app)
+      .get('/api/resolve')
+      .set('Authorization', `Bearer ${token}`)
+      .query({ artist: 'Daft Punk', title: 'One More Time', stream: evil })
+      .expect(302);
+    // Cae al extractor del test, nunca al destino pedido por el cliente.
+    assert.equal(res.headers.location, 'https://cdn.example.com/audio.webm');
+    assert.notEqual(res.headers.location, evil);
+  }
 });
 
 test('Modo degraded rechaza la resolución de pista completa (14.5)', async () => {

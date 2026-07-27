@@ -92,9 +92,18 @@ test('Property 7: validación de artist/title', async () => {
 test('Property 8: resolución exitosa redirige a la fuente esperada', async () => {
   const nonBlank = fc.string({ minLength: 1, maxLength: 50 }).filter((s) => s.trim().length >= 1);
   // URL de stream explícita válida → se usa sin extractor.
+  // "Válida" ya no es cualquier http(s): desde el arreglo del SSRF solo los
+  // hosts de la allowlist (src/lib/streamUrlPolicy.js) cortocircuitan el
+  // resolver. Generar `fc.webUrl()` aquí afirmaba justo la vulnerabilidad.
+  const allowedStreamUrl = fc
+    .tuple(
+      fc.constantFrom('soundcloud.com', 'api.soundcloud.com', 'sndcdn.com', 'cf-media.sndcdn.com'),
+      fc.hexaString({ minLength: 1, maxLength: 16 }),
+    )
+    .map(([host, slug]) => `https://${host}/${slug}`);
   await fc.assert(
     fc.asyncProperty(
-      fc.webUrl(),
+      allowedStreamUrl,
       nonBlank,
       nonBlank,
       async (streamUrl, artist, title) => {
