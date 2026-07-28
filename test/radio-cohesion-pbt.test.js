@@ -264,11 +264,27 @@ test('Feature: radio-genre-cohesion, Property 15: cap por artista', () => {
 
 // Property 16: Máximo de pistas consecutivas del mismo artista
 // Validates: Requirements 5.2
+//
+// El límite solo es satisfacible cuando hay ≥ 2 artistas distintos en la salida:
+// con un único artista, MAX_PER_ARTIST (5) admite hasta 5 pistas y NINGÚN orden
+// puede separarlas. Ante ese conflicto entre Req 5.1 y Req 5.2, el diseño
+// prioriza conservar las pistas (radio útil) sobre acortar la cola, y
+// `arrangeByArtistRoundRobin` fuerza la secuencia de forma explícita.
+// Aseverar el límite sin condición hacía la propiedad insatisfacible y por tanto
+// flaky según la semilla (contraejemplo real: 4 pistas de un mismo artista).
 test('Feature: radio-genre-cohesion, Property 16: máx consecutivas mismo artista', () => {
   fc.assert(fc.property(candidateListArb, (cands) => {
     const { tracks } = assembleRadio(makeSeedProfile(), cands, 40);
     const maxRun = maxConsecutive(tracks, (t) => normalizeText(t.artist));
-    assert.ok(maxRun <= C.MAX_CONSECUTIVE_SAME_ARTIST, `run ${maxRun}`);
+    const distinctArtists = new Set(tracks.map((t) => normalizeText(t.artist))).size;
+    if (distinctArtists >= 2) {
+      // Con material de varios artistas el intercalado SÍ debe respetar el tope.
+      assert.ok(maxRun <= C.MAX_CONSECUTIVE_SAME_ARTIST, `run ${maxRun}`);
+    } else {
+      // Un solo artista: el tope es inalcanzable; no debe inventarse ni perderse
+      // ninguna pista, así que la racha es exactamente la longitud de la lista.
+      assert.equal(maxRun, tracks.length, `run ${maxRun} con 1 artista`);
+    }
   }), RUNS);
 });
 
