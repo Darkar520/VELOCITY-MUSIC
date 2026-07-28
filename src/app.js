@@ -17,6 +17,7 @@ import { sendWelcomeEmail } from './services/mailer.js';
 import { createRequireAuth } from './middleware/requireAuth.js';
 import { checkAdminKey } from './middleware/adminAuth.js';
 import { signStreamParams, verifyStreamParams } from './lib/streamSign.js';
+import { logServerError } from './lib/logError.js';
 import {
   cleanLyricQuery,
   pickBestLyricsCandidate,
@@ -1377,6 +1378,28 @@ export function createApp(deps = {}) {
     });
   }
 
+  // ── Manejador de errores global (último middleware) ──
+  // Cubre lo que `wrap()` no envuelve: throws sincrónicos, `next(err)` y
+  // middleware. Sin esto, Express responde con su página de error por defecto
+  // (que en desarrollo incluye el stack) y no queda registro propio.
+  // La firma de 4 argumentos es obligatoria para que Express lo reconozca.
+  app.use((err, req, res, next) => {
+    // Se respeta el estado que trae el error (express.json marca 400 en un body
+    // malformado): convertirlo en 500 mentiría al cliente y ocultaría que el
+    // fallo es suyo. Solo se registra a partir de 500 — un 4xx es ruido de log.
+    const declared = Number(err?.status ?? err?.statusCode);
+    const status = Number.isInteger(declared) && declared >= 400 && declared < 600
+      ? declared
+      : 500;
+    if (status >= 500) logServerError({ method: req.method, path: req.path, status, err });
+    // Si el cuerpo ya empezó a enviarse (p. ej. fallo durante un pipe), no se
+    // puede reescribir la respuesta: delegar al manejador por defecto.
+    if (res.headersSent) return next(err);
+    return res.status(status).json({
+      error: status >= 500 ? 'Error interno.' : 'Solicitud inválida.',
+    });
+  });
+
   return app;
 }
 
@@ -1460,6 +1483,9 @@ function wrap(handler, ErrorType) {
       if (ErrorType && err instanceof ErrorType) {
         return res.status(err.status).json({ error: err.message });
       }
+      // Error NO previsto: registrar antes de responder. La respuesta al cliente
+      // no cambia (sin detalles internos), pero deja de perderse la causa.
+      logServerError({ method: req.method, path: req.path, status: 500, err });
       return res.status(500).json({ error: 'Error interno.' });
     }
   };
