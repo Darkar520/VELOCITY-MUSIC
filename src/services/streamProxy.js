@@ -1,5 +1,7 @@
 import { Readable } from 'node:stream';
 
+import { MAX_REDIRECTS, isRedirectStatus, resolveRedirect } from '../lib/redirectPolicy.js';
+
 /**
  * Stream_Proxy — reenvía audio upstream al cliente con soporte de HTTP Range y
  * streaming progresivo.
@@ -85,7 +87,26 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
       try {
         const headers = {};
         if (req.headers.range) headers.Range = req.headers.range;
-        const upstream = await fetchImpl(targetUrl, { headers, signal: controller.signal });
+        // Los redirects se siguen A MANO (`redirect: 'manual'`) para validar cada
+        // salto: con el modo automático de fetch, un destino permitido que
+        // redirija a una IP interna eludiría la allowlist del `stream`.
+        let currentUrl = targetUrl;
+        let upstream = await fetchImpl(currentUrl, { headers, signal: controller.signal, redirect: 'manual' });
+        let hops = 0;
+        while (isRedirectStatus(upstream.status)) {
+          if (hops >= MAX_REDIRECTS) {
+            clearTimeout(timer);
+            return { kind: 'redirectBlocked', reason: 'too_many' };
+          }
+          const next = resolveRedirect(currentUrl, upstream.headers.get('location'));
+          if (!next.ok) {
+            clearTimeout(timer);
+            return { kind: 'redirectBlocked', reason: next.reason };
+          }
+          currentUrl = next.url;
+          hops += 1;
+          upstream = await fetchImpl(currentUrl, { headers, signal: controller.signal, redirect: 'manual' });
+        }
         clearTimeout(timer);
         const cls = classifyUpstreamStatus(upstream.status);
         if (!cls.pass) return { kind: 'upstreamBad', status: upstream.status };
@@ -119,6 +140,11 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
         if (!res.headersSent) return res.status(504).json({ error: 'La fuente de audio no está disponible.' });
         return res.end();
       }
+    }
+    if (r.kind === 'redirectBlocked') {
+      // No se reintenta: re-resolver daría el mismo salto. Se responde 502 sin
+      // revelar el destino bloqueado.
+      return res.status(502).json({ error: 'La fuente de audio redirigió a un destino no permitido.' });
     }
     if (r.kind === 'notFound') return res.status(404).json({ error: 'No se encontró una fuente de audio.' });
     if (r.kind === 'resolveError') return res.status(r.status).json({ error: 'No se pudo resolver la pista.' });
