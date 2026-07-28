@@ -66,6 +66,12 @@ function extractPlaylistId(urlOrId) {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
+ * Longitud mínima del secreto compartido (JWT + HMAC de stream) en producción.
+ * 32 caracteres ≈ 128 bits si se genera aleatoriamente (`openssl rand -hex 32`).
+ */
+export const MIN_SECRET_LENGTH = 32;
+
+/**
  * Crea la aplicación Express cableando todos los servicios.
  *
  * Todas las dependencias se inyectan para poder probar la app sin red ni
@@ -264,6 +270,18 @@ export function createApp(deps = {}) {
 
   // Secreto compartido: JWT + firma HMAC de stream (mismo valor, propósitos distintos).
   const streamSecret = jwtSecret || process.env.JWT_SECRET || 'dev-secret-change-me';
+  // Fail-closed en producción. El guard de authService solo comparaba el literal
+  // `dev-secret-change-me`, así que un `JWT_SECRET=1234` lo pasaba y quedaba
+  // firmando tokens JWT *y* las URLs de stream (mismo secreto, dos propósitos)
+  // con material adivinable por fuerza bruta. Se exige además una longitud
+  // mínima. Fuera de producción se permite cualquier valor (tests/dev).
+  if (process.env.NODE_ENV === 'production') {
+    if (streamSecret === 'dev-secret-change-me' || streamSecret.length < MIN_SECRET_LENGTH) {
+      throw new Error(
+        `[security] JWT_SECRET débil o ausente: se requieren al menos ${MIN_SECRET_LENGTH} caracteres aleatorios en producción (firma JWT y HMAC de stream).`,
+      );
+    }
+  }
   const authService = userRepo ? createAuthService({ userRepo, jwtSecret: streamSecret }) : null;
   const requireAuth = authService ? createRequireAuth(authService, userRepo, revocationService) : null;
   // Auth opcional: devuelve el userId si hay un token válido, si no null (sin bloquear).
@@ -780,16 +798,20 @@ export function createApp(deps = {}) {
     }
   });
 
-  app.post('/api/setup/extractor/install', async (req, res) => {
-    // En producción: solo con ADMIN_KEY (evita que Internet instale binarios en el host).
-    if (process.env.NODE_ENV === 'production') {
-      const ADMIN_KEY_INSTALL = process.env.ADMIN_KEY || '';
-      if (ADMIN_KEY_INSTALL.length < 8) {
-        return res.status(503).json({ error: 'Instalación deshabilitada (ADMIN_KEY no configurada).' });
-      }
-      const keyCheck = checkAdminKey(req, ADMIN_KEY_INSTALL);
-      if (!keyCheck.ok) return res.status(keyCheck.status).json({ error: keyCheck.error });
+  app.post('/api/setup/extractor/install', adminLimiter, async (req, res) => {
+    // SIEMPRE con ADMIN_KEY — este endpoint descarga y coloca un BINARIO en el
+    // host, así que es el más sensible de la API. Antes el control se aplicaba
+    // solo si `NODE_ENV === 'production'`: un despliegue que no exporta esa
+    // variable (habitual en Docker/PaaS, y de hecho este .env no la define; la
+    // fija el guardián) lo dejaba abierto a Internet. Fail-closed: sin
+    // ADMIN_KEY configurada el endpoint queda deshabilitado, igual que el panel
+    // de admin.
+    const ADMIN_KEY_INSTALL = process.env.ADMIN_KEY || '';
+    if (ADMIN_KEY_INSTALL.length < 8) {
+      return res.status(503).json({ error: 'Instalación deshabilitada (ADMIN_KEY no configurada).' });
     }
+    const keyCheck = checkAdminKey(req, ADMIN_KEY_INSTALL);
+    if (!keyCheck.ok) return res.status(keyCheck.status).json({ error: keyCheck.error });
     if (typeof installExtractorImpl !== 'function') {
       return res.status(501).json({ error: 'La instalación automática no está disponible.' });
     }

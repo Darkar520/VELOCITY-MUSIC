@@ -31,7 +31,10 @@ function buildApp(overrides = {}) {
     favoritesRepo: createMemoryFavoritesRepo(),
     historyRepo: createMemoryHistoryRepo(),
     trackRepo: createMemoryTrackRepo(['v1']),
-    jwtSecret: 'test-secret',
+    // Varias pruebas de este archivo levantan la app con NODE_ENV=production;
+    // desde el guard de fuerza del secreto (app.js) eso exige ≥ 32 caracteres.
+    // El valor es un fixture, no se compara con nada.
+    jwtSecret: 'test-secret-largo-para-produccion-0123456789',
     staticDir: null,
     ...overrides,
   });

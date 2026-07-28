@@ -36,7 +36,12 @@ jobs:
         working-directory: frontend
 
       - name: Run tests (unit + property-based)
-        run: node --test
+        # `npm test` = `node --test test/*.test.js`, el MISMO comando que corren
+        # el hook pre-push y `npm run verify`. Antes aquí había un `node --test`
+        # a secas (descubrimiento recursivo): CI y local ejecutaban conjuntos
+        # distintos, así que un test fuera de `test/` corría solo en CI y nunca
+        # en local — la clase de divergencia "verde en local, rojo en CI".
+        run: npm test
 
       - name: Frontend unit tests (vitest — playerStore, etc.)
         run: npm test
