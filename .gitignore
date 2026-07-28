@@ -62,3 +62,13 @@ tools/amd/app/assets/wrapper-manager.qcow2
 tools/amd/*.zip
 # Caché de archivos descifrados por AMD (generado en runtime)
 tools/amd/cache/
+
+# ── Sesión local: no versionar (AGENTS.md lo pide explícitamente) ─────────────
+# Estaban versionados por error. `data-test/velocity-db.json` llegó a contener
+# hashes de contraseñas reales: `git rm --cached` los saca del índice, pero NO
+# los borra del historial (ver nota en el commit).
+data-test/
+mcps/
+terminals/
+test-results/
+current-url.txt
