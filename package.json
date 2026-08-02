@@ -33,7 +33,7 @@
     "ytmusic-api": "^5.3.1"
   },
   "devDependencies": {
-    "@eslint/js": "^9.39.5",
+    "@eslint/js": "^10.0.1",
     "eslint": "^9.39.5",
     "fast-check": "^3.22.0",
     "globals": "^17.8.0",
