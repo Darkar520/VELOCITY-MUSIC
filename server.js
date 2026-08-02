@@ -11,14 +11,6 @@ import { startYtDlpAutoUpdate } from './src/services/ytdlpUpdater.js';
 import { createYTMusicCatalog, createYTMusicArtist, createYTMusicAlbum, createYTMusicLyrics, createYTMusicSearchAll, createYTMusicRadio, createYTMusicSong, readyPromise as ytMusicReadyPromise } from './src/extractors/ytmusic.js';
 import { installYtDlpByDownload } from './src/services/extractorSetup.js';
 import {
-  createMemoryUserRepo,
-  createMemoryPlaylistRepo,
-  createMemoryFavoritesRepo,
-  createMemoryHistoryRepo,
-  createMemoryTrackRepo,
-  createMemoryRevokedTokensRepo,
-} from './src/repositories/memory.js';
-import {
   createJsonUserRepo,
   createJsonPlaylistRepo,
   createJsonFavoritesRepo,

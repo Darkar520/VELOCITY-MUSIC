@@ -13,7 +13,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getPool, query, closePool } from '../src/db/pool.js';
+import { getPool, closePool } from '../src/db/pool.js';
 import { initSchema } from '../src/db/init.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

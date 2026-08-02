@@ -231,7 +231,7 @@ function runYtDlp(args, { mode = 'url', timeoutMs = 30000 } = {}) {
         proc = spawn(resolveYtDlpBin(), args);
         timer = setTimeout(() => finish(empty), timeoutMs);   // mata el proceso colgado
         proc.stdout.on('data', (d) => { out += d.toString(); });
-        proc.on('close', (code) => {
+        proc.on('close', () => {
           if (mode === 'lines') {
             finish(out.trim() ? out.trim().split('\n') : []);
           } else {

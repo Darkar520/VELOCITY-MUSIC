@@ -28,7 +28,6 @@ import { createPlaylistService, PlaylistError } from './services/playlistService
 import { createFavoritesService, FavoritesError } from './services/favoritesService.js';
 import { createHistoryService, HistoryError } from './services/historyService.js';
 import { extractorStatus } from './services/extractorSetup.js';
-import { updateNowPlaying, getNowPlaying, subscribeNowPlaying } from './services/nowPlayingService.js';
 import {
   setupDeezerProvider,
   createDeezerExtractor,

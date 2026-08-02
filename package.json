@@ -14,6 +14,8 @@
     "dev": "node --watch server.js",
     "build": "cd frontend && npm install && npm run build",
     "test": "node --test test/*.test.js",
+    "lint": "eslint .",
+    "lint:errors": "eslint . --quiet",
     "verify": "node --test test/*.test.js && cd frontend && npm run build",
     "preflight": "powershell -ExecutionPolicy Bypass -File scripts/preflight.ps1",
     "setup:hooks": "git config core.hooksPath .githooks",
@@ -31,7 +33,10 @@
     "ytmusic-api": "^5.3.1"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
     "fast-check": "^3.22.0",
+    "globals": "^17.8.0",
     "supertest": "^7.0.0"
   }
 }
