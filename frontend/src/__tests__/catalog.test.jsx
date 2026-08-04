@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { cacheTrack, bestCoverFor, cacheTracks, normalizeTrack, trackById, allCached } from '../catalog.js';
+import { cacheTrack, bestCoverFor, cacheTracks, normalizeTrack, trackById, allCached, saveMeta, loadMeta } from '../catalog.js';
 
 // Usar IDs únicos por test para evitar interferencias del Map module-scoped.
 const uid = (n) => `cat-test-${n}`;
@@ -102,5 +102,51 @@ describe('trackById', () => {
 describe('allCached', () => {
   it('devuelve un array', () => {
     expect(Array.isArray(allCached())).toBe(true);
+  });
+});
+
+// ── P0-2: durabilidad de la metadata ────────────────────────────────────────
+// `velocity.meta` es el único almacén de metadata que sobrevive a un arranque
+// sin red. Si una pista no se persiste ahí, al recargar `trackById(id)` es null
+// y la UI ya no puede emparejar el blob que sigue en IndexedDB: la canción
+// descargada "desaparece" y no aparece marcada como descargada.
+describe('saveMeta (durabilidad)', () => {
+  const readMeta = () => JSON.parse(localStorage.getItem('velocity.meta') || '[]');
+
+  it('persiste pistas SIN carátula (radio/álbum con artworkUrl null)', () => {
+    const id = uid('nocover');
+    cacheTrack({ id, title: 'Sin portada', artist: 'A', cover: '' });
+    saveMeta();
+    const saved = readMeta().find((t) => t.id === id);
+    expect(saved).toBeDefined();
+    expect(saved.title).toBe('Sin portada');
+  });
+
+  it('persiste pistas descargadas (cover data:) sin escribir el data URL', () => {
+    const id = uid('dl');
+    cacheTrack({ id, title: 'Descargada', artist: 'A', cover: 'data:image/png;base64,AAAA' });
+    saveMeta();
+    const saved = readMeta().find((t) => t.id === id);
+    expect(saved).toBeDefined();
+    expect(saved.cover).toBe('');
+  });
+
+  it('no escribe covers blob: (se invalidan al recargar)', () => {
+    const id = uid('blob');
+    cacheTrack({ id, title: 'Blob', artist: 'A', cover: 'blob:http://x/y' });
+    saveMeta();
+    expect(readMeta().find((t) => t.id === id).cover).toBe('');
+  });
+
+  it('conserva lo necesario para renderizar y firmar el stream', () => {
+    const id = uid('roundtrip');
+    cacheTrack({ id, title: 'Round', artist: 'Trip', durationSeconds: 210, cover: '' });
+    saveMeta();
+    // Arranque en frío: el catálogo se reconstruye solo desde localStorage.
+    const restored = readMeta().find((t) => t.id === id);
+    expect(restored).toMatchObject({ id, title: 'Round', artist: 'Trip', durationSeconds: 210 });
+    // loadMeta lo devuelve al catálogo → trackById vuelve a resolverlo.
+    loadMeta();
+    expect(trackById(id).artist).toBe('Trip');
   });
 });

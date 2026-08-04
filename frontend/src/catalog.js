@@ -67,13 +67,21 @@ export function loadPlayerState() {
 
 export function saveMeta() {
   try {
-    // Solo persistir pistas con carátula real (HTTPS). Las pistas con data:/blob:
-    // (offline IDB) o sin carátula se omiten: al reiniciar se rehidratan desde
-    // la API, que devuelve URLs HTTPS frescas. Esto evita que covers vacíos
-    // envenenen el catálogo y causen que los mixes del feed muestren ♪.
-    const arr = [..._catalog.values()].slice(-500).filter(t =>
-      t && typeof t.cover === 'string' && t.cover.startsWith('https://')
-    );
+    // Persistir TODA pista cacheada: `velocity.meta` es el único almacén de
+    // metadata que sobrevive a un arranque sin red, así que la durabilidad no
+    // puede depender de tener carátula. Filtrar por `https://` dejaba fuera las
+    // pistas de radio/álbum con artworkUrl null y las descargadas (cover data:),
+    // y al recargar `trackById(id)` devolvía null: la fila no se renderizaba y
+    // el blob de IndexedDB quedaba huérfano ("la descarga desapareció").
+    // Lo que sí se excluye es el VALOR data:/blob: del cover (decenas de KB por
+    // pista reventarían la cuota de localStorage y los blob: mueren al recargar).
+    // El cover real se recupera de IndexedDB (descargas) o de la API; el feed ya
+    // conserva el suyo en feedCache, así que un cover vacío aquí no lo degrada.
+    const arr = [..._catalog.values()].slice(-500).filter(Boolean).map((t) => (
+      (typeof t.cover === 'string' && (isDataUrl(t.cover) || t.cover.startsWith('blob:')))
+        ? { ...t, cover: '' }
+        : t
+    ));
     localStorage.setItem('velocity.meta', JSON.stringify(arr));
   } catch {}
 }
