@@ -7,7 +7,8 @@
  *   - Adapter: dispatch(event) corre audioMachine.reduce() y aplica los effects al store.
  *
  * El audioMachine NO se modifica (regla MUST del refactor). Se lo invoca y se traducen sus effects.
- * El adapter useAudioElementSync es el único que puede aplicar effects al DOM (<audio>).
+ * El adapter real al DOM (<audio>) es runAudioEffects, registrado vía setPolicyEffectCtx
+ * (effectCtxRef desde usePlaybackController) más los handlers inline del <audio> en App.jsx.
  * Componentes solo leen estado, no dispatchan directo al machine.
  *
  * Estado que NO vive acá:
@@ -43,7 +44,7 @@ export const usePlayerStore = create((set, get) => {
   // Estado interno de la máquina — no se expone a componentes directamente.
   let machineState = initialMachineState();
 
-  // Handler de effects — lo setea useAudioElementSync al montar.
+  // Handler de effects legacy (API conservada; hoy solo la usan los tests vía setEffectHandler).
   // Mientras no haya handler, los effects se encolan (caso tests).
   let effectHandler = null;
   const pendingEffects = [];
@@ -242,8 +243,8 @@ export const usePlayerStore = create((set, get) => {
       }),
 
     // ─── Adapter injection ───────────────────────────────────
-    /** Lo llama useAudioElementSync al montar. Recibe effects no-syncReact.
-     *  Pasar null para detach (caso tests). */
+    /** API legacy de inyección de effects (hoy solo la usan los tests). Recibe effects
+     *  no-syncReact. Pasar null para detach (caso tests). */
     setEffectHandler: (handler) => {
       effectHandler = handler;
       // Flushear pendientes (caso: hydrate antes de montar el <audio>).

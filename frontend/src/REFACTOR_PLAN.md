@@ -31,6 +31,8 @@ Estado del reproductor, cola, salida de audio, interrupciones.
 ### Dominio PLAYER REFS — **QUEDAN EN HOOKS** (no en store)
 Refs de DOM, de proceso, de policy de audio. No son estado reactivo.
 
+> **Nota histórica:** el hook `useAudioElementSync` que aparece abajo como destino nunca llegó a cablearse en producción y fue eliminado como código muerto. El adapter real al DOM es `runAudioEffects` (registrado vía `setPolicyEffectCtx`/`effectCtxRef` en `usePlaybackController` + handlers inline del `<audio>` en App.jsx). La tabla se conserva como registro del plan original.
+
 | Ref | Destino |
 |---|---|
 | `audioRef`, `preloadAudioRef`, `preloadAudio2Ref` | `useAudioElementSync` |
@@ -60,6 +62,7 @@ Refs de DOM, de proceso, de policy de audio. No son estado reactivo.
 ## 2. Efectos (useEffect) — agrupados por hook destino
 
 ### `useAudioElementSync` — sync del `<audio>` con el store
+> **Nota histórica:** este hook nunca se cableó y fue eliminado como código muerto; el sync real vive en `runAudioEffects` + handlers inline del `<audio>` en App.jsx.
 - Líneas 1079 (volume), 1084 (src change), 1104 (play/pause), 1111 (playingRef mirror), 1161 (timeupdate), 1242 (ended), 1254 (error), 1289 (canplay), 1314 (sustained play check)
 - Refs que managea: `audioRef`, `preloadAudioRef`, `objUrlRef`, `playErrorRef`, `fadeRafRef`, `playingRef`, `selfPauseRef`
 - Expone: `dispatch(event)` que corre `audioMachine.reduce()` y aplica effects al DOM + store
@@ -108,7 +111,7 @@ Justificación vs XState: XState añadiría 32 kB y obligaría a reescribir audi
 
 ## 6. Riesgo principal
 
-El `audioMachine` emite `effects` que mutan React state vía `syncReact`. Ese patrón se rompe si el store y el `audioRef` no están sincronizados. Mitigación: el adapter `useAudioElementSync` es el único que puede dispatchar eventos al machine y el único que aplica effects al DOM. Componentes solo leen estado, no dispatchan directo.
+El `audioMachine` emite `effects` que mutan React state vía `syncReact`. Ese patrón se rompe si el store y el `audioRef` no están sincronizados. Mitigación: un único adapter dispatcha eventos al machine y aplica effects al DOM. En la implementación final ese adapter es `runAudioEffects` (vía `setPolicyEffectCtx`/`effectCtxRef` en `usePlaybackController` + handlers inline del `<audio>` en App.jsx), no el `useAudioElementSync` planificado (eliminado como código muerto). Componentes solo leen estado, no dispatchan directo.
 
 ## 7. Criterio de éxito
 

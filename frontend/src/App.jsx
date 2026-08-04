@@ -1,26 +1,18 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { createPortal } from 'react-dom';
+import React, { useState, useEffect, useRef } from 'react';
 import { api, isAuthed, setOnUnauthorized } from './api.js';
 import * as offline from './offline.js';
-import { isSpotifyUrl } from './spotifyImport.js';
-import { CSS, THEMES, SEED_ROWS, LATIN_ROWS, DISCOVERY, GENRES, ONBOARDING_GENRES, MOODS, ERAS, FALLBACK_COVER, BASE_VARS } from './constants.js';
-import { fmt, hex2rgba, grad, hiResCover, dedupeByTitle, capPerArtist, slimTrack, parseLRC, lyricsOverlapRatio, plainFromSyncedLines, tintedVars } from './helpers.js';
-import { cacheTrack, cacheTracks, trackById, allCached, loadMeta, loadPlayerState, saveMeta, normalizeTrack, bestCoverFor } from './catalog.js';
+
+import { CSS, THEMES, BASE_VARS } from './constants.js';
+import { hex2rgba, grad, dedupeByTitle, capPerArtist, tintedVars } from './helpers.js';
+import { cacheTrack, trackById, loadPlayerState, normalizeTrack } from './catalog.js';
 import {
   isDocumentVisible,
-  shouldResumeOnForeground,
-  canForceReacquire,
-  isExternalPause,
-  shouldFadeIn,
-  shouldSuspendPreloads,
   shouldPreExtendQueue,
-  mediaSessionPlaybackState,
   isStreamUrlFresh,
-  isAudioPipelineDead,
 } from './audioContinuity.js';
 import { selectPlaySync } from './audio/audioMachine.js';
-import { runAudioEffects, flushPendingSeek } from './audio/runAudioEffects.js';
-import { usePersisted, useViewport, useDominantColor, useHSwipe } from './hooks.js';
+import { runAudioEffects } from './audio/runAudioEffects.js';
+import { usePersisted, useViewport } from './hooks.js';
 import { useLibrarySync } from './hooks/useLibrarySync.js';
 import { useHomeFeed } from './hooks/useHomeFeed.js';
 import { useLibraryActions } from './hooks/useLibraryActions.js';
@@ -28,11 +20,17 @@ import { useDownloads } from './hooks/useDownloads.js';
 import { usePlayerStoreBindings } from './hooks/usePlayerStoreBindings.js';
 import { useLibraryStoreBindings } from './hooks/useLibraryStoreBindings.js';
 import { usePlaybackController } from './hooks/usePlaybackController.js';
+import { useAppUpdate } from './hooks/useAppUpdate.js';
+import { useMediaSession } from './hooks/useMediaSession.js';
+import { useAudioErrorRecovery } from './hooks/useAudioErrorRecovery.js';
+import { useAudioElement } from './hooks/useAudioElement.js';
+import { useAudioResumeGuard } from './hooks/useAudioResumeGuard.js';
+import { useCatalogNavigation } from './hooks/useCatalogNavigation.js';
+import { usePlaylistImport } from './hooks/usePlaylistImport.js';
+import { useAudioOutput } from './hooks/useAudioOutput.js';
+import { useTrackPrebuffer } from './hooks/useTrackPrebuffer.js';
 import { useLibraryStore } from './store/libraryStore.js';
-import { usePlayerStore } from './store/playerStore.js';
 import { Icon } from './Icons.jsx';
-import { EQViz, Spinner, ProgressRing, DownloadAllButton, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider, SettingCard, ToggleRow, ColorField } from './components.jsx';
-import { Avatar, PixelAvatar, AVATARS } from './avatars.jsx';
 import { AuthScreen } from './screens/AuthScreen.jsx';
 import { HomeTab } from './tabs/HomeTab.jsx';
 import { SearchTab } from './tabs/SearchTab.jsx';
@@ -51,7 +49,7 @@ import { ImportBanner } from './modals/ImportBanner.jsx';
 import { ImportResultModal } from './modals/ImportResultModal.jsx';
 import { TrackMenu } from './modals/TrackMenu.jsx';
 import { Toast } from './modals/Toast.jsx';
-import { parseTextPlaylist } from './import/parsePlaylist.js';
+
 
 // ── Error Boundary global: evita que un crash de React quede en pantalla negra.
 // Si el componente lanza un error no capturado, muestra un botón de recarga
@@ -153,7 +151,6 @@ export default function App() {
     outputs, setOutputs,
     sinkId, setSinkId,
     downloaded, setDownloaded,
-    downloading, setDownloading,
   } = usePlayerStoreBindings();
   const objUrlRef = useRef(null);
   // Espejo de session (A12); la fuente de verdad es audioMachine.
@@ -192,13 +189,13 @@ export default function App() {
 
   // Biblioteca — fuente de verdad: libraryStore (sin mirrors useState)
   const {
-    favs, setFavs,
+    favs,
     playlists, setPlaylists,
     recent, setRecent,
-    savedAlbums, setSavedAlbums,
-    savedPlaylists, setSavedPlaylists,
-    homeRows, homeLoading, setHomeRows,
-    catVer, setCatVer,
+    savedAlbums,
+    savedPlaylists,
+    homeRows,
+    setCatVer,
   } = useLibraryStoreBindings();
 
   // Hook de sincronización con backend (reemplaza los 3 useEffect de biblio)
@@ -228,223 +225,20 @@ export default function App() {
   const toastTimer = useRef(null);
   const showToast = (m) => { setToast(m); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 2400); };
 
-  const [showImport, setShowImport] = useState(false);
-  const [importJob, setImportJob] = useState(null);
+  // ── Importación de playlists (URL de YouTube / lista en texto) ──
+  const {
+    showImport, setShowImport,
+    importJob, setImportJob,
+    startImport, startImportText, openImportedPlaylist,
+  } = usePlaylistImport({ showToast, setPlaylists, setOpenPlaylist, setTab });
 
-  const startImport = async (url) => {
-    if (importJob && importJob.busy) return;
-    const raw = String(url || '').trim();
-    if (!raw) return;
 
-    // Spotify API exige Premium: redirigir al flujo gratis (extractor + pegar lista).
-    if (isSpotifyUrl(raw)) {
-      showToast('Spotify: usa la pestaña «Spotify (gratis)» — sin pagar Premium.');
-      setShowImport(true);
-      return;
-    }
 
-    // YouTube / YouTube Music (flujo existente)
-    setImportJob({ busy: true, current: 0, total: 0, progress: 0, name: 'Conectando...', playlistId: null, error: null });
-    setShowImport(false);
-    try {
-      const data = await api.importPlaylist(raw);
-      const { name, tracks } = data;
-      if (!tracks || !tracks.length) {
-        throw new Error('La playlist no contiene canciones o es privada.');
-      }
-      setImportJob(prev => ({ ...prev, total: tracks.length, name, current: 0, progress: 0 }));
-      const playlistId = await api.createPlaylist(name);
-      if (!playlistId) {
-        throw new Error('No se pudo crear la playlist.');
-      }
-      setImportJob(prev => ({ ...prev, playlistId }));
-
-      const batchSize = 50;
-      for (let i = 0; i < tracks.length; i += batchSize) {
-        const batch = tracks.slice(i, i + batchSize);
-        await api.saveTracks(batch);
-      }
-
-      const normalizedTracks = tracks.map(t => normalizeTrack(t));
-      saveMeta();
-
-      for (let i = 0; i < normalizedTracks.length; i++) {
-        const t = normalizedTracks[i];
-        try {
-          await api.addToPlaylist(playlistId, t.id);
-        } catch (e) {
-          console.error('Error al agregar a la playlist:', e);
-        }
-        setImportJob(prev => {
-          if (!prev) return null;
-          const current = i + 1;
-          const progress = Math.round((current / normalizedTracks.length) * 100);
-          return { ...prev, current, progress };
-        });
-      }
-
-      const pls = await api.playlists().catch(() => null);
-      if (pls) {
-        const withTracks = await Promise.all(pls.map(async p => {
-          const ids = await api.playlistTracks(p.id).catch(() => []);
-          return { id: p.id, name: p.name, trackIds: ids };
-        }));
-        setPlaylists(withTracks);
-      }
-
-      setImportJob(prev => ({ ...prev, busy: false }));
-      showToast('Playlist importada con éxito');
-    } catch (e) {
-      console.error(e);
-      setImportJob({ busy: false, error: e.message || 'Error al conectar' });
-      showToast('Error al importar la playlist');
-    }
-  };
-
-  const startImportText = async (playlistName, trackList) => {
-    if (importJob && importJob.busy) return;
-    const parsedTracks = parseTextPlaylist(trackList);
-    if (!parsedTracks.length) {
-      showToast('No se encontraron canciones para importar.');
-      return;
-    }
-    setImportJob({ busy: true, current: 0, total: parsedTracks.length, progress: 0, name: playlistName || 'Playlist importada', playlistId: null, error: null });
-    setShowImport(false);
-    try {
-      const name = playlistName.trim() || 'Playlist importada';
-      const playlistId = await api.createPlaylist(name);
-      if (!playlistId) {
-        throw new Error('No se pudo crear la playlist.');
-      }
-      setImportJob(prev => ({ ...prev, playlistId }));
-
-      for (let i = 0; i < parsedTracks.length; i++) {
-        const item = parsedTracks[i];
-        setImportJob(prev => {
-          if (!prev) return null;
-          const current = i;
-          const progress = Math.round((current / parsedTracks.length) * 100);
-          return { 
-            ...prev, 
-            current, 
-            progress,
-            statusText: `Buscando "${item.title} - ${item.artist}"...`
-          };
-        });
-
-        try {
-          const searchQuery = `${item.title} ${item.artist}`.trim();
-          const results = await api.search(searchQuery);
-          if (results && results.length > 0) {
-            const matchedRaw = results[0];
-            const normalized = normalizeTrack(matchedRaw);
-            saveMeta();
-            await api.saveTracks([normalized]);
-            await api.addToPlaylist(playlistId, normalized.id);
-          }
-        } catch (e) {
-          console.error('Error buscando/agregando canción:', item, e);
-        }
-
-        setImportJob(prev => {
-          if (!prev) return null;
-          const current = i + 1;
-          const progress = Math.round((current / parsedTracks.length) * 100);
-          return { 
-            ...prev, 
-            current, 
-            progress,
-            statusText: `Completado ${current}/${parsedTracks.length}`
-          };
-        });
-      }
-
-      const pls = await api.playlists().catch(() => null);
-      if (pls) {
-        const withTracks = await Promise.all(pls.map(async p => {
-          const ids = await api.playlistTracks(p.id).catch(() => []);
-          return { id: p.id, name: p.name, trackIds: ids };
-        }));
-        setPlaylists(withTracks);
-      }
-
-      setImportJob(prev => ({ ...prev, busy: false, statusText: null }));
-      showToast('Playlist importada con éxito');
-    } catch (e) {
-      console.error(e);
-      setImportJob({ busy: false, error: e.message || 'Error al conectar' });
-      showToast('Error al importar la playlist');
-    }
-  };
-
-  const openImportedPlaylist = () => {
-    if (importJob && importJob.playlistId) {
-      setOpenPlaylist(importJob.playlistId);
-      setTab('library');
-      setImportJob(null);
-    }
-  };
-
-  // ── Detección de versión desactualizada + auto-actualización ──
-  // Estrategia doble para no depender solo del Service Worker:
-  //  1) SW: si instala una versión nueva y toma el control → hay actualización.
-  //  2) Sondeo de versión: compara el hash del bundle en ejecución contra el que
-  //     sirve el servidor (index.html, no-cache). Detecta deploys aunque el SW
-  //     no cambie. Se revisa al enfocar la app y periódicamente.
-  const [updateReady, setUpdateReady] = useState(false);
-  const runningBundleRef = useRef(null);
-  // Aplicar la actualización: activa el SW en espera (si lo hay) y recarga.
-  const applyUpdate = async () => {
-    try {
-      const reg = await navigator.serviceWorker?.getRegistration?.();
-      if (reg && reg.waiting) reg.waiting.postMessage('SKIP_WAITING');
-    } catch {}
-    window.location.reload();
-  };
-  useEffect(() => {
-    // (1) Señal del Service Worker.
-    if ('serviceWorker' in navigator) {
-      const hadController = !!navigator.serviceWorker.controller;
-      let fired = false;
-      const trigger = () => { if (fired || !hadController) return; fired = true; setUpdateReady(true); };
-      const onMsg = (e) => { if (e.data && e.data.type === 'vm-updated') trigger(); };
-      navigator.serviceWorker.addEventListener('controllerchange', trigger);
-      navigator.serviceWorker.addEventListener('message', onMsg);
-      var cleanupSW = () => { navigator.serviceWorker.removeEventListener('controllerchange', trigger); navigator.serviceWorker.removeEventListener('message', onMsg); };
-    }
-    // (2) Sondeo de versión por hash del bundle.
-    try {
-      const s = document.querySelector('script[src*="/assets/index-"]');
-      runningBundleRef.current = s ? (s.getAttribute('src').match(/index-[A-Za-z0-9_-]+\.js/) || [null])[0] : null;
-    } catch {}
-    let stop = false;
-    const checkVersion = async () => {
-      if (stop || !runningBundleRef.current) return;
-      try {
-        const html = await fetch('/?_v=' + Date.now(), { cache: 'no-store' }).then(r => r.ok ? r.text() : '');
-        const m = html.match(/index-[A-Za-z0-9_-]+\.js/);
-        if (m && m[0] !== runningBundleRef.current) setUpdateReady(true);
-      } catch {}
-    };
-    const iv = setInterval(checkVersion, 30000);
-    const onVis = () => { if (document.visibilityState === 'visible') checkVersion(); };
-    const onFocus = () => checkVersion();
-    document.addEventListener('visibilitychange', onVis);
-    window.addEventListener('focus', onFocus);
-    checkVersion();
-    return () => { stop = true; clearInterval(iv); document.removeEventListener('visibilitychange', onVis); window.removeEventListener('focus', onFocus); if (typeof cleanupSW === 'function') cleanupSW(); };
-  }, []);
-  // El aviso (UpdateBanner) SIEMPRE se muestra cuando hay versión nueva.
-  // Auto-aplica SOLO si la música está pausada Y el usuario lleva > 30s en la app
-  // (evita recargar justo después de login/primera carga).
-  const mountedAtRef = useRef(Date.now());
-  useEffect(() => {
-    if (!updateReady || playing) return;
-    const elapsed = Date.now() - mountedAtRef.current;
-    const delay = Math.max(0, 30000 - elapsed); // espera mínimo 30s desde el montaje
-    const t = setTimeout(() => applyUpdate(), delay + 2000);
-    return () => clearTimeout(t);
-  }, [updateReady, playing]);
+  // ── Actualización de versión (SW + sondeo de bundle) e instalación PWA ──
+  const {
+    updateReady, setUpdateReady, applyUpdate,
+    installEvt, installApp, isIOS, isStandalone,
+  } = useAppUpdate({ playing });
 
   const audioRef = useRef(null);
   // Dos <audio> ocultos que pre-descargan las siguientes 2 pistas de la cola.
@@ -485,30 +279,23 @@ export default function App() {
   const prevTrackActionRef = useRef(() => {});
   const audioHydratedRef = useRef(false);
 
-  const setMediaSessionState = (state, positionHint) => {
-    if (!('mediaSession' in navigator)) return;
-    try { navigator.mediaSession.playbackState = state; } catch {}
-    if (positionHint != null && navigator.mediaSession.setPositionState) {
-      try {
-        const a = audioRef.current;
-        const d = a && a.duration > 0 && isFinite(a.duration) ? a.duration : 0;
-        if (d > 0) {
-          navigator.mediaSession.setPositionState({
-            duration: d,
-            position: Math.min(Math.max(0, positionHint), d),
-            playbackRate: 1,
-          });
-        }
-      } catch {}
-    }
-  };
+  // ── Media Session (metadatos, controles del OS, posición) ──
+  // Se declara antes del controlador para poder entregarle setMediaSessionState;
+  // las acciones del OS leen el controlador desde mediaCtlRef al ejecutarse.
+  const mediaCtlRef = useRef({});
+  const { setMediaSessionState } = useMediaSession({
+    track, playing, time, dur, vol,
+    mediaInterrupted, interruptPositionRef,
+    audioRef, ctlRef: mediaCtlRef,
+    nextTrackActionRef, prevTrackActionRef,
+  });
 
   // ── Playback controller: play/toggle/next/seek + dispatch unificado al store ──
   const {
     play, togglePlay, next, prev, seek,
-    dispatchAudio, getMachine, patchMachine, syncMirrorsFromMachine,
-    clearYieldedFocus, restoreInterruptPosition, applySessionResume,
-    fadeInAudio, effectCtxRef, orderIds, nextCover, prevCover,
+    dispatchAudio, getMachine, patchMachine,
+    restoreInterruptPosition, applySessionResume,
+    fadeInAudio, effectCtxRef, nextCover, prevCover,
     addToQueue, reorderQueue, removeFromQueue, removeFromQueueToast, prefetchNext,
   } = usePlaybackController({
     audioRef, selfPauseRef, playingRef, fadeRafRef, fadeSafetyRef, pendingFadeRef,
@@ -520,6 +307,8 @@ export default function App() {
     setQueue, setRecent, setPlayingFrom, showToast, recordPlayStat, setMediaSessionState,
     playErrorRef, consecutiveFailsRef,
   });
+  // Publicar el controlador para las acciones de Media Session (ver arriba).
+  mediaCtlRef.current = { getMachine, dispatchAudio, seek };
   // Web Audio para normalizar volumen (compresor de rango dinámico). Opt-in.
   // ── AudioContext eliminado: era incompatible con background playback en móvil ──
   // createMediaElementSource secuestra el <audio> permanentemente y el AudioContext
@@ -722,200 +511,21 @@ export default function App() {
   //  NO usar: AudioContext/MediaElementSource (secuestra el <audio> y mata
   //  background en móvil), bucles de play() ocultos, ni keepalives sintéticos.
 
-  // ── Wake Lock API: previene que la CPU/screen se suspenda mientras reproduce ──
-  // En algunos dispositivos Android agresivos, el navegador puede suspender
-  // el proceso de JS en background incluso con Media Session activa. El Wake Lock
-  // mantiene la CPU despierta mientras hay música sonando.
-  const wakeLockRef = useRef(null);
-  useEffect(() => {
-    const requestLock = async () => {
-      if (!navigator.wakeLock) return;
-      try {
-        if (playing) {
-          wakeLockRef.current = await navigator.wakeLock.request('screen');
-        } else if (wakeLockRef.current) {
-          await wakeLockRef.current.release();
-          wakeLockRef.current = null;
-        }
-      } catch {}
-    };
-    requestLock();
-    // Re-adquirir el lock al volver a primer plano (se libera automáticamente
-    // cuando la pantalla se apaga).
-    const onVis = () => { if (document.visibilityState === 'visible' && playing) requestLock(); };
-    document.addEventListener('visibilitychange', onVis);
-    return () => { document.removeEventListener('visibilitychange', onVis); if (wakeLockRef.current) { wakeLockRef.current.release().catch(() => {}); wakeLockRef.current = null; } };
-  }, [playing]);
-
-  // ── Normalizar volumen ──
-  // Antes se usaba createMediaElementSource + DynamicsCompressor de Web Audio API,
-  // pero eso secuestra el <audio> permanentemente: el audio pasa a fluir a través
-  // del AudioContext, y cuando el navegador lo suspende en background/pantalla
-  // bloqueada, la música se detiene. Por eso se eliminó Web Audio API del camino
-  // de audio y se reemplazó por un ajuste simple de volumen.
-  // El toggle sigue funcionando: cuando está ON, sube el volumen al máximo
-  // (las pistas ya vienen normalizadas del backend).
-  useEffect(() => {
-    if (settings.normalize && audioRef.current) {
-      audioRef.current.volume = Math.max(audioRef.current.volume, vol);
-    }
-  }, [settings.normalize, vol]);
-  useEffect(() => { if (audioRef.current) audioRef.current.volume = vol; }, [vol]);
-
-  // ── Enumerar dispositivos de salida de audio ──
-  // Sin permiso de micrófono, enumerateDevices() devuelve deviceIds pero labels
-  // vacíos. El DeviceChip solicita permiso on-click cuando el usuario lo pulsa.
-  useEffect(() => {
-    if (!navigator.mediaDevices?.enumerateDevices) return;
-    const update = () => navigator.mediaDevices.enumerateDevices().then(devs => {
-      const outs = devs.filter(d => d.kind === 'audiooutput').map(d => ({
-        deviceId: d.deviceId,
-        label: d.label || '',
-      }));
-      // Si los labels siguen vacíos, asignar nombres genéricos por posición.
-      if (outs.length && !outs.some(o => o.label)) {
-        outs.forEach((o, i) => { o.label = i === 0 ? 'Altavoz del dispositivo' : `Salida de audio ${i + 1}`; });
-      }
-      setOutputs(outs);
-    }).catch(() => {});
-    update();
-    // Re-enumerar cuando cambian los dispositivos (ej: conectar/desconectar Bluetooth).
-    navigator.mediaDevices.addEventListener?.('devicechange', update);
-    return () => navigator.mediaDevices.removeEventListener?.('devicechange', update);
-  }, []);
-
-  // ── Aplicar sinkId al elemento audio ──
-  useEffect(() => {
-    if (audioRef.current && audioRef.current.setSinkId && sinkId) {
-      audioRef.current.setSinkId(sinkId).catch(() => {});
-    }
-  }, [sinkId, track?.id]);
+  // ── Volumen, Wake Lock y dispositivos de salida: useAudioOutput ──
+  useAudioOutput({ audioRef, playing, vol, settings, sinkId, setOutputs, trackId: track?.id });
 
   // Sincronizar playingRef con la intención.
   useEffect(() => { playingRef.current = playing; }, [playing]);
 
-  // ── Reanudación tras interrupción por vídeo / zombie silencioso ──
-  // Solo en visible. No escribe ancla de yield (A10: no clavar posición).
-  const forceReacquire = () => {
-    if (!canForceReacquire(isDocumentVisible())) return;
-    if (reacquireInFlight.current) return;
-    const a = audioRef.current;
-    if (!a || !playingRef.current || a.ended) return;
-    reacquireInFlight.current = true;
-    if (a.volume < vol * 0.5) a.volume = vol;
-    // La máquina/runner vuelve a afirmar la reproducción en foreground;
-    // App no invoca directamente el elemento multimedia.
-    dispatchAudio({ type: 'PIPELINE_DEAD', hidden: false, position: a.currentTime || 0 });
-    reacquireInFlight.current = false;
-  };
-
-  useEffect(() => {
-    const tryResume = () => {
-      const a = audioRef.current;
-      if (!a) return;
-      const timeStuck = lastTimeRef.current > 0
-        && Math.abs((a.currentTime || 0) - lastTimeRef.current) < 0.05
-        && (a.currentTime || 0) > 0.5
-        && !a.paused;
-      if (!shouldResumeOnForeground({
-        userWantsPlay: getMachine().intent === 'play',
-        audioEnded: a.ended,
-        audioPaused: a.paused,
-        volume: a.volume,
-        targetVolume: vol,
-        systemPaused: getMachine().focus === 'yielded',
-        timeStuck,
-      })) return;
-
-      dispatchAudio({
-        type: 'DOC_VISIBLE',
-        currentTime: a.currentTime || 0,
-      });
-    };
-
-    const onVis = () => {
-      if (document.visibilityState === 'visible') {
-        preloadEpochRef.current += 1;
-        setPreloadEpoch((value) => value + 1);
-        setTimeout(tryResume, 40);
-        setTimeout(tryResume, 350);
-        setTimeout(tryResume, 1000);
-      } else {
-        preloadEpochRef.current += 1;
-        setPreloadEpoch((value) => value + 1);
-        const a = audioRef.current;
-        dispatchAudio({
-          type: 'DOC_HIDDEN',
-          position: a && Number.isFinite(a.currentTime) ? a.currentTime : undefined,
-        });
-        if (shouldSuspendPreloads(false)) {
-          for (const r of [preloadAudioRef, preloadAudio2Ref]) {
-            const el = r.current;
-            if (!el) continue;
-            try { el.removeAttribute('src'); el.load(); } catch {}
-          }
-        }
-      }
-    };
-    const onFocus = () => {
-      if (isDocumentVisible()) setTimeout(tryResume, 60);
-    };
-    const onPageShow = (e) => {
-      if (e.persisted || isDocumentVisible()) setTimeout(tryResume, 60);
-    };
-
-    document.addEventListener('visibilitychange', onVis);
-    window.addEventListener('focus', onFocus);
-    window.addEventListener('pageshow', onPageShow);
-
-    // Foreground: zombie / pause residual (reacquire suave).
-    // Background: SOLO detección de pipeline muerto (A14) — nunca play()
-    // oculto tras yield (A7). La reanudación real ocurre vía DOC_VISIBLE.
-    stuckCheckRef.current = setInterval(() => {
-      const a = audioRef.current;
-      if (!a || !playingRef.current || a.ended) { lastTimeRef.current = 0; bgLastCtRef.current = 0; return; }
-      const ct = a.currentTime || 0;
-
-      if (!isDocumentVisible()) {
-        // Si ya cedimos (yield), la recuperación es trabajo de DOC_VISIBLE.
-        if (systemPausedRef.current) { bgLastCtRef.current = ct; return; }
-        if (ct > (bgLastCtRef.current || 0) + 0.05) {
-          // Reloj avanzando: pipeline sano (Media Session sigue honesta).
-          bgLastProgressRef.current = Date.now();
-        } else if (isAudioPipelineDead({
-          userWantsPlay: true,
-          yieldedFocus: false,
-          selfPause: selfPauseRef.current,
-          ended: a.ended,
-          paused: a.paused,
-          currentTime: ct,
-          readyState: a.readyState || 0,
-          stallMs: Date.now() - bgLastProgressRef.current,
-        })) {
-          // Zombie confirmado: pausar, anclar y decir la verdad al OS.
-          dispatchAudio({ type: 'PIPELINE_DEAD', hidden: true, position: ct });
-        }
-        bgLastCtRef.current = ct;
-        lastTimeRef.current = ct;
-        return;
-      }
-
-      if (a.paused || systemPausedRef.current) {
-        tryResume();
-      } else if (lastTimeRef.current > 0 && Math.abs(ct - lastTimeRef.current) < 0.05 && ct > 0.5) {
-        if (a.volume < vol * 0.5) a.volume = vol;
-        forceReacquire();
-      }
-      lastTimeRef.current = ct;
-    }, 1500);
-
-    return () => {
-      document.removeEventListener('visibilitychange', onVis);
-      window.removeEventListener('focus', onFocus);
-      window.removeEventListener('pageshow', onPageShow);
-      if (stuckCheckRef.current) { clearInterval(stuckCheckRef.current); stuckCheckRef.current = null; }
-    };
-  }, [vol]);
+  // ── Reanudación tras interrupción / zombie silencioso: useAudioResumeGuard ──
+  useAudioResumeGuard({
+    audioRef, preloadAudioRef, preloadAudio2Ref,
+    playingRef, selfPauseRef, systemPausedRef,
+    reacquireInFlight, lastTimeRef, stuckCheckRef,
+    bgLastCtRef, bgLastProgressRef,
+    preloadEpochRef, setPreloadEpoch,
+    vol, getMachine, dispatchAudio,
+  });
 
   // ── Precargar la(s) siguiente(s) pista(s) al cambiar la actual o la cola ──
   // Cubre el modo radio (la cola se llena después de play()) y garantiza que
@@ -932,45 +542,10 @@ export default function App() {
   // Dos <audio> ocultos descargan por adelantado los streams de las próximas 2
   // pistas. Al cambiar, el navegador sirve desde caché → arranque instantáneo.
   // URLs firmadas (HMAC): el proxy rechaza sin exp/sig.
-  useEffect(() => {
-    let cancelled = false;
-    const effectEpoch = preloadEpoch;
-    const isPreloadCurrent = () => (
-      !cancelled
-      && preloadEpochRef.current === effectEpoch
-      && isDocumentVisible()
-    );
-    const ids = queue.length ? queue : (track ? [track.id] : []);
-    const i = track ? ids.indexOf(track.id) : -1;
-    const qualityMap = { high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' };
-    const qParam = qualityMap[quality] || 'high';
-    const preload = async (el, offset) => {
-      if (!isDocumentVisible()) { if (el) el.removeAttribute('src'); return; }
-      if (!el || !track || i === -1 || ids.length < 2) { if (el) el.removeAttribute('src'); return; }
-      const nextId = ids[(i + offset) % ids.length];
-      if (!nextId || nextId === track.id || downloaded.has(nextId)) { el.removeAttribute('src'); return; }
-      const nt = trackById(nextId);
-      if (!nt) { el.removeAttribute('src'); return; }
-      try {
-        // Preferir firma ya en caché (síncrona); si no, ensure + warm.
-        // 300s de umbral: re-firma si quedan < 5 min en la URL cacheada.
-        // Evita que la siguiente pista arranque con una URL a punto de expirar.
-        let url = api.peekStreamUrl({ artist: nt.artist, title: nt.title, id: nt.id, quality: qParam }, 300);
-        if (!url) url = await api.ensureStreamUrl({ artist: nt.artist, title: nt.title, id: nt.id, quality: qParam });
-        if (!isPreloadCurrent() || !el) return;
-        if (el.getAttribute('src') !== url) { el.src = url; try { el.load(); } catch {} }
-      } catch {
-        if (isPreloadCurrent() && el) el.removeAttribute('src');
-      }
-    };
-    preload(preloadAudioRef.current, 1);
-    preload(preloadAudio2Ref.current, 2);
-    // volume=0 en los pre-buffer (no muted: muted causa throttle en mobile).
-    if (preloadAudioRef.current) preloadAudioRef.current.volume = 0;
-    if (preloadAudio2Ref.current) preloadAudio2Ref.current.volume = 0;
-    return () => { cancelled = true; };
-    // NO depender de downloaded: causa re-renders que limpian el buffer.
-  }, [track?.id, queue, quality, preloadEpoch]);
+  useTrackPrebuffer({
+    preloadAudioRef, preloadAudio2Ref, preloadEpochRef, preloadEpoch,
+    track, queue, quality, downloaded,
+  });
 
   // ── Continuidad en segundo plano: extender la cola ANTES de que acabe ──
   // Última O penúltima pista → anexar relacionadas YA (en primer plano),
@@ -1002,22 +577,6 @@ export default function App() {
     })();
   }, [track?.id, queue, settings.autoplay]);
 
-  // ── Media Session: posición en notificación ──
-  // Durante interrupción por vídeo: congelar en interruptPosition (no “contar” segundos).
-  useEffect(() => {
-    if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return;
-    if (!(dur > 0 && isFinite(dur))) return;
-    const pos = mediaInterrupted && interruptPositionRef.current != null
-      ? interruptPositionRef.current
-      : time;
-    try {
-      navigator.mediaSession.setPositionState({
-        duration: dur,
-        position: Math.min(Math.max(0, pos), dur),
-        playbackRate: 1,
-      });
-    } catch {}
-  }, [time, dur, mediaInterrupted]);
   // Salir del modo selección al navegar.
   useEffect(() => { if (selecting) { setSelecting(false); setSelection(new Set()); } /* eslint-disable-next-line */ }, [tab, view]);
 
@@ -1098,265 +657,54 @@ export default function App() {
     api.updateNowPlaying({ trackId: '', title: '', artist: '', cover: '', position: 0, duration: 0, playing: false, deviceName: '', quality: '' });
     setPlaying(false);
   };
+  // ── Handlers del <audio> físico: extraídos a useAudioElement ──
+  // El adapter al DOM sigue siendo runAudioEffects (setPolicyEffectCtx); este
+  // hook sólo agrupa los callbacks que estaban inline en el JSX. Debe invocarse
+  // ANTES del return condicional de AuthScreen (Rules of Hooks).
+  const audioHandlers = useAudioElement({
+    audioRef, effectCtxRef,
+    systemPausedRef, selfPauseRef, playingRef, pendingFadeRef, trackRef,
+    playErrorRef, consecutiveFailsRef, sustainedPlayRef, bgLastProgressRef,
+    mediaInterrupted, loadingAudio, playing, vol, quality,
+    setTime, setDur, setTrack, setLoadingAudio, setPlaying,
+    getMachine, dispatchAudio, applySessionResume, restoreInterruptPosition,
+    fadeInAudio, setMediaSessionState,
+    onTrackEnded: onEnded,
+  });
+
+  // Manejo resiliente de errores de reproducción (ladder de 6 reintentos con
+  // firma fresca + anti-cascada): extraído a useAudioErrorRecovery.
+  const { handleAudioError } = useAudioErrorRecovery({
+    audioRef, effectCtxRef, selfPauseRef, playingRef, trackRef,
+    playErrorRef, consecutiveFailsRef,
+    track, queue, quality,
+    getMachine, dispatchAudio, setTrack, setLoadingAudio, setPlaying,
+    showToast, next,
+  });
+
   // ── Acciones de biblioteca (fav, playlist, albums, mixes): extraídas a useLibraryActions ──
   const {
     toggleFav, createPlaylist, addToPlaylist, removeFromPlaylist, deletePlaylist,
-    isAlbumSaved, saveAlbum, unsaveAlbum,
-    isPlaylistSaved, savePlaylist, unsavePlaylist,
+    saveAlbum, unsaveAlbum,
+    savePlaylist, unsavePlaylist,
   } = useLibraryActions({ authed, email, showToast });
 
   // Búsquedas recientes (UI local, no libraryStore)
   const addSearch = (term) => setRecentSearches(s => [term, ...s.filter(x => x.toLowerCase() !== term.toLowerCase())].slice(0, 8));
   const removeSearch = (term) => setRecentSearches(s => s.filter(x => x !== term));
 
-  // ── Navegación a artista / álbum (metadatos reales del backend) ──
-  const goMix = (mix) => {
-    if (!mix || !mix.tracks) return;
-    mix.tracks.forEach(cacheTrack);
-    setExpanded(false);
-    setView({ type:'mix', label: mix.label, tracks: mix.tracks });
-  };
-  const goWrapped = () => { setExpanded(false); setOpenPlaylist(null); setView({ type:'wrapped' }); };
-  const startAiDj = async () => {
-    showToast('AI DJ preparando tu estacion...');
-    const score = {};
-    recent.forEach((id, i) => { score[id] = (score[id] || 0) + Math.max(1, 12 - i * 0.4); });
-    favs.forEach(id => { score[id] = (score[id] || 0) + 6; });
-    [...downloaded].forEach(id => { score[id] = (score[id] || 0) + 4; });
-    const ranked = Object.keys(score).map(trackById).filter(Boolean).sort((a, b) => score[b.id] - score[a.id]);
-    const top = ranked.slice(0, 3);
-    let pool = [];
-    try {
-      if (top.length) { const rels = await Promise.all(top.map(s => api.radio(s.id).catch(() => []))); pool = capPerArtist(dedupeByTitle([...top, ...rels.flat().map(normalizeTrack)]), 2).filter(t => t.id); }
-      else { const raw = await api.search('top hits 2024'); pool = dedupeByTitle(raw.map(normalizeTrack)).filter(t => t.id); }
-    } catch {}
-    for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
-    if (!pool.length) { showToast('No se pudo iniciar el AI DJ'); return; }
-    pool.forEach(cacheTrack);
-    play(pool[0], pool.map(t => t.id), { radio: true });
-    showToast('AI DJ sonando tu estacion personalizada');
-  };
-  // Recupera del backend los metadatos de pistas que no estén en caché local.
-  const hydrateTracks = async (ids) => {
-    const missing = (ids || []).filter(id => id && !trackById(id));
-    if (!missing.length) return;
-    try {
-      for (let i = 0; i < missing.length; i += 300) {
-        const metas = await api.getTracks(missing.slice(i, i + 300));
-        metas.forEach(normalizeTrack);
-      }
-      saveMeta(); setCatVer(v => v + 1);
-    } catch {}
-  };
-  const goArtist = (artistId, name) => {
-    setExpanded(false); setView({ type:'artist', artistId, name });
-    setDetailData(null); setDetailLoading(true);
-    // Fallback de búsqueda: solo pistas cuyo artista coincida (evita basura genérica).
-    const filterArtistTracks = (raw, artistName) => {
-      const key = String(artistName || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-      const tracks = dedupeByTitle(raw.map(normalizeTrack));
-      if (!key) return tracks;
-      const own = tracks.filter((t) => {
-        const a = String(t.artist || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-        return a === key || a.startsWith(key + ' ') || a.includes(key) || key.includes(a);
-      });
-      return own.length ? own : tracks.slice(0, 8);
-    };
-    const fallback = () => api.search(name)
-      .then((raw) => setDetailData({ type:'artist', name, topSongs: filterArtistTracks(raw, name), albums: [] }))
-      .catch(() => { setDetailData({ type:'artist', name, topSongs: [], albums: [], error: true }); });
-    if (!artistId) { fallback().finally(() => setDetailLoading(false)); return; }
-    api.artist(artistId)
-      .then((d) => {
-        const artistName = d.name || name;
-        // Cinturón y tirantes: filtrar en cliente por si el backend devuelve algo ajeno.
-        const songs = dedupeByTitle((d.topSongs || []).map(normalizeTrack)).filter((t) => {
-          if (!artistName) return true;
-          const key = String(artistName).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-          const a = String(t.artist || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-          return !a || a === key || a.startsWith(key + ' ') || a.includes(key) || key.includes(a);
-        });
-        setDetailData({ type:'artist', name: artistName, thumbnail: d.thumbnail, topSongs: songs, albums: d.albums || [] });
-      })
-      .catch(fallback)
-      .finally(() => setDetailLoading(false));
-  };
-  // Navegar al origen de la pista que se está reproduciendo. Soporta cualquier
-  // tipo de origen (playlist, mix, álbum, artista). Al navegar, OCULTA el
-  // reproductor expandido para que el usuario llegue limpio a la lista.
-  const goToPlayingPlaylist = () => {
-    if (!playingFrom) return;
-    setExpanded(false); // ocultar reproductor expandido
-    switch (playingFrom.kind) {
-      case 'liked':
-        setTab('library'); setView(null); setOpenPlaylist('liked');
-        return;
-      case 'user-playlist': {
-        const exists = playlists.some(p => p.id === playingFrom.id);
-        if (!exists) return;
-        setTab('library'); setView(null); setOpenPlaylist(playingFrom.id);
-        return;
-      }
-      case 'saved-playlist': {
-        const exists = savedPlaylists?.some(p => p.playlistId === playingFrom.id);
-        if (!exists) return;
-        setTab('library'); setView(null); setOpenPlaylist('saved:' + playingFrom.id);
-        return;
-      }
-      case 'mix':
-        // Re-abrir el mix con los tracks que ya tenemos en playingFrom
-        setTab('home'); setView({ type:'mix', label: playingFrom.label, tracks: playingFrom.tracks });
-        return;
-      case 'album':
-        setView({ type:'album', albumId: playingFrom.albumId, name: playingFrom.name, artist: playingFrom.artist, cover: playingFrom.cover });
-        return;
-      case 'artist':
-        setView({ type:'artist', artistId: playingFrom.artistId, name: playingFrom.name });
-        // Trigger fetch de datos del artista
-        goArtist(playingFrom.artistId, playingFrom.name);
-        return;
-    }
-  };
-  const goAlbum = (albumId, name, artist, songTitle, cover) => {
-    setExpanded(false); setView({ type:'album', albumId, name, artist, cover });
-    setDetailData(null); setDetailLoading(true);
-
-    const applyTracks = (meta, tracks, { offline: isOff = false } = {}) => {
-      const albumCover = meta.cover || cover || tracks.find((t) => t.cover)?.cover || '';
-      const list = (tracks || []).map((t) => {
-        // En vista de álbum: forzar SIEMPRE la portada del álbum, ignorando
-        // artworkUrl propio del track (que YTM a veces es thumbnail de video).
-        const n = normalizeTrack({ ...t, artworkUrl: albumCover, cover: albumCover });
-        cacheTrack(n);
-        return n;
-      });
-      if (!list.length) return false;
-      setDetailData({
-        type: 'album',
-        albumId: meta.albumId || albumId,
-        name: meta.name || name,
-        artist: meta.artist || artist,
-        artistId: meta.artistId,
-        cover: albumCover,
-        year: meta.year,
-        tracks: list,
-        offline: isOff || undefined,
-      });
-      return true;
-    };
-
-    const offlineFallback = async (aid, aName, aArtist, aCover) => {
-      try {
-        const metas = await offline.listMetas();
-        const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-        const tracks = metas
-          .filter((m) => m && (
-            (aid && m.albumId === aid)
-            || (aName && norm(m.album) === norm(aName))
-          ))
-          .map(normalizeTrack);
-        if (!tracks.length) return false;
-        return applyTracks({ name: aName, artist: aArtist, cover: aCover, albumId: aid }, tracks, { offline: true });
-      } catch { return false; }
-    };
-
-    // Canciones ya en catálogo local (guardadas al ver el álbum antes).
-    const catalogFallback = (aid, aName) => {
-      const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-      const all = allCached();
-      const tracks = all.filter((t) => (
-        (aid && t.albumId === aid)
-        || (aName && norm(t.album) === norm(aName) && (!artist || norm(t.artist).includes(norm(artist))))
-      ));
-      if (tracks.length < 2) return false;
-      return applyTracks({ albumId: aid, name: aName, artist, cover }, tracks);
-    };
-
-    const searchFallback = async (aName, aArtist) => {
-      const q = `${aName || ''} ${aArtist || ''}`.trim();
-      if (!q) return false;
-      const r = await api.searchAll(q).catch(() => null);
-      let songs = (r?.songs || []).map(normalizeTrack);
-      if (!songs.length) {
-        const raw = await api.search(q).catch(() => []);
-        songs = raw.map(normalizeTrack);
-      }
-      const norm = (s) => (s || '').toLowerCase();
-      // Preferir pistas del mismo álbum/artista
-      let tracks = songs.filter((t) => (
-        (aName && norm(t.album) === norm(aName))
-        || (aArtist && norm(t.artist).includes(norm(aArtist)) && aName && norm(t.title + t.album).includes(norm(aName).slice(0, 12)))
-      ));
-      if (tracks.length < 3) tracks = songs.filter((t) => aArtist && norm(t.artist).includes(norm(aArtist)));
-      if (tracks.length < 2) tracks = songs.slice(0, 20);
-      if (!tracks.length) return false;
-      const albId = tracks.find((t) => t.albumId)?.albumId || albumId;
-      return applyTracks({
-        albumId: albId,
-        name: aName,
-        artist: aArtist,
-        cover: cover || tracks[0]?.cover,
-      }, tracks);
-    };
-
-    const loadAlbumApi = async (aid) => {
-      const d = await api.album(aid);
-      const albumCover = d.cover || cover || '';
-      const tracks = (d.tracks || []).map((t) => normalizeTrack({
-        ...t,
-        // En vista álbum: forzar portada del álbum, no thumbnail de video
-        artworkUrl: albumCover,
-        cover: albumCover,
-      }));
-      if (!tracks.length) return false;
-      return applyTracks({
-        albumId: aid,
-        name: d.name || name,
-        artist: d.artist || artist,
-        artistId: d.artistId,
-        cover: albumCover,
-        year: d.year,
-      }, tracks);
-    };
-
-    (async () => {
-      try {
-        let aid = albumId;
-        if (!aid) {
-          const r = await api.searchAll(`${name} ${artist || ''}`.trim()).catch(() => null);
-          aid = r?.albums?.[0]?.albumId
-            || (r?.songs || []).map(normalizeTrack).find((t) => t.albumId)?.albumId
-            || null;
-          if (!aid) {
-            const raw = await api.search(`${songTitle || name} ${artist || ''}`.trim()).catch(() => []);
-            aid = raw.map(normalizeTrack).find((t) => t.albumId)?.albumId || null;
-          }
-        }
-        let ok = false;
-        if (aid) {
-          try { ok = await loadAlbumApi(aid); } catch { ok = false; }
-        }
-        // API vacía/502 → catálogo → búsqueda → offline (antes: 0 canciones)
-        if (!ok) ok = catalogFallback(aid || albumId, name);
-        if (!ok) ok = await searchFallback(name, artist);
-        if (!ok) ok = await offlineFallback(aid || albumId, name, artist, cover);
-        if (!ok) setDetailData({ type: 'album', name, artist, cover, tracks: [], none: true });
-      } catch {
-        let ok = catalogFallback(albumId, name);
-        if (!ok) ok = await searchFallback(name, artist);
-        if (!ok) ok = await offlineFallback(albumId, name, artist, cover);
-        if (!ok) setDetailData({ type: 'album', name, artist, cover, tracks: [], none: true });
-      } finally {
-        setDetailLoading(false);
-      }
-    })();
-  };
-  const shareTrack = (t) => {
-    const url = `https://velocity.music/track/${t.id}`;
-    if (navigator.share) navigator.share({ title:t.title, text:`${t.title} — ${t.artist}`, url }).catch(()=>{});
-    else if (navigator.clipboard) navigator.clipboard.writeText(url).then(() => showToast('Enlace copiado')).catch(() => showToast('No se pudo copiar'));
-    else showToast(url);
-  };
+  // ── Navegación del catálogo (artista/álbum/mezcla), AI DJ, compartir ──
+  // Extraído a useCatalogNavigation (mismas firmas y cadenas de fallback).
+  const {
+    goMix, goWrapped, startAiDj, hydrateTracks,
+    goArtist, goToPlayingPlaylist, goAlbum, shareTrack,
+  } = useCatalogNavigation({
+    setExpanded, setView, setOpenPlaylist, setTab,
+    setDetailData, setDetailLoading, setCatVer,
+    showToast, play,
+    recent, favs, downloaded,
+    playingFrom, playlists, savedPlaylists,
+  });
 
   const onLogout = () => {
     api.sessionEnd(); // fire-and-forget: cerrar sesión en PG antes de limpiar token
@@ -1418,115 +766,6 @@ export default function App() {
     return () => window.removeEventListener('popstate', onPop);
   }, []);
 
-  // ── Media Session API: controles de pantalla de bloqueo y notificación del OS ──
-  // (Debe declararse ANTES de cualquier return condicional para no romper el
-  //  orden de los hooks de React.)
-  const mediaArtBlobRef = useRef(null);
-  useEffect(() => {
-    if (!('mediaSession' in navigator)) return;
-    let cancelled = false;
-    const appArt = [
-      { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },
-      { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
-    ];
-    const applyMeta = (artwork) => {
-      if (cancelled || !track) return;
-      try {
-        navigator.mediaSession.metadata = new MediaMetadata({
-          title: track.title || '',
-          artist: track.artist || '',
-          album: track.album || '',
-          artwork: artwork && artwork.length ? artwork : appArt,
-        });
-      } catch {}
-    };
-    (async () => {
-      if (!track) return;
-      const cover = track.cover || (trackById(track.id) || {}).cover || '';
-      // HTTPS: ok en la mayoría de SO. data:/blob: → blob same-origin (mejor que data: crudo).
-      if (cover && /^https?:/i.test(cover)) {
-        applyMeta([{
-          src: cover.replace(/=w\d+-h\d+/, '=w512-h512').replace(/=s\d+/, '=s512'),
-          sizes: '512x512', type: 'image/jpeg',
-        }]);
-        return;
-      }
-      if (cover && (cover.startsWith('data:') || cover.startsWith('blob:'))) {
-        try {
-          const res = await fetch(cover);
-          const blob = await res.blob();
-          if (cancelled) return;
-          if (mediaArtBlobRef.current) {
-            try { URL.revokeObjectURL(mediaArtBlobRef.current); } catch {}
-          }
-          const u = URL.createObjectURL(blob);
-          mediaArtBlobRef.current = u;
-          applyMeta([{ src: u, sizes: '512x512', type: blob.type || 'image/jpeg' }]);
-          return;
-        } catch { /* fall through to app icon */ }
-      }
-      applyMeta(appArt);
-    })();
-    const a = () => audioRef.current;
-    const doPlay = () => {
-      const el = a();
-      if (!el) return;
-      if (el.volume < vol * 0.5) el.volume = vol;
-      if (getMachine().trackId) {
-        dispatchAudio({ type: 'USER_PLAY' });
-      } else if (track?.id) {
-        dispatchAudio({ type: 'TRACK_SET', trackId: track.id, intent: 'play' });
-      }
-    };
-    const doPause = () => {
-      dispatchAudio({ type: 'USER_PAUSE' });
-    };
-    navigator.mediaSession.setActionHandler('play', doPlay);
-    navigator.mediaSession.setActionHandler('pause', doPause);
-    // Refs estables: next/prev siempre al día aunque el efecto no se re-bindee.
-    navigator.mediaSession.setActionHandler('previoustrack', () => { try { prevTrackActionRef.current(); } catch {} });
-    navigator.mediaSession.setActionHandler('nexttrack', () => { try { nextTrackActionRef.current(); } catch {} });
-    try { navigator.mediaSession.setActionHandler('seekto', (e) => { if (e.seekTime != null) seek(e.seekTime); }); } catch {}
-    try { navigator.mediaSession.setActionHandler('seekforward', () => { try { nextTrackActionRef.current(); } catch {} }); } catch {}
-    try { navigator.mediaSession.setActionHandler('seekbackward', () => { try { prevTrackActionRef.current(); } catch {} }); } catch {}
-    try { navigator.mediaSession.setActionHandler('stop', () => doPause()); } catch {}
-    return () => {
-      cancelled = true;
-      ['play','pause','previoustrack','nexttrack','seekto','seekforward','seekbackward','stop'].forEach(act => {
-        try { navigator.mediaSession.setActionHandler(act, null); } catch {}
-      });
-    };
-  }, [track, playing]);
-
-  // Media Session: en interrupción por vídeo = paused (aunque la intención sea play).
-  useEffect(() => {
-    if (!('mediaSession' in navigator)) return;
-    try {
-      navigator.mediaSession.playbackState = mediaSessionPlaybackState({
-        userWantsPlay: playing,
-        yieldedFocus: mediaInterrupted,
-      });
-    } catch {}
-  }, [playing, mediaInterrupted]);
-
-  // ── Instalación de la PWA (pantalla de inicio) ──
-  const [installEvt, setInstallEvt] = useState(null);
-  useEffect(() => {
-    const onBIP = (e) => { e.preventDefault(); setInstallEvt(e); };
-    const onInstalled = () => setInstallEvt(null);
-    window.addEventListener('beforeinstallprompt', onBIP);
-    window.addEventListener('appinstalled', onInstalled);
-    return () => { window.removeEventListener('beforeinstallprompt', onBIP); window.removeEventListener('appinstalled', onInstalled); };
-  }, []);
-  const isIOS = typeof navigator !== 'undefined' && /iphone|ipad|ipod/i.test(navigator.userAgent) && !/crios|fxios/i.test(navigator.userAgent);
-  const isStandalone = typeof window !== 'undefined' && ((window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone === true);
-  const installApp = async () => {
-    if (!installEvt) return;
-    installEvt.prompt();
-    try { await installEvt.userChoice; } catch {}
-    setInstallEvt(null);
-  };
-
   // Letra: se MUESTRA en cualquier pista (ExpandedPlayer online).
   // Offline (IDB) solo biblioteca — backfill al reproducir si ya está en Me gusta /
   // playlist / mezcla. El pack principal se dispara al AÑADIR (useLibraryActions).
@@ -1564,250 +803,19 @@ export default function App() {
   );
   const Content = view ? (view.type === 'wrapped' ? <WrappedView T={T} setView={setView} play={play} playStats={playStatsRef.current} /> : <DetailView view={view} T={T} play={play} addToTarget={setAddTarget} onMenu={setMenuTarget} onToggleFav={toggleFav} goArtist={goArtist} goAlbum={goAlbum} setView={setView} detailLoading={detailLoading} detailData={detailData} downloadMany={downloadMany} saveAlbum={saveAlbum} unsaveAlbum={unsaveAlbum} savePlaylist={savePlaylist} unsavePlaylist={unsavePlaylist} selecting={selecting} selection={selection} toggleSelect={toggleSelect} startSelection={startSelection} addToQueue={addToQueue} removeFromQueue={removeFromQueueToast} />) : TabContent;
 
-  // Manejo resiliente de errores de reproducción: reintenta una vez con URL
-  // fresca (evade caché de borde) y, si vuelve a fallar, salta a la siguiente
-  // pista de la cola en lugar de detener todo. Reduce al máximo los cortes.
-  const MAX_PLAY_RETRIES = 6;
-  const handleAudioError = () => {
-    // Ignorar errores al vaciar src o sin URL real (cambio de pista).
-    if (effectCtxRef.current?._suppressAudioError) return;
-    const a = audioRef.current;
-    const rawSrc = (a?.currentSrc || a?.getAttribute?.('src') || a?.src || '').trim();
-    if (!a || !rawSrc || rawSrc === (typeof location !== 'undefined' ? location.href : '')) return;
-    // 401 del proxy llega como error de media; reintentar con firma fresca (abajo).
-
-    selfPauseRef.current = false;
-    const cur = track?.id;
-    if (!cur) {
-      dispatchAudio({ type: 'PLAY_FAILED', reason: 'no-el' });
-      return;
-    }
-    // A13: sin intención de play → machine limpia, no auto-play.
-    if (getMachine().intent !== 'play') {
-      dispatchAudio({ type: 'PLAY_FAILED', reason: 'stale' });
-      playErrorRef.current = { id: null, n: 0 };
-      return;
-    }
-    const st = playErrorRef.current;
-    const n = (st.id === cur) ? st.n : 0;
-    const isBlob = typeof a.currentSrc === 'string' && a.currentSrc.startsWith('blob:');
-    // Reintentos solo con intención de play. 6 intentos con espera creciente.
-    if (n < MAX_PLAY_RETRIES && !isBlob) {
-      const attempt = n + 1;
-      playErrorRef.current = { id: cur, n: attempt };
-      setLoadingAudio(true);
-      // Primeros reintentos rápidos (resolve yt-dlp a veces falla a la 1ª).
-      const delays = [400, 900, 1800, 3500, 7000, 12000];
-      const delay = delays[Math.min(attempt - 1, delays.length - 1)];
-      setTimeout(async () => {
-        if (!audioRef.current || trackRef.current?.id !== cur) return;
-        if (!playingRef.current) { setLoadingAudio(false); return; }
-        try {
-          const q = ({ high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' }[quality] || 'high');
-          const tk = trackRef.current || track;
-          if (attempt >= 1) api._streamSignCache?.clear?.();
-          const sp = {
-            artist: tk.artist, title: tk.title, id: tk.id, quality: q,
-            stream: (tk.source === 'soundcloud' && tk.stream) ? tk.stream : undefined,
-          };
-          // forceRefresh vía resolve al 2º+ intento (prefetch limpia caché mala).
-          if (attempt >= 2) await api.prefetchStream(sp);
-          const base = await api.ensureStreamUrl(sp);
-          if (!playingRef.current || trackRef.current?.id !== cur) { setLoadingAudio(false); return; }
-          const url = attempt >= 2 ? (base + (base.includes('?') ? '&' : '?') + '_r=' + Date.now()) : base;
-          setTrack((prev) => (prev && prev.id === cur ? { ...prev, url } : prev));
-          // STREAM_READY delega setSrc/load/play al pipeline unificado y
-          // conserva el gate de playingRef para A13.
-          dispatchAudio({ type: 'STREAM_READY', trackId: cur, url });
-        } catch {
-          if (!playingRef.current) setLoadingAudio(false);
-        }
-      }, delay);
-      return;
-    }
-    // Agotados 6 reintentos (~45s de intentos): saltar con protección anti-cascada.
-    playErrorRef.current = { id: cur, n: 0 };
-    consecutiveFailsRef.current += 1;
-    if (consecutiveFailsRef.current > 2) {
-      consecutiveFailsRef.current = 0;
-      setLoadingAudio(false); setPlaying(false);
-      showToast('Varias pistas no disponibles. Verifica tu conexión.');
-      return;
-    }
-    setLoadingAudio(false);
-    const ids = queue && queue.length ? queue : [];
-    const i = ids.indexOf(cur);
-    if (ids.length > 1 && i !== -1) {
-      showToast('Pista no disponible · siguiente…');
-      setTimeout(() => next(), 1000);
-    } else { setPlaying(false); showToast('No se pudo reproducir esta pista'); api.reportPlaybackError({ trackId: cur, errorCode: 'max_retries', errorMessage: 'Agotados 6 reintentos de reproducción' }); }
-  };
-
   const audioEl = (
     <>
     <audio ref={audioRef} src={playSrc || undefined} preload="none"
-      onTimeUpdate={() => {
-        const a = audioRef.current; if (!a) return;
-        // Solo congelar reloj si la interrupción por vídeo está CONFIRMADA y sigue pausado.
-        if ((systemPausedRef.current || mediaInterrupted) && a.paused) return;
-        const ct = a.currentTime || 0; setTime(ct);
-        if (ct > 0 && loadingAudio) setLoadingAudio(false);
-
-        // ── RE-FIRMA PROACTIVA: si la URL firmada expira en < 3 min, obtener
-        // una URL fresca y asignarla sin interrumpir la reproducción. ──
-        // Solo actuar si la pista está sonando y hay más de 30s reproducidos
-        // (evitar race con el arranque inicial).
-        const currentSrc = a.currentSrc || a.getAttribute('src') || '';
-        if (currentSrc && currentSrc.includes('exp=') && a.currentTime > 30 && playingRef.current) {
-          try {
-            const urlObj = new URL(currentSrc, location.href);
-            const expSec = Number(urlObj.searchParams.get('exp'));
-            const nowSec = Math.floor(Date.now() / 1000);
-            // Si quedan menos de 3 minutos (180s), re-firmar en background.
-            if (Number.isFinite(expSec) && expSec - nowSec < 180 && expSec > nowSec) {
-              if (!a._resignInFlight) {
-                a._resignInFlight = true;
-                const tk = trackRef.current;
-                const q = ({ high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' }[quality] || 'high');
-                api.ensureStreamUrl({
-                  artist: tk?.artist, title: tk?.title, id: tk?.id, quality: q,
-                  stream: (tk?.source === 'soundcloud' && tk?.stream) ? tk.stream : undefined,
-                }).then(freshUrl => {
-                  // Solo actualizar si la pista no cambió durante la re-firma.
-                  if (!a || trackRef.current?.id !== tk?.id || !playingRef.current) return;
-                  if (freshUrl && freshUrl !== currentSrc) {
-                    setTrack((prev) => (prev && prev.id === tk?.id ? { ...prev, url: freshUrl } : prev));
-                    dispatchAudio({ type: 'STREAM_READY', trackId: tk?.id, url: freshUrl });
-                  }
-                }).catch(() => {}).finally(() => { if (a) a._resignInFlight = false; });
-              }
-            }
-          } catch { /* ignorar — no interrumpir reproducción por error de parsing */ }
-        }
-      }}
-      onLoadedMetadata={() => {
-        setDur(audioRef.current?.duration || 0);
-        flushPendingSeek(effectCtxRef.current);
-        applySessionResume(audioRef.current);
-      }}
-      onCanPlay={() => {
-        // canplay solo indica que hay datos suficientes; play() todavía puede
-        // estar pendiente o ser rechazado. El spinner se apaga en onPlay/
-        // onPlaying o cuando el reloj empieza a avanzar.
-        flushPendingSeek(effectCtxRef.current);
-        applySessionResume(audioRef.current);
-      }}
-      onPlay={() => {
-        selfPauseRef.current = false;
-        const el = audioRef.current;
-        if (getMachine().intent !== 'play') {
-          selfPauseRef.current = true;
-          try { el?.pause(); } catch {}
-          selfPauseRef.current = false;
-          setLoadingAudio(false);
-          return;
-        }
-        flushPendingSeek(effectCtxRef.current);
-        applySessionResume(el);
-        restoreInterruptPosition(el);
-        if (el && el.volume < vol * 0.5) el.volume = vol;
-        setMediaSessionState('playing', el?.currentTime);
-        setLoadingAudio(false);
-        if (!playing) setPlaying(true);
-      }}
-      onPlaying={() => {
-        selfPauseRef.current = false;
-        bgLastProgressRef.current = Date.now();
-        const el = audioRef.current;
-        if (getMachine().intent !== 'play') {
-          selfPauseRef.current = true;
-          try { el?.pause(); } catch {}
-          selfPauseRef.current = false;
-          setLoadingAudio(false);
-          return;
-        }
-        flushPendingSeek(effectCtxRef.current);
-        applySessionResume(el);
-        if (el && el.volume < vol * 0.5) el.volume = vol;
-        dispatchAudio({
-          type: 'PLAYING',
-          position: el?.currentTime || 0,
-          trackId: getMachine().trackId || trackRef.current?.id || undefined,
-        });
-        playErrorRef.current = { id: null, n: 0 };
-        sustainedPlayRef.current = false;
-        setTimeout(() => {
-          if (audioRef.current && !audioRef.current.paused && audioRef.current.currentTime > 3) {
-            consecutiveFailsRef.current = 0;
-            sustainedPlayRef.current = true;
-          }
-        }, 5000);
-        if (pendingFadeRef.current) {
-          pendingFadeRef.current = false;
-          if (isDocumentVisible()) fadeInAudio();
-          else if (audioRef.current) audioRef.current.volume = vol;
-        }
-      }}
-      onStalled={() => { if (playingRef.current) setLoadingAudio(true); }}
-      onWaiting={() => { if (playingRef.current) setLoadingAudio(true); }}
-      onPause={() => {
-        const a = audioRef.current;
-        if (!a) return;
-        if (getMachine().intent !== 'play') {
-          setLoadingAudio(false);
-          return;
-        }
-        if (!isExternalPause({
-          selfPause: selfPauseRef.current,
-          pendingFade: pendingFadeRef.current,
-          userWantsPlay: getMachine().intent === 'play',
-          audioEnded: a.ended,
-        })) return;
-
-        // Pause externo: la machine decide (yield honesto en background,
-        // soft-kick en foreground). Nada de re-play oculto aquí (A7/A14).
-        //
-        // Race condition iOS/Android: en algunos dispositivos el evento 'pause'
-        // del <audio> llega ANTES de que visibilitychange ponga hidden=true
-        // (ventana de hasta ~300ms). Si despachamos EXTERNAL_PAUSE con hidden=false,
-        // shouldYieldOnExternalPause devuelve false y no se ancla → al volver
-        // visible tryResume dispara DOC_VISIBLE sin yield → play() falla en iOS
-        // (NotAllowedError background). Fix: si el doc aún es visible, diferir
-        // 300ms para que visibilitychange llegue y re-evaluar hidden.
-        const dispatchExternalPause = (hidden) => {
-          // Re-verificar que el pause sigue siendo externo y el intent sigue activo.
-          if (getMachine().intent !== 'play') return;
-          if (!isExternalPause({
-            selfPause: selfPauseRef.current,
-            pendingFade: pendingFadeRef.current,
-            userWantsPlay: true,
-            audioEnded: audioRef.current?.ended ?? false,
-          })) return;
-          dispatchAudio({
-            type: 'EXTERNAL_PAUSE',
-            hidden,
-            selfPause: selfPauseRef.current,
-            position: audioRef.current?.currentTime || 0,
-          });
-        };
-
-        if (!isDocumentVisible()) {
-          // Doc ya oculto: path normal, yield inmediato.
-          dispatchExternalPause(true);
-        } else {
-          // Doc aún visible: posible race condition iOS. Diferir 300ms y
-          // re-evaluar hidden. Si para entonces el audio reanudó (ej. ducking
-          // resuelto), el chequeo isExternalPause lo descarta automáticamente.
-          setTimeout(() => {
-            dispatchExternalPause(!isDocumentVisible());
-          }, 300);
-        }
-      }}
+      onTimeUpdate={audioHandlers.onTimeUpdate}
+      onLoadedMetadata={audioHandlers.onLoadedMetadata}
+      onCanPlay={audioHandlers.onCanPlay}
+      onPlay={audioHandlers.onPlay}
+      onPlaying={audioHandlers.onPlaying}
+      onStalled={audioHandlers.onStalled}
+      onWaiting={audioHandlers.onWaiting}
+      onPause={audioHandlers.onPause}
       onError={handleAudioError}
-      onEnded={() => {
-        dispatchAudio({ type: 'ENDED' });
-        onEnded();
-      }}
+      onEnded={audioHandlers.onEnded}
     />
       {/* Pre-buffer oculto de las siguientes 2 pistas (volume=0, nunca reproducen). */}
       {/* muted=true causa throttle agresivo en mobile; volume=0 es respetado sin throttling. */}

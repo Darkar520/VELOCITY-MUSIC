@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { hex2rgba, grad, hiResCover, dedupeByTitle } from '../helpers.js';
+import { hex2rgba, grad } from '../helpers.js';
 import { trackById } from '../catalog.js';
 import { Icon } from '../Icons.jsx';
-import { Spinner, DownloadAllButton, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard } from '../components.jsx';
+import { DownloadAllButton, SectionHeader, TrackRow, MediaCard } from '../components.jsx';
 import { SearchBar } from './SearchBar.jsx';
-import { useListSearch } from './useListSearch.js';
 import { useLibraryStore } from '../store/libraryStore.js';
 import { usePlayerStore } from '../store/playerStore.js';
 
@@ -14,7 +13,6 @@ export function LibraryTab({ T, play, openPlaylist, setOpenPlaylist, addToTarget
   const playlists = useLibraryStore((s) => s.playlists);
   const savedAlbums = useLibraryStore((s) => s.savedAlbums);
   const savedPlaylists = useLibraryStore((s) => s.savedPlaylists);
-  const isPlaylistSaved = useLibraryStore((s) => s.isPlaylistSaved);
   // Player store
   const track = usePlayerStore((s) => s.track);
   const playing = usePlayerStore((s) => s.playing);

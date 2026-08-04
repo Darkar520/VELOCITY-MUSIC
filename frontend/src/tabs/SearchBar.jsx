@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React from 'react';
 import { Icon } from '../Icons.jsx';
 
 export function SearchBar({ value, onChange, placeholder = 'Buscar…', T }) {
