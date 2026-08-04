@@ -165,6 +165,9 @@ export default function App() {
   const pendingRef = useRef(null);
   if (!pendingRef.current) { pendingRef.current = new Set(); try { JSON.parse(localStorage.getItem('velocity.pendingDl') || '[]').forEach(x => pendingRef.current.add(x)); } catch {} }
   const resumedRef = useRef(false);
+  // ¿Ya se leyó IndexedDB para saber qué está descargado? El auto-reanudado de
+  // pendientes no debe correr antes: lo haría con `downloaded` vacío.
+  const downloadsHydratedRef = useRef(false);
   const playStatsRef = useRef(null);
   if (!playStatsRef.current) { try { playStatsRef.current = JSON.parse(localStorage.getItem('velocity.playStats') || '{}') || {}; } catch { playStatsRef.current = {}; } }
   const recordPlayStat = (t) => { if (!t || !t.id) return; try { const s = playStatsRef.current; const e = s[t.id] || {}; s[t.id] = { count: (e.count || 0) + 1, last: Date.now(), title: t.title || e.title || '', artist: t.artist || e.artist || '', cover: t.cover || e.cover || '', durationSeconds: t.durationSeconds || t.duration || e.durationSeconds || 0 }; localStorage.setItem('velocity.playStats', JSON.stringify(s)); } catch {} };
@@ -343,7 +346,19 @@ export default function App() {
     homeRows.forEach(sec => (sec.mixes || []).forEach(m => (m.tracks || []).forEach(cacheTrack))); // hidratar caché del feed guardado
     (async () => {
       try {
-        await offline.pruneInvalid();            // limpiar descargas corruptas/vacías
+        // Almacenamiento persistente ANTES de cualquier lectura: evita que el
+        // navegador desaloje las descargas por presión de disco.
+        offline.ensurePersistentStorage();
+        // ORDEN CRÍTICO: `downloaded` se hidrata PRIMERO con listIds(), que solo
+        // lee claves (getAllKeys) y es instantáneo. Antes se hacía al final,
+        // después de pruneInvalid() + listMetas() — dos lecturas que
+        // deserializan TODOS los blobs (cientos de MB con una biblioteca
+        // grande). Durante esos segundos `downloaded` estaba vacío, así que las
+        // pistas ya descargadas se pintaban como no descargadas y el
+        // auto-reanudado de pendientes las volvía a descargar.
+        const ids = await offline.listIds();
+        setDownloaded(new Set(ids));
+        downloadsHydratedRef.current = true;
         const metas = await offline.listMetas();
         // Primero cachear todas las metas. Luego, para las que tienen data: URL
         // como carátula, forzar una actualización del catálogo: la pista puede
@@ -356,8 +371,6 @@ export default function App() {
             cacheTrack({ ...(inCat || m), ...m, cover: m.cover });
           }
         });
-        const ids = await offline.listIds();
-        setDownloaded(new Set(ids));
         // Refrescar cover del track actual: data: offline gana a HTTPS rota.
         setTrack(prev => {
           if (!prev || !prev.id) return prev;
@@ -377,6 +390,15 @@ export default function App() {
             if (b) { const u = URL.createObjectURL(b); objUrlRef.current = u; setPlaySrc(u); }
           }
         } catch {}
+        // Limpieza de registros corruptos (sin blob o de tamaño 0). Va al FINAL
+        // y no bloquea nada: es mantenimiento, no un requisito para pintar la
+        // biblioteca. Si borra algo, se refleja en `downloaded`.
+        try {
+          const bad = await offline.pruneInvalid();
+          if (bad && bad.length) {
+            setDownloaded(prev => { const n = new Set(prev); bad.forEach(id => n.delete(id)); return n; });
+          }
+        } catch {}
         // Rellenar covers de descargas antiguas (solo con red).
         try {
           if (navigator.onLine !== false) {
@@ -393,6 +415,7 @@ export default function App() {
           }
         } catch {}
       } catch {}
+      finally { downloadsHydratedRef.current = true; }
     })();
     // Guardado del estado del reproductor (posición incluida).
     const save = () => { try { if (persistRef.current.track) localStorage.setItem('velocity.player', JSON.stringify(persistRef.current)); } catch {} };
@@ -436,11 +459,38 @@ export default function App() {
   useHomeFeed({ authed, libReady: libReadyRef.current, downloaded, recentSearches, onboardPrefs });
 
   // ── Reanudar descargas pendientes al volver a la app ──
+  // Antes esto disparaba downloadMany(pendientes) a los 1200 ms de autenticar,
+  // sin esperar a que IndexedDB dijera qué había ya descargado. Con una
+  // biblioteca grande la hidratación tarda más que ese timeout, así que
+  // `downloaded` estaba vacío: las pistas YA descargadas se re-descargaban y se
+  // pintaban como "descargando". Ahora se espera la hidratación y, además, se
+  // confirma contra IndexedDB (fuente de verdad) justo antes de reanudar.
   useEffect(() => {
     if (!authed || resumedRef.current) return;
-    const pend = [...pendingRef.current];
-    if (pend.length) { resumedRef.current = true; setTimeout(() => downloadMany(pend), 1200); }
-  }, [authed]);
+    if (!pendingRef.current.size) return;
+    let cancelled = false;
+    resumedRef.current = true;
+    (async () => {
+      // Esperar la hidratación de descargas (máx ~15 s por si IndexedDB falla).
+      for (let i = 0; i < 150 && !downloadsHydratedRef.current && !cancelled; i++) {
+        await new Promise(r => setTimeout(r, 100));
+      }
+      if (cancelled) return;
+      let already = new Set();
+      try { already = new Set(await offline.listIds()); } catch { /* sin IDB: no reanudar a ciegas */ return; }
+      // Purgar de la cola lo que ya está en disco (quedó ahí por un cierre a
+      // medias) y quedarse solo con lo que de verdad falta.
+      let changed = false;
+      for (const id of [...pendingRef.current]) {
+        if (already.has(id)) { pendingRef.current.delete(id); changed = true; }
+      }
+      if (changed) savePending();
+      const pend = [...pendingRef.current];
+      if (!pend.length || cancelled) return;
+      downloadMany(pend);
+    })();
+    return () => { cancelled = true; };
+  }, [authed]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Hydrate machine una vez (A12/A13) — App reabre en pause sin auto-play.
   useEffect(() => {

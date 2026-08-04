@@ -7,6 +7,26 @@ const STORE = 'tracks';
 const LYRICS_STORE = 'lyrics';
 let _db = null;
 
+/**
+ * Marca el almacenamiento como PERSISTENTE.
+ *
+ * Sin esto el origen es "best-effort" y el navegador puede DESALOJAR IndexedDB
+ * entera cuando hay presión de disco (Chrome) o tras unos días sin abrir la app
+ * (Safari/iOS). Con cientos de MB de audio descargado eso significa que las
+ * descargas "desaparecen" solas entre sesiones — el motivo real por el que una
+ * biblioteca ya descargada volvía a aparecer como no descargada.
+ *
+ * Chrome lo concede sin prompt si hay engagement/PWA instalada; si se deniega,
+ * se degrada silenciosamente (no rompe nada, solo sigue siendo desalojable).
+ */
+export async function ensurePersistentStorage() {
+  try {
+    if (typeof navigator === 'undefined' || !navigator.storage?.persist) return false;
+    if (await navigator.storage.persisted()) return true;
+    return await navigator.storage.persist();
+  } catch { return false; }
+}
+
 function openDB() {
   if (_db) return Promise.resolve(_db);
   return new Promise((resolve, reject) => {
@@ -173,29 +193,30 @@ async function coverToDataUrl(coverUrl) {
 // actualizadas para refrescar la interfaz. Secuencial para no saturar la red.
 export async function backfillCovers() {
   const db = await openDB();
-  const records = await new Promise((resolve) => {
-    const tx = db.transaction(STORE, 'readonly');
-    const rq = tx.objectStore(STORE).getAll();
-    rq.onsuccess = () => resolve(rq.result || []);
-    rq.onerror = () => resolve([]);
+  // Primero recolectar SOLO los ids/covers que faltan (cursor: sin cargar los
+  // blobs de toda la biblioteca en memoria). El registro completo se lee
+  // individualmente y solo para los pocos que hay que reescribir.
+  const pend = [];
+  await eachRecord(db, (r) => {
+    const cover = r && r.meta && r.meta.cover;
+    if (r && r.id && typeof cover === 'string' && cover && !cover.startsWith('data:')) {
+      pend.push({ id: r.id, cover });
+    }
   });
   const updated = [];
-  for (const rec of records) {
+  for (const { id, cover } of pend) {
+    const dataUrl = await coverToDataUrl(cover);
+    if (!dataUrl || !dataUrl.startsWith('data:')) continue;
+    const rec = await getRecord(id);
     if (!rec || !rec.meta) continue;
-    const cover = rec.meta.cover;
-    if (cover && typeof cover === 'string' && !cover.startsWith('data:')) {
-      const dataUrl = await coverToDataUrl(cover);
-      if (dataUrl && dataUrl.startsWith('data:')) {
-        rec.meta = { ...rec.meta, cover: dataUrl };
-        await new Promise((resolve) => {
-          const tx = db.transaction(STORE, 'readwrite');
-          tx.objectStore(STORE).put(rec);
-          tx.oncomplete = () => resolve();
-          tx.onerror = () => resolve();
-        });
-        updated.push(rec.meta);
-      }
-    }
+    rec.meta = { ...rec.meta, cover: dataUrl };
+    await new Promise((resolve) => {
+      const tx = db.transaction(STORE, 'readwrite');
+      tx.objectStore(STORE).put(rec);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+    updated.push(rec.meta);
   }
   return updated;
 }
@@ -235,34 +256,56 @@ export async function listIds() {
   });
 }
 
-export async function listMetas() {
-  const db = await openDB();
+/**
+ * Recorre los registros de uno en uno con un cursor.
+ *
+ * IMPORTANTE: no usar getAll() aquí. getAll() materializa TODOS los registros
+ * —blobs de audio incluidos— en memoria a la vez: con una biblioteca de cientos
+ * de canciones son cientos de MB de golpe, lo que congela el arranque y en móvil
+ * puede hacer que el navegador mate la pestaña. Con cursor el pico de memoria es
+ * un solo registro.
+ *
+ * `fn(record)` puede devolver un valor para acumular; devolver `false` corta.
+ */
+function eachRecord(db, fn) {
   return new Promise((resolve) => {
-    const tx = db.transaction(STORE, 'readonly');
-    const rq = tx.objectStore(STORE).getAll();
-    rq.onsuccess = () => resolve((rq.result || []).map((r) => r.meta).filter(Boolean));
-    rq.onerror = () => resolve([]);
+    let tx;
+    try { tx = db.transaction(STORE, 'readonly'); } catch { resolve(); return; }
+    const rq = tx.objectStore(STORE).openCursor();
+    rq.onsuccess = () => {
+      const cur = rq.result;
+      if (!cur) { resolve(); return; }
+      let cont = true;
+      try { cont = fn(cur.value) !== false; } catch { /* ignore */ }
+      if (cont) cur.continue(); else resolve();
+    };
+    rq.onerror = () => resolve();
   });
 }
 
-function getAllRecords(db) {
-  return new Promise((resolve) => {
-    const tx = db.transaction(STORE, 'readonly');
-    const rq = tx.objectStore(STORE).getAll();
-    rq.onsuccess = () => resolve(rq.result || []);
-    rq.onerror = () => resolve([]);
-  });
+export async function listMetas() {
+  try {
+    const db = await openDB();
+    const out = [];
+    await eachRecord(db, (r) => { if (r && r.meta) out.push(r.meta); });
+    return out;
+  } catch { return []; }
 }
 
 // Resumen de descargas: total, bytes ocupados y lista (meta + tamaño), más
 // recientes primero. Para el administrador de almacenamiento.
 export async function downloadsInfo() {
   const db = await openDB();
-  const records = await getAllRecords(db);
   let bytes = 0;
-  const items = records
-    .map((r) => { const size = (r && r.blob && r.blob.size) || 0; bytes += size; return { id: r.id, meta: r.meta || { id: r.id }, size, at: r.at || 0 }; })
-    .sort((a, b) => b.at - a.at);
+  const items = [];
+  // Cursor: solo se retiene el tamaño y la meta, nunca todos los blobs a la vez.
+  await eachRecord(db, (r) => {
+    if (!r) return;
+    const size = (r.blob && r.blob.size) || 0;
+    bytes += size;
+    items.push({ id: r.id, meta: r.meta || { id: r.id }, size, at: r.at || 0 });
+  });
+  items.sort((a, b) => b.at - a.at);
   return { count: items.length, bytes, items };
 }
 
@@ -281,8 +324,10 @@ export async function deleteAll() {
 // descargas "rotas" ni ocupando espacio. Devuelve los ids eliminados.
 export async function pruneInvalid() {
   const db = await openDB();
-  const records = await getAllRecords(db);
-  const bad = records.filter((r) => !r || !r.blob || !r.blob.size).map((r) => r && r.id).filter(Boolean);
+  const bad = [];
+  await eachRecord(db, (r) => {
+    if (r && r.id && (!r.blob || !r.blob.size)) bad.push(r.id);
+  });
   for (const id of bad) await deleteTrack(id);
   return bad;
 }

@@ -71,6 +71,11 @@ export function useDownloads({ quality, showToast, pendingRef, savePending } = {
 
   const download = useCallback(async (tk) => {
     if (!tk || downloaded.has(tk.id) || downloading.has(tk.id)) return;
+    // Reintentar aquí la persistencia: al arrancar el navegador puede denegarla
+    // por falta de engagement, pero tras una acción explícita del usuario
+    // (descargar) suele concederla. Sin persistencia el navegador puede
+    // desalojar IndexedDB y las descargas desaparecen entre sesiones.
+    offline.ensurePersistentStorage();
     addDownloading(tk.id);
     cacheTrack(tk); saveMeta();
     pendingRef?.current?.add(tk.id); savePending?.();
@@ -105,7 +110,22 @@ export function useDownloads({ quality, showToast, pendingRef, savePending } = {
   }, [setDownloaded, showToast]);
 
   const downloadMany = useCallback(async (ids) => {
-    const todo = ids.filter(id => !downloaded.has(id) && !downloading.has(id) && trackById(id));
+    const candidates = ids.filter(id => !downloaded.has(id) && !downloading.has(id) && trackById(id));
+    if (!candidates.length) { showToast?.('Ya está todo descargado'); return; }
+    // IndexedDB es la fuente de verdad: el estado de React puede ir por detrás
+    // (hidratación asíncrona al arrancar). Sin esta comprobación se volvían a
+    // descargar pistas que ya estaban en disco, mostrándolas como "descargando"
+    // y gastando red y batería para nada.
+    let onDisk = new Set();
+    try { onDisk = new Set(await offline.listIds()); } catch { /* sin IDB: seguir con lo que sabemos */ }
+    const already = candidates.filter(id => onDisk.has(id));
+    if (already.length) {
+      // Reconciliar: marcarlas como descargadas y sacarlas de la cola pendiente.
+      already.forEach(id => addDownloaded(id));
+      already.forEach(id => pendingRef?.current?.delete(id));
+      savePending?.();
+    }
+    const todo = candidates.filter(id => !onDisk.has(id));
     if (!todo.length) { showToast?.('Ya está todo descargado'); return; }
     todo.forEach(id => addDownloading(id));
     todo.forEach(id => pendingRef?.current?.add(id)); savePending?.(); saveMeta();
