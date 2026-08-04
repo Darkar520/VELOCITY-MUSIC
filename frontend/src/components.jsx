@@ -71,8 +71,16 @@ export function DownloadAllButton({ ids, downloaded, downloading, onClick, T }) 
   );
 }
 
-// Imagen de carátula robusta: carga diferida, estado de carga y fallback al fallar.
-export function CoverImg({ src, alt = '', radius = 12, className = '', style = {}, size = 512, eager = false }) {
+// Imagen de carátula robusta: carga anticipada (eager) con prioridad baja,
+// estado de carga y fallback al fallar.
+//
+// eager=true por defecto: las carátulas se cargan de inmediato (no al hacer
+// scroll), para que al recorrer listas/feed ya estén presentes en vez de
+// aparecer con retraso. Como el proxy /img viaja por el túnel del backend
+// (mismo canal que el audio), se marca fetchPriority="low": el navegador las
+// descarga sin robar ancho de banda a la resolución/streaming del audio, y el
+// SW/navegador las cachean (immutable) para el resto de la sesión.
+export function CoverImg({ src, alt = '', radius = 12, className = '', style = {}, size = 512, eager = true, priority = 'low' }) {
   const [loaded, setLoaded] = useState(false);
   const [step, setStep] = useState(0); // 0 hiRes · 1 original · 2 fallback
   const imgRef = useRef(null);
@@ -93,7 +101,7 @@ export function CoverImg({ src, alt = '', radius = 12, className = '', style = {
   return (
     <div style={{ position:'relative', overflow:'hidden', borderRadius:radius, background:'var(--surf-2)', flexShrink:0, ...style }}>
       {!loaded && <div style={{ position:'absolute', inset:0, background:'linear-gradient(110deg, var(--surf-1) 30%, var(--surf-2) 50%, var(--surf-1) 70%)' }} />}
-      <img ref={imgRef} src={real} alt={alt} loading={eager ? 'eager' : 'lazy'} decoding="async" className={className}
+      <img ref={imgRef} src={real} alt={alt} loading={eager ? 'eager' : 'lazy'} decoding="async" fetchPriority={priority} className={className}
         onLoad={() => setLoaded(true)}
         onError={() => {
           if (step === 0 && src && hiResCover(src, size) !== src) {

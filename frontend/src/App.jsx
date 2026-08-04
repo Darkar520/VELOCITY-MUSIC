@@ -819,8 +819,14 @@ export default function App() {
     />
       {/* Pre-buffer oculto de las siguientes 2 pistas (volume=0, nunca reproducen). */}
       {/* muted=true causa throttle agresivo en mobile; volume=0 es respetado sin throttling. */}
-      <audio ref={preloadAudioRef} preload="auto" style={{ position:'absolute', width:1, height:1, opacity:0, pointerEvents:'none' }} aria-hidden="true" tabIndex={-1} />
-      <audio ref={preloadAudio2Ref} preload="auto" style={{ position:'absolute', width:1, height:1, opacity:0, pointerEvents:'none' }} aria-hidden="true" tabIndex={-1} />
+      {/* preload="metadata" (NO "auto"): con "auto" el navegador descargaba la */}
+      {/* pista ENTERA (~3MB) de las 2 siguientes en paralelo; a través del túnel */}
+      {/* del backend eso saturaba el ancho de banda y encolaba la resolución de */}
+      {/* la pista que el usuario sí quería oír (arranques de 20s+). El resolve ya */}
+      {/* se precalienta aparte (api.prefetchStream), así que basta con metadata */}
+      {/* para un arranque rápido sin ahogar el túnel. */}
+      <audio ref={preloadAudioRef} preload="metadata" style={{ position:'absolute', width:1, height:1, opacity:0, pointerEvents:'none' }} aria-hidden="true" tabIndex={-1} />
+      <audio ref={preloadAudio2Ref} preload="metadata" style={{ position:'absolute', width:1, height:1, opacity:0, pointerEvents:'none' }} aria-hidden="true" tabIndex={-1} />
     </>
   );
 
