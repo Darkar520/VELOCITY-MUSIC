@@ -218,11 +218,23 @@ export function scoreCandidate(seedProfile, candidate) {
   // Bonus mainstream (ordena Mainstream antes que Discovery ante igual perfil, Req 4.6).
   if (candidate && candidate.mainstream === true) score += 15;
 
+  // Preferir versión de estudio: la radio de una canción de estudio no debería
+  // derivar hacia directos/remixes/acústicos salvo por falta de alternativas.
+  if (isLiveOrRemixVersion(candidate && candidate.title)) score -= 30;
+
   // Penalización por distancia de grafo (más lejos = menos relevante, Req 3).
   const d = Number(candidate && candidate.graphDistance);
   if (Number.isFinite(d)) score -= d * 8;
 
   return score;
+}
+
+// Detecta títulos que NO son la versión de estudio (directo, remix, acústico…).
+const LIVE_REMIX_RE = /\b(live|en\s+vivo|en\s+directo|remix|remaster(?:ed)?|acoustic|ac[uú]stico|unplugged|session|sped[\s-]?up|slowed|karaoke|instrumental|demo)\b/i;
+
+/** true si el título parece una versión no-estudio (directo/remix/acústico/etc.). */
+export function isLiveOrRemixVersion(title) {
+  return typeof title === 'string' && LIVE_REMIX_RE.test(title);
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -542,4 +554,5 @@ export default {
   cohesionRatio,
   excludeSoundCloud,
   assembleRadio,
+  isLiveOrRemixVersion,
 };

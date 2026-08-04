@@ -7,7 +7,8 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { api } from '../api.js';
 import * as offline from '../offline.js';
-import { dedupeByTitle, capPerArtist, slimTrack } from '../helpers.js';
+import { slimTrack } from '../helpers.js';
+import { mergeRadioTail } from '../radioNext.js';
 import { cacheTrack, trackById, saveMeta, bestCoverFor, normalizeTrack } from '../catalog.js';
 import { isDocumentVisible, shouldFadeIn, isStreamUrlFresh } from '../audioContinuity.js';
 import { runAudioEffects, bumpAudioEpoch } from '../audio/runAudioEffects.js';
@@ -396,8 +397,12 @@ export function usePlaybackController(deps) {
     try {
       const raw = await api.radio(seed.id, 40);
       if (radioSeedRef.current !== seed.id) return;
-      const more = capPerArtist(dedupeByTitle(raw.map(normalizeTrack)), 3)
-        .filter((t) => t.id && t.id !== seed.id && !existing.has(t.id));
+      const rawTracks = raw.map(normalizeTrack).filter((t) => t.id && t.id !== seed.id);
+      // Fusión con calidad contra la cola COMPLETA: dedup por id/título, versión de
+      // estudio preferida, sin artista consecutivo y cap por artista (Req 5, 6).
+      const existingTracks = [...existing].map(trackById).filter(Boolean);
+      const more = mergeRadioTail(existingTracks, rawTracks, { maxPerArtist: 5 })
+        .filter((t) => !existing.has(t.id));
       if (!more.length) return;
       // Cachear las pistas para que trackById las resuelva al reproducirlas.
       more.forEach(cacheTrack);
