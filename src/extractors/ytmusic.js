@@ -208,6 +208,26 @@ function pickBestThumb(thumbs) {
   return hiRes(sorted[0].url ?? null);
 }
 
+/**
+ * Detecta miniaturas de video de YouTube (i.ytimg.com / rutas /vi/). No son
+ * artwork oficial del álbum, sino capturas del video.
+ */
+export function isVideoThumb(url) {
+  return typeof url === 'string' && (url.includes('i.ytimg.com') || url.includes('/vi/'));
+}
+
+/**
+ * Portada correcta para una pista dentro de un álbum. En un álbum la portada
+ * válida es la del álbum: si la miniatura de la pista es un thumb de video (o no
+ * hay), se usa la del álbum; si ésta tampoco sirve, se deja null para que actúe
+ * el fallback del frontend (nunca se rellena con un thumb de video).
+ */
+export function resolveAlbumTrackArtwork(trackArtwork, albumCover) {
+  if (trackArtwork && !isVideoThumb(trackArtwork)) return trackArtwork;
+  if (albumCover && !isVideoThumb(albumCover)) return albumCover;
+  return null;
+}
+
 function extractArtist(song) {
   // ytmusic-api devuelve artists como array de { artistId, name } o strings.
   if (Array.isArray(song.artists) && song.artists.length) {
@@ -335,10 +355,16 @@ export async function getArtistData(artistId) {
 export async function getAlbumData(albumId) {
   return withClient(async (client) => {
     const al = await client.getAlbum(albumId);
+    // Orden: ytmusic-api (getAlbum) devuelve las pistas en el orden del álbum y
+    // su esquema es "strict" — no expone trackNumber/index (se descartan al
+    // parsear), así que no hay campo fiable por el que reordenar. Se preserva el
+    // orden de la API, que es el del álbum.
     const cover = pickBestThumb(al.thumbnails);
     const tracks = (al.songs || []).map(s => {
       const m = mapYTMusicSong(s);
-      if (!m.artworkUrl) m.artworkUrl = cover;
+      // En un álbum la portada válida es la del álbum, no la miniatura por-pista
+      // (suele ser un thumb de video de i.ytimg.com). Ver resolveAlbumTrackArtwork.
+      m.artworkUrl = resolveAlbumTrackArtwork(m.artworkUrl, cover);
       if (!m.album) m.album = al.name ?? null;
       if (!m.albumId) m.albumId = albumId;
       return m;
@@ -395,8 +421,10 @@ function mapUpNext(s) {
   // Las miniaturas de i.ytimg.com son capturas del video, no artwork oficial.
   const albumThumb = pickBestThumb(s.album?.thumbnails);
   const rawThumb = s.thumbnail ? hiRes(s.thumbnail) : pickBestThumb(s.thumbnails);
-  const isVideoThumb = (url) => url && typeof url === 'string' && url.includes('i.ytimg.com');
-  const artworkUrl = albumThumb || (isVideoThumb(rawThumb) ? null : rawThumb) || rawThumb;
+  // El guard anti-video NO debe reintroducir el thumb de video: si no hay portada
+  // de álbum y la única miniatura es de video, se deja null para que actúe el
+  // fallback (antes un `|| rawThumb` final anulaba el guard).
+  const artworkUrl = albumThumb || (isVideoThumb(rawThumb) ? null : rawThumb);
   return {
     id: s.videoId ?? null,
     title: cleanTitle(s.title ?? s.name ?? null),
