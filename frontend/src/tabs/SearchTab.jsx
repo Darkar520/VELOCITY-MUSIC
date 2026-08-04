@@ -10,6 +10,7 @@ import { useListSearch } from './useListSearch.js';
 import { useLibraryStore } from '../store/libraryStore.js';
 import { usePlayerStore } from '../store/playerStore.js';
 import { enrichTracksInBackground } from '../coverEnrich.js';
+import { dedupeByRelevance } from '../searchRanking.js';
 
 export function SearchTab({ T, play, addToTarget, onMenu, onToggleFav, recentSearches, addSearch, removeSearch, goArtist, goAlbum, goMix, selecting, selection, toggleSelect, startSelection, addToQueue, removeFromQueue, backendDown, setTab }) {
   // Library store
@@ -44,11 +45,11 @@ export function SearchTab({ T, play, addToTarget, onMenu, onToggleFav, recentSea
       const attempt = async () => {
         try {
           const d = await api.searchAll(term, ctrl.signal);
-          return { songs: dedupeByTitle((d.songs || []).map(normalizeTrack)), albums: d.albums || [], artists: d.artists || [] };
+          return { songs: dedupeByRelevance(term, (d.songs || []).map(normalizeTrack)), albums: d.albums || [], artists: d.artists || [] };
         } catch (e) {
           if (aborted(e)) throw e;                      // cancelada: no es error real
           const raw = await api.search(term, ctrl.signal); // respaldo
-          return { songs: dedupeByTitle(raw.map(normalizeTrack)), albums: [], artists: [] };
+          return { songs: dedupeByRelevance(term, raw.map(normalizeTrack)), albums: [], artists: [] };
         }
       };
       try {
