@@ -5,8 +5,9 @@ import { useEffect, useRef, useMemo } from 'react';
 import { api } from '../api.js';
 import { dedupeByTitle, capPerArtist } from '../helpers.js';
 import { SEED_ROWS, DISCOVERY, GENRES, MOODS, ERAS } from '../constants.js';
-import { trackById, normalizeTrack } from '../catalog.js';
+import { trackById, normalizeTrack, cacheTrack } from '../catalog.js';
 import { shouldSkipFeedRegen } from '../feed/feedSig.js';
+import { loadFeedCache, saveFeedCache } from '../feed/feedCache.js';
 import {
   shuffle, pick, artistKey, tracksFromIds, ensureManyMixes,
   offlineMixes, favArtistMixes, recentSliceMixes,
@@ -127,14 +128,28 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
     const alive = () => myToken === feedTokenRef.current;
     setHomeLoading(true);
 
-    // Safety timeout: if the feed IIFE doesn't finish in 90s, unlock loading
-    // with whatever sections have been pushed so far.
+    // Pintado instantáneo desde la caché last-good (si no hay filas aún) mientras
+    // se regenera en background. Evita el spinner inicial en arranques en frío.
+    let paintedCacheCount = 0;
+    if (useLibraryStore.getState().homeRows.length === 0) {
+      const cached = loadFeedCache();
+      if (cached && cached.length) {
+        for (const sec of cached) for (const m of sec.mixes || []) for (const t of m.tracks || []) cacheTrack(t);
+        setHomeRows(cached);
+        setHomeLoading(false);
+        paintedCacheCount = cached.length;
+      }
+    }
+
+    // Safety timeout: desbloquea el loading en ≤30s con lo que se haya pusheado,
+    // para que el feed nunca quede en spinner indefinido si una sección de red
+    // se cuelga en el túnel.
     const safetyTimer = setTimeout(() => {
       if (alive()) {
         feedSigRef.current = sig;
         setHomeLoading(false);
       }
-    }, 90000);
+    }, 30000);
 
     (async () => {
       try {
@@ -246,19 +261,30 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
         for (const m of mixes) for (const t of m.tracks || []) usedIDs.add(t.id);
       };
 
-      /** Solo publica si hay ≥1 mix; si hay 1, intenta expandir antes de añadir. */
+      /** Solo publica si hay ≥1 mix; si hay 1, intenta expandir antes de añadir.
+       *  Aislado en try/catch: un fallo al construir UNA sección no tumba el resto. */
       const pushRich = (section, mixes, { min = 1, prefix } = {}) => {
         if (!alive()) return;
-        let list = ensureManyMixes(clean(mixes), { min, max: 10, prefix: prefix || section });
-        // Filtrar tracks ya usados en secciones anteriores (dedup cross-section)
-        list = list.map((m) => ({
-          ...m,
-          tracks: m.tracks.filter((t) => !usedIDs.has(t.id)),
-        })).filter((m) => m.tracks.length >= 10);
-        if (!list.length) return;
-        addUsed(list);
-        sections.push({ section, mixes: list });
-        setHomeRows([...sections]);
+        try {
+          let list = ensureManyMixes(clean(mixes), { min, max: 10, prefix: prefix || section });
+          // Filtrar tracks ya usados en secciones anteriores (dedup cross-section)
+          list = list.map((m) => ({
+            ...m,
+            tracks: m.tracks.filter((t) => !usedIDs.has(t.id)),
+          })).filter((m) => m.tracks.length >= 10);
+          if (!list.length) return;
+          addUsed(list);
+          sections.push({ section, mixes: list });
+          // Anti-parpadeo: si pintamos desde caché, no reducir el feed visible con
+          // resultados parciales; recién publicar cuando el feed nuevo alcanza el
+          // conteo cacheado. Sin caché, publicar progresivamente como antes.
+          if (paintedCacheCount === 0 || sections.length >= paintedCacheCount) {
+            setHomeRows([...sections]);
+          }
+          // Primer pintado real garantizado: desbloquear el loading en cuanto haya
+          // contenido, sin esperar al resto de secciones.
+          setHomeLoading(false);
+        } catch { /* aislar la sección fallida */ }
       };
 
       const hasHistory = seeds.length > 0 || searches.length > 0 || favIds.length > 0
@@ -274,9 +300,20 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
       }
 
       // ═══ 2) BIBLIOTECA LOCAL multi-mix ═══
+      // Cheap-first: las secciones locales (Me gusta, Descargas) van ANTES que las
+      // de red (playlists → radio), para garantizar un primer pintado < 3s sin
+      // depender de la latencia del túnel.
       {
         const favMix = favArtistMixes(favIds);
         if (favMix.length) pushRich('De tus Me gusta', favMix, { min: 2, prefix: 'Like' });
+      }
+      {
+        const off = offlineMixes(dlIds);
+        if (off.length >= 2) pushRich('Listas para offline', off, { prefix: 'Offline' });
+        else if (off.length === 1) {
+          const expanded = ensureManyMixes(off, { min: 2, prefix: 'Offline' });
+          if (expanded.length >= 2) pushRich('Tus descargas por artista', expanded, { prefix: 'Offline' });
+        }
       }
       if (pls.length && alive()) {
         const plm = clean(await mapPool(pls.slice(0, 12), RADIO_CONCURRENCY, expandedPlaylistMix));
@@ -296,14 +333,6 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
         else if (saved.length === 1) {
           const ex = ensureManyMixes(saved, { min: 2, prefix: saved[0].label || 'Guardada' });
           if (ex.length >= 2) pushRich('Playlists que guardaste', ex, { prefix: 'Guardada' });
-        }
-      }
-      {
-        const off = offlineMixes(dlIds);
-        if (off.length >= 2) pushRich('Listas para offline', off, { prefix: 'Offline' });
-        else if (off.length === 1) {
-          const expanded = ensureManyMixes(off, { min: 2, prefix: 'Offline' });
-          if (expanded.length >= 2) pushRich('Tus descargas por artista', expanded, { prefix: 'Offline' });
         }
       }
 
@@ -513,7 +542,12 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
       if (alive()) {
         clearTimeout(safetyTimer);
         feedSigRef.current = sig;
+        // Publicar el feed final autoritativo (por si la caché seguía visible) y
+        // guardarlo como last-good. Si la regeneración no produjo nada pero había
+        // caché pintada, se conserva la caché (no se vacía el feed visible).
+        if (sections.length > 0 || paintedCacheCount === 0) setHomeRows([...sections]);
         setHomeLoading(false);
+        saveFeedCache(sections);
       }
       } catch (err) {
         // Unexpected error — unlock loading with whatever sections were pushed.
