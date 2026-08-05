@@ -155,7 +155,7 @@ export function LibraryTab({ T, play, openPlaylist, setOpenPlaylist, addToTarget
           <SectionHeader label="Playlists Guardadas" accent={T.accent} />
           {savedPlaylists.map(p => (
             <div key={p.playlistId} onClick={() => setOpenPlaylist('saved:' + p.playlistId)} className="card-hover" style={{ display:'flex', alignItems:'center', gap:13, padding:'10px 12px', borderRadius:16, cursor:'pointer', border:'1px solid transparent', marginBottom:2 }}>
-              <div style={{ width:46, height:46, borderRadius:12, background:hex2rgba(T.accent,.12), border:`1px solid ${hex2rgba(T.accent,.3)}`, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}><Icon.Heart c={T.accent} filled sz={20} /></div>
+              <div style={{ width:'var(--thumb)', height:'var(--thumb)', borderRadius:12, background:hex2rgba(T.accent,.12), border:`1px solid ${hex2rgba(T.accent,.3)}`, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}><Icon.Heart c={T.accent} filled sz={20} /></div>
               <div style={{ flex:1, minWidth:0 }}>
                 <div style={{ fontSize:13.5, fontWeight:700, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{p.name}</div>
                 <div style={{ fontSize:10.5, color:'var(--txt-2)', marginTop:3 }}>Playlist guardada · {p.trackIds?.length || 0} canciones</div>

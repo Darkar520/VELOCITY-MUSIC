@@ -38,7 +38,7 @@ export function MiniPlayerBar({
       <div style={{ position:'absolute', bottom:0, left:0, height:2.5, width:`${pct || 0}%`, background:grad(T,90), borderRadius:99, boxShadow:`0 0 8px ${T.accent}`, transition:'width .15s linear', zIndex:2 }} />
       <div
         style={{
-          width:42, height:42, flexShrink:0, borderRadius:11, overflow:'hidden',
+          width:'var(--thumb)', height:'var(--thumb)', flexShrink:0, borderRadius:11, overflow:'hidden',
           boxShadow:'0 4px 12px #0007',
           transform: `translateX(${dragX * 0.6}px)`,
           transition: isSliding ? 'none' : 'transform .35s cubic-bezier(.22,1,.36,1)',
@@ -52,7 +52,7 @@ export function MiniPlayerBar({
           alt=""
           radius={11}
           size={96}
-          style={{ width:42, height:42 }}
+          style={{ width:'var(--thumb)', height:'var(--thumb)' }}
         />
       </div>
       <div style={{ flex:1, minWidth:0,
