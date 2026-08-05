@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { api, isAuthed, setOnUnauthorized } from './api.js';
 import * as offline from './offline.js';
 
@@ -93,6 +93,13 @@ class AppErrorBoundary extends React.Component {
   }
 }
 export { AppErrorBoundary };
+
+// Navegación: constante de módulo. Como array inline se recreaba en cada render
+// de App e invalidaba el memo de Sidebar en cada cambio de estado.
+const NAV_ITEMS = [
+  { id:'home', label:'Inicio', I: Icon.Home }, { id:'search', label:'Buscar', I: Icon.Search },
+  { id:'library', label:'Biblioteca', I: Icon.Lib }, { id:'profile', label:'Perfil', I: Icon.User },
+];
 
 export default function App() {
   useEffect(() => {
@@ -317,10 +324,16 @@ export default function App() {
   // ── AudioContext eliminado: era incompatible con background playback en móvil ──
   // createMediaElementSource secuestra el <audio> permanentemente y el AudioContext
   // se suspende en background, deteniendo la música. Ver comentario en normalize.
-  const activePalette = customPalettes.find(p => p.id === activeCustomId) || customPalettes[0] || { name:'Personalizado', accent:'#8b5cf6', accent2:'#ec4899' };
-  const T = themeKey === 'custom'
+  // `T` se pasa como prop a casi todos los componentes. Si se reconstruye en
+  // cada render de App, ningún hijo puede memoizarse (la prop siempre cambia de
+  // identidad). Memoizado, `React.memo` en los hijos sí surte efecto.
+  const activePalette = useMemo(
+    () => customPalettes.find(p => p.id === activeCustomId) || customPalettes[0] || { name:'Personalizado', accent:'#8b5cf6', accent2:'#ec4899' },
+    [customPalettes, activeCustomId],
+  );
+  const T = useMemo(() => (themeKey === 'custom'
     ? { name: activePalette.name || 'Personalizado', accent: activePalette.accent, accent2: activePalette.accent2, vars: activePalette.bg ? tintedVars(activePalette.bg) : undefined }
-    : (THEMES[themeKey] || THEMES.emerald);
+    : (THEMES[themeKey] || THEMES.emerald)), [themeKey, activePalette]);
   const addPalette = () => { const id = 'p' + Date.now(); setCustomPalettes(ps => [...ps, { id, name:'Nueva paleta', accent:'#39ff14', accent2:'#00ffa3' }]); setActiveCustomId(id); setThemeKey('custom'); };
   const updatePalette = (patch) => setCustomPalettes(ps => ps.map(p => p.id === activeCustomId ? { ...p, ...patch } : p));
   const deletePalette = () => { const next = customPalettes.filter(p => p.id !== activeCustomId); const arr = next.length ? next : [{ id:'p' + Date.now(), name:'Mi paleta', accent:'#8b5cf6', accent2:'#ec4899' }]; setCustomPalettes(arr); setActiveCustomId(arr[0].id); };
@@ -840,10 +853,9 @@ export default function App() {
 
   if (!authed) return <AuthScreen onAuthed={handleAuthed} T={T} />;
 
-  const NAV = [
-    { id:'home', label:'Inicio', I: Icon.Home }, { id:'search', label:'Buscar', I: Icon.Search },
-    { id:'library', label:'Biblioteca', I: Icon.Lib }, { id:'profile', label:'Perfil', I: Icon.User },
-  ];
+  // NAV es constante: vive en el módulo (ver NAV_ITEMS) para no crear un array
+  // nuevo en cada render, que rompería el memo de Sidebar.
+  const NAV = NAV_ITEMS;
 
   const playerProps = { track, playing, togglePlay, next, prev, dur, seek, vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved: track ? favs.includes(track.id) : false, toggleFav, T, loadingAudio, nextCover, prevCover };
 

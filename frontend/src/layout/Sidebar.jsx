@@ -2,7 +2,7 @@ import React from 'react';
 import { hex2rgba, grad } from '../helpers.js';
 import { Icon } from '../Icons.jsx';
 
-export function Sidebar({ tab, setTab, nav, T, playlists, setOpenPlaylist, setView }) {
+function SidebarImpl({ tab, setTab, nav, T, playlists, setOpenPlaylist, setView }) {
   return (
     <div style={{ width:'var(--sidebar-w)', flexShrink:0, height:'100%', background:'var(--surf-0)', borderRight:'1px solid var(--line-soft)', display:'flex', flexDirection:'column', padding:'26px 16px' }}>
       <div style={{ display:'flex', alignItems:'center', gap:11, padding:'0 10px', marginBottom:28 }}>
@@ -45,3 +45,14 @@ export function Sidebar({ tab, setTab, nav, T, playlists, setOpenPlaylist, setVi
 // ═══════════════════════════════════════════════════════════════
 // PLAYER BAR (escritorio)
 
+
+/**
+ * Sidebar no muestra nada del reloj de reproducción ni del progreso de
+ * descargas, pero se re-renderizaba con CADA cambio de estado de App: medido,
+ * 120 renders durante un lote de 60 descargas (~440 en un lote de 220).
+ *
+ * El memo solo es efectivo porque sus props son estables: `nav` es una
+ * constante de módulo, `T` está memoizado en App, `playlists` viene del store
+ * (misma referencia si no cambia) y los setters son de useState.
+ */
+export const Sidebar = React.memo(SidebarImpl);
