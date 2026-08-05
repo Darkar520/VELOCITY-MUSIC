@@ -315,8 +315,10 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
           <div style={{ fontSize:12.5, color:'var(--txt-2)', marginTop:4 }}>¿Qué quieres escuchar hoy?</div>
         </div>
         <div style={{ display:'flex', alignItems:'center', gap:9, flexShrink:0 }}>
-          <button aria-label="AI DJ" onClick={async () => { if (djBusy) return; setDjBusy(true); try { await startAiDj?.(); } finally { setDjBusy(false); } }} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:6, background:'var(--surf-1)', border:`1px solid ${hex2rgba(T.accent,.35)}`, borderRadius:99, padding:'7px 13px', cursor:'pointer', color:T.accent, fontSize:11, fontWeight:800 }}>{djBusy ? <Spinner c={T.accent} sz={13} /> : <Icon.Play c={T.accent} sz={13} />} AI DJ</button>
-          <button onClick={() => setTab('profile')} className="press" aria-label="Perfil" style={{ background:'none', border:'none', padding:0, cursor:'pointer' }}><Avatar avatar={avatar} name={displayName} email={email} T={T} size={40} /></button>
+          <button aria-label="AI DJ" onClick={async () => { if (djBusy) return; setDjBusy(true); try { await startAiDj?.(); } finally { setDjBusy(false); } }} className="btn-tap" style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:6, minHeight:'var(--touch-min)', background:'var(--surf-1)', border:`1px solid ${hex2rgba(T.accent,.35)}`, borderRadius:99, padding:'7px 13px', cursor:'pointer', color:T.accent, fontSize:'var(--fs-label)', fontWeight:800 }}>{djBusy ? <Spinner c={T.accent} sz={13} /> : <Icon.Play c={T.accent} sz={13} />} AI DJ</button>
+          {/* minWidth/minHeight = --touch-min: el avatar mide 40px, por debajo del
+              mínimo táctil de 44px. Se agranda el área pulsable sin agrandar el avatar. */}
+          <button onClick={() => setTab('profile')} className="press" aria-label="Perfil" style={{ display:'flex', alignItems:'center', justifyContent:'center', minWidth:'var(--touch-min)', minHeight:'var(--touch-min)', background:'none', border:'none', padding:0, cursor:'pointer' }}><Avatar avatar={avatar} name={displayName} email={email} T={T} size={40} /></button>
         </div>
       </div>
 
