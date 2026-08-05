@@ -221,8 +221,12 @@ export const usePlayerStore = create((set, get) => {
     clearQueue: () => set({ queue: [] }),
 
     // ─── Descargas (relacionadas al player pero no al machine) ──
-    setDownloaded: (set_) => set({ downloaded: set_ }),
-    setDownloading: (set_) => set({ downloading: set_ }),
+    // Aceptan un Set o una función updater (como los setters de useState). Sin
+    // el soporte de updater, `setDownloaded(d => …)` guardaba la FUNCIÓN como
+    // valor: tras eliminar una descarga, cualquier `downloaded.has(id)` lanzaba
+    // y los indicadores de descarga quedaban roros hasta recargar la app.
+    setDownloaded: (v) => set((s) => ({ downloaded: typeof v === 'function' ? v(s.downloaded) : v })),
+    setDownloading: (v) => set((s) => ({ downloading: typeof v === 'function' ? v(s.downloading) : v })),
     addDownloaded: (id) =>
       set((s) => {
         const next = new Set(s.downloaded);
