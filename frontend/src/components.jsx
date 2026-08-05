@@ -171,7 +171,7 @@ export function TrackRow({ track, active, playing, T, onClick, onFav, faved, onA
         </div>
       )}
       <div style={{ position:'relative', flexShrink:0 }}>
-        <CoverImg src={track.cover} alt="" radius={12} style={{ width:46, height:46 }} />
+        <CoverImg src={track.cover} alt="" radius={12} style={{ width:'var(--thumb)', height:'var(--thumb)' }} />
         {active && playing && (
           <div className="glass" style={{ position:'absolute', inset:0, background:'#00000066', borderRadius:12, display:'flex', alignItems:'center', justifyContent:'center' }}>
             <EQViz color={T.accent} color2={T.accent2} playing={playing} bars={5} h={18} gap={2} />
@@ -179,8 +179,8 @@ export function TrackRow({ track, active, playing, T, onClick, onFav, faved, onA
         )}
       </div>
       <div style={{ flex:1, minWidth:0 }}>
-        <div style={{ fontSize:13.5, fontWeight:700, color: active ? T.accent : 'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title}</div>
-        <div style={{ fontSize:10.5, color:'var(--txt-2)', marginTop:3, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.artist}{track.genre?` · ${track.genre}`:''}</div>
+        <div style={{ fontSize:'var(--fs-title)', fontWeight:700, color: active ? T.accent : 'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title}</div>
+        <div style={{ fontSize:'var(--fs-xs)', color:'var(--txt-2)', marginTop:3, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.artist}{track.genre?` · ${track.genre}`:''}</div>
       </div>
       {!selecting && downloading ? <span style={{ display:'flex', flexShrink:0 }}><Spinner c={T.accent} sz={15} /></span>
         : !selecting && downloaded ? <span title="Disponible sin conexión" style={{ display:'flex', flexShrink:0 }}><Icon.Down c={T.accent} sz={15} /></span> : null}
@@ -195,8 +195,8 @@ export function TrackRow({ track, active, playing, T, onClick, onFav, faved, onA
 
 export function MediaCard({ cover, title, subtitle, T, onClick, onPlay, onFav, onMenu, faved }) {
   return (
-    <div className="card-hover media-card" style={{ flexShrink:0, width:128 }}>
-      <div onClick={onClick} style={{ position:'relative', width:128, height:128, borderRadius:18, marginBottom:9, cursor:'pointer', boxShadow:'0 8px 22px #0007' }}>
+    <div className="card-hover media-card" style={{ flexShrink:0, width:'var(--card-w)' }}>
+      <div onClick={onClick} style={{ position:'relative', width:'100%', aspectRatio:'1', borderRadius:18, marginBottom:9, cursor:'pointer', boxShadow:'0 8px 22px #0007' }}>
         <CoverImg src={cover} alt={title} radius={18} style={{ width:'100%', height:'100%' }} />
         <div style={{ position:'absolute', inset:0, borderRadius:18, background:'linear-gradient(180deg, transparent 45%, #000b)', pointerEvents:'none' }} />
         <div className="media-actions" style={{ position:'absolute', inset:0, borderRadius:18 }}>
@@ -209,8 +209,8 @@ export function MediaCard({ cover, title, subtitle, T, onClick, onPlay, onFav, o
           {onPlay && <button aria-label="Reproducir" onClick={e => { e.stopPropagation(); onPlay(); }} className="btn-tap" style={{ position:'absolute', bottom:8, right:8, width:36, height:36, borderRadius:'50%', background:grad(T), border:'none', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', boxShadow:`0 4px 14px ${hex2rgba(T.accent,.6)}` }}><Icon.Play c="#04060a" sz={18} /></button>}
         </div>
       </div>
-      <div onClick={onClick} style={{ fontSize:11.5, fontWeight:700, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', cursor:'pointer' }}>{title}</div>
-      <div style={{ fontSize:9.5, color:'var(--txt-2)', marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{subtitle}</div>
+      <div onClick={onClick} style={{ fontSize:'var(--fs-card)', fontWeight:700, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', cursor:'pointer' }}>{title}</div>
+      <div style={{ fontSize:'var(--fs-xs)', color:'var(--txt-2)', marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{subtitle}</div>
     </div>
   );
 }
@@ -223,8 +223,8 @@ export function MixCard({ mix, T, onPlay, onOpen }) {
   while (covers.length < 4) covers.push(covers[covers.length - 1]);
   const artists = [...new Set(tracks.map(t => t.artist).filter(Boolean))].slice(0, 3).join(' · ');
   return (
-    <div className="card-hover media-card" style={{ flexShrink:0, width:150 }}>
-      <div onClick={onOpen} style={{ position:'relative', width:150, height:150, borderRadius:16, overflow:'hidden', marginBottom:9, cursor:'pointer', boxShadow:'0 8px 22px #0007' }}>
+    <div className="card-hover media-card" style={{ flexShrink:0, width:'var(--mix-w)' }}>
+      <div onClick={onOpen} style={{ position:'relative', width:'100%', aspectRatio:'1', borderRadius:16, overflow:'hidden', marginBottom:9, cursor:'pointer', boxShadow:'0 8px 22px #0007' }}>
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gridTemplateRows:'1fr 1fr', width:'100%', height:'100%', gap:1 }}>
           {covers.map((c, i) => <CoverImg key={i} src={c} alt="" radius={0} style={{ width:'100%', height:'100%' }} />)}
         </div>
@@ -232,8 +232,8 @@ export function MixCard({ mix, T, onPlay, onOpen }) {
         <div style={{ position:'absolute', top:8, left:10, fontSize:8.5, fontWeight:900, letterSpacing:1.5, color:'#fff', textTransform:'uppercase', opacity:.9, textShadow:'0 1px 3px #000' }}>Mezcla</div>
         <button aria-label="Reproducir mezcla" onClick={e => { e.stopPropagation(); onPlay(); }} className="btn-tap" style={{ position:'absolute', bottom:8, right:8, width:38, height:38, borderRadius:'50%', background:grad(T), border:'none', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', boxShadow:`0 4px 14px ${hex2rgba(T.accent,.6)}` }}><Icon.Play c="#04060a" sz={18} /></button>
       </div>
-      <div onClick={onOpen} style={{ fontSize:12, fontWeight:800, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', cursor:'pointer' }}>{mix.label.replace(/^Mezcla · /, '')}</div>
-      <div style={{ fontSize:10, color:'var(--txt-2)', marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{artists || `${tracks.length} canciones`}</div>
+      <div onClick={onOpen} style={{ fontSize:'var(--fs-card)', fontWeight:800, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', cursor:'pointer' }}>{mix.label.replace(/^Mezcla · /, '')}</div>
+      <div style={{ fontSize:'var(--fs-xs)', color:'var(--txt-2)', marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{artists || `${tracks.length} canciones`}</div>
     </div>
   );
 }

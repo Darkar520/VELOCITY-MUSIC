@@ -4,7 +4,7 @@ import { Icon } from '../Icons.jsx';
 
 export function Sidebar({ tab, setTab, nav, T, playlists, setOpenPlaylist, setView }) {
   return (
-    <div style={{ width:256, flexShrink:0, height:'100%', background:'var(--surf-0)', borderRight:'1px solid var(--line-soft)', display:'flex', flexDirection:'column', padding:'26px 16px' }}>
+    <div style={{ width:'var(--sidebar-w)', flexShrink:0, height:'100%', background:'var(--surf-0)', borderRight:'1px solid var(--line-soft)', display:'flex', flexDirection:'column', padding:'26px 16px' }}>
       <div style={{ display:'flex', alignItems:'center', gap:11, padding:'0 10px', marginBottom:28 }}>
         <div style={{ width:34, height:34, borderRadius:11, background:grad(T), display:'flex', alignItems:'center', justifyContent:'center', boxShadow:`0 4px 16px ${hex2rgba(T.accent,.5)}` }}><Icon.Play c="#04060a" sz={17} /></div>
         <div style={{ fontSize:16, fontWeight:900, color:'var(--txt-0)', letterSpacing:-.3, lineHeight:1.05 }}>VELOCITY<br/><span style={{ fontSize:11, fontWeight:800, letterSpacing:3, color:T.accent }}>MUSIC</span></div>

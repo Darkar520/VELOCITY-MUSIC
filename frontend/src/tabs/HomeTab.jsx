@@ -336,7 +336,7 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
       {recentTracks.length > 0 && (
         <>
           <SectionHeader label="Escuchado Recientemente" accent={T.accent} />
-          <div style={{ display:'flex', gap:15, overflowX:'auto', paddingBottom:6, paddingTop:2, marginBottom:18 }}>
+          <div className="carousel" style={{ gap:15, paddingBottom:6, paddingTop:2, marginBottom:18 }}>
             {recentTracks.map((t,i) => <MediaCard key={t.id+'_'+i} cover={t.cover} title={t.title} subtitle={t.artist} T={T} onClick={() => play(t, recentIds)} onPlay={() => play(t, recentIds)} onFav={() => toggleFav(t.id)} faved={favs.includes(t.id)} onMenu={() => onMenu(t.id)} />)}
           </div>
         </>
@@ -365,7 +365,7 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
           {recentTracks.length > 0 && (
             <>
               <SectionHeader label="Escuchado Recientemente" accent={T.accent} />
-              <div style={{ display:'flex', gap:15, overflowX:'auto', paddingBottom:6, paddingTop:2, marginBottom:18 }}>
+              <div className="carousel" style={{ gap:15, paddingBottom:6, paddingTop:2, marginBottom:18 }}>
                 {recentTracks.map((t,i) => <MediaCard key={t.id+'_'+i} cover={t.cover} title={t.title} subtitle={t.artist} T={T} onClick={() => play(t, recentIds)} onPlay={() => play(t, recentIds)} onFav={() => toggleFav(t.id)} faved={favs.includes(t.id)} onMenu={() => onMenu(t.id)} />)}
               </div>
             </>
@@ -373,7 +373,7 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
           {favs.length > 0 && (
             <>
               <SectionHeader label="Me Gusta" accent={T.accent} />
-              <div style={{ display:'flex', gap:15, overflowX:'auto', paddingBottom:6, paddingTop:2, marginBottom:18 }}>
+              <div className="carousel" style={{ gap:15, paddingBottom:6, paddingTop:2, marginBottom:18 }}>
                 {favs.slice(0, 20).map(id => trackById(id)).filter(Boolean).map((t,i) => <MediaCard key={t.id+'_'+i} cover={t.cover} title={t.title} subtitle={t.artist} T={T} onClick={() => play(t, favs)} onPlay={() => play(t, favs)} onFav={() => toggleFav(t.id)} faved={true} onMenu={() => onMenu(t.id)} />)}
               </div>
             </>
@@ -381,7 +381,7 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
           {downloaded.size > 0 && (
             <>
               <SectionHeader label="Descargadas" accent={T.accent} />
-              <div style={{ display:'flex', gap:15, overflowX:'auto', paddingBottom:6, paddingTop:2, marginBottom:18 }}>
+              <div className="carousel" style={{ gap:15, paddingBottom:6, paddingTop:2, marginBottom:18 }}>
                 {[...downloaded].slice(0, 20).map(id => trackById(id)).filter(Boolean).map((t,i) => <MediaCard key={t.id+'_'+i} cover={t.cover} title={t.title} subtitle={t.artist} T={T} onClick={() => play(t, [...downloaded])} onPlay={() => play(t, [...downloaded])} onFav={() => toggleFav(t.id)} faved={favs.includes(t.id)} onMenu={() => onMenu(t.id)} />)}
               </div>
             </>
@@ -398,7 +398,7 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
       {homeRows.map(sec => (
         <div key={sec.section}>
           <SectionHeader label={sec.section} accent={T.accent} />
-          <div style={{ display:'flex', gap:15, overflowX:'auto', paddingBottom:6, paddingTop:2, marginBottom:20 }}>
+          <div className="carousel" style={{ gap:15, paddingBottom:6, paddingTop:2, marginBottom:20 }}>
             {(sec.mixes || []).map(mix => (
               <MixCard key={mix.label} mix={mix} T={T}
                 onOpen={() => goMix(mix)}

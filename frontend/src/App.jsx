@@ -952,7 +952,7 @@ export default function App() {
         <main role="main" aria-label="Aplicación" style={{ flex:1, overflowY:'auto', overflowX:'hidden', padding:'4px var(--pad-page) 0', width:'100%', minWidth:0, boxSizing:'border-box' }}>{Content}</main>
 
         {track && (
-          <div style={{ padding:'8px 14px 6px' }}>
+          <div style={{ padding:'8px var(--pad-page) 6px' }}>
             <MiniPlayerBar track={track} playing={playing} togglePlay={togglePlay} loadingAudio={loadingAudio} T={T} pct={pct} setExpanded={setExpanded} setMenuTarget={setMenuTarget} next={next} prev={prev} />
           </div>
         )}
@@ -961,10 +961,10 @@ export default function App() {
           {NAV.map(({ id, label, I }) => {
             const act = tab === id;
             return (
-              <button key={id} aria-label={label} onClick={() => { setTab(id); setExpanded(false); setView(null); if (id==='library') setOpenPlaylist(null); }} className="press" style={{ background:'none', border:'none', cursor:'pointer', display:'flex', flexDirection:'column', alignItems:'center', gap:5, padding:'4px 12px', position:'relative' }}>
+              <button key={id} aria-label={label} onClick={() => { setTab(id); setExpanded(false); setView(null); if (id==='library') setOpenPlaylist(null); }} className="press" style={{ background:'none', border:'none', cursor:'pointer', display:'flex', flexDirection:'column', alignItems:'center', gap:5, padding:'4px clamp(8px, 2vw, 14px)', flex:1, minWidth:0, position:'relative' }}>
                 {act && <div style={{ position:'absolute', top:-10, width:5, height:5, borderRadius:'50%', background:T.accent, boxShadow:`0 0 8px ${T.accent}` }} />}
                 <I c={act ? T.accent : 'var(--txt-3)'} sz={22} />
-                <span style={{ fontSize:10, fontWeight:700, color: act ? T.accent : 'var(--txt-3)' }}>{label}</span>
+                <span style={{ fontSize:10, fontWeight:700, color: act ? T.accent : 'var(--txt-3)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', maxWidth:'100%' }}>{label}</span>
               </button>
             );
           })}

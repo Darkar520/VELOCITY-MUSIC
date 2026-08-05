@@ -184,7 +184,7 @@ export function SearchTab({ T, play, addToTarget, onMenu, onToggleFav, recentSea
 
           {res.artists.length > 0 && (<>
             <SectionHeader label="Artistas" accent={T.accent} />
-            <div style={{ display:'flex', gap:15, overflowX:'auto', paddingBottom:6, paddingTop:2, marginBottom:18 }}>
+            <div className="carousel" style={{ gap:15, paddingBottom:6, paddingTop:2, marginBottom:18 }}>
               {res.artists.map(a => (
                 <div key={a.artistId} onClick={() => { goArtist(a.artistId, a.name); addSearch(a.name); }} className="card-hover" style={{ flexShrink:0, width:104, cursor:'pointer', textAlign:'center' }}>
                   <CoverImg src={a.thumbnail} alt={a.name} radius={999} style={{ width:104, height:104, borderRadius:'50%', boxShadow:'0 8px 22px #0007' }} />
@@ -197,7 +197,7 @@ export function SearchTab({ T, play, addToTarget, onMenu, onToggleFav, recentSea
 
           {res.albums.length > 0 && (<>
             <SectionHeader label="Álbumes" accent={T.accent} />
-            <div style={{ display:'flex', gap:15, overflowX:'auto', paddingBottom:6, paddingTop:2, marginBottom:18 }}>
+            <div className="carousel" style={{ gap:15, paddingBottom:6, paddingTop:2, marginBottom:18 }}>
               {res.albums.map(a => <MediaCard key={a.albumId} cover={a.cover} title={a.name} subtitle={`${a.artist || 'Álbum'}${a.year ? ' · ' + a.year : ''}`} T={T} onClick={() => goAlbum(a.albumId, a.name, a.artist, null, a.cover)} />)}
             </div>
           </>)}
@@ -212,7 +212,7 @@ export function SearchTab({ T, play, addToTarget, onMenu, onToggleFav, recentSea
           {/* Mixes relacionados: radio de la canción top + artistas top del resultado */}
           {relatedMixes.length > 0 && (<>
             <SectionHeader label="Mixes relacionados" accent={T.accent} />
-            <div style={{ display:'flex', gap:15, overflowX:'auto', paddingBottom:6, paddingTop:2, marginBottom:18 }}>
+            <div className="carousel" style={{ gap:15, paddingBottom:6, paddingTop:2, marginBottom:18 }}>
               {relatedMixes.map(m => <MixCard key={m.label} mix={m} T={T} onPlay={() => { play(m.tracks[0], m.tracks.map(t=>t.id)); addSearch(q.trim()); }} onOpen={() => { goMix(m); addSearch(q.trim()); }} />)}
             </div>
           </>)}

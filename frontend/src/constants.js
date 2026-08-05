@@ -93,6 +93,10 @@ export const CSS = `
   .track-row .row-extra { opacity:.0; transition:opacity .15s ease; }
   .track-row:hover .row-extra { opacity:1; }
   @media (hover: none) { .media-actions, .track-row .row-extra { opacity:1; transform:none; } }
+  .carousel { display:flex; gap:15px; overflow-x:auto; }
+  @media (min-width:900px) {
+    .carousel { display:grid; grid-template-columns:repeat(auto-fill, minmax(var(--card-w), 1fr)); overflow-x:visible; }
+  }
 `;
 
 // Paleta base (tema oscuro por defecto). Los skins pueden sobrescribir estas
