@@ -15,6 +15,32 @@ export const CSS = `
     --bg-0:#04060a; --bg-1:#080c12; --surf-0:#0b0f16; --surf-1:#10151e; --surf-2:#161c27;
     --line:#ffffff10; --line-soft:#ffffff08;
     --txt-0:#f4f7fb; --txt-1:#aab4c2; --txt-2:#7a8694; --txt-3:#737e8c;
+    /* ── Tokens fluidos de layout (responsive CSS-first) ──
+       clamp(min, preferido, max) con vw en el término medio: el layout se
+       reacomoda en CADA ancho sin JS. Se calibran contra los valores fijos
+       previos en ~1280px (ancho de diseño) y se consumen desde los estilos
+       inline como "width: var(--card-w)". */
+    --pad-page: clamp(14px, 2.4vw + 8px, 38px);     /* padding horizontal de páginas */
+    --pad-card: clamp(12px, 1.3vw, 18px);           /* padding de tarjetas/paneles */
+    --gap-row: clamp(8px, 1.2vw, 16px);             /* separación entre filas */
+    --gap-col: clamp(10px, 1.5vw, 20px);            /* separación entre columnas */
+    --card-w: clamp(104px, 10vw, 152px);            /* tarjeta de medio/canción (auto-fill) */
+    --mix-w: clamp(128px, 11.5vw, 176px);           /* tarjeta de mezcla (collage) */
+    --thumb: clamp(40px, 3.6vw, 52px);              /* miniatura en filas de pista */
+    --row-pad: clamp(8px, 0.95vw, 12px);            /* padding vertical/horizontal de fila */
+    --radius-lg: clamp(13px, 1.35vw, 18px);         /* radio grande (tarjetas, paneles) */
+    --radius-md: clamp(11px, 1vw, 14px);            /* radio medio (miniaturas, botones) */
+    --fs-body: clamp(12px, 0.5vw + 6.6px, 14.5px);
+    --fs-title: clamp(12px, 0.6vw + 5.8px, 15px);   /* título de fila de pista */
+    --fs-card: clamp(10px, 0.46vw + 5.6px, 13px);   /* título de tarjeta */
+    --fs-xs: clamp(9.5px, 0.45vw + 4.7px, 11.5px);  /* subtítulo / metadata */
+    --fs-label: clamp(9.5px, 0.42vw + 5.1px, 11.5px); /* etiqueta de sección */
+    --fs-h1: clamp(20px, 2.2vw + 10px, 34px);       /* título de página */
+    --fs-h2: clamp(16px, 1.4vw + 9px, 24px);        /* título de vista */
+    --touch-min: 44px;                              /* objetivo táctil mínimo en móvil */
+    --sidebar-w: clamp(196px, 17vw, 248px);         /* ancho del sidebar de escritorio */
+    --player-h: clamp(64px, 5.4vw, 78px);           /* alto de la barra de reproducción */
+    --cover-xl: min(62vmin, 440px);                 /* carátula grande del reproductor */
   }
   *, *::before, *::after { box-sizing: border-box; }
   @keyframes fadeUp      { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:translateY(0); } }
