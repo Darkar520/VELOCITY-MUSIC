@@ -63,7 +63,6 @@ export function usePlaybackController(deps) {
     downloaded,
     track,
     playing,
-    time,
     vol,
     queue,
     shuffle,
@@ -600,7 +599,9 @@ export function usePlaybackController(deps) {
       dispatchAudio({ type: 'USER_PAUSE' });
       api.updateNowPlaying({
         trackId: track.id, title: track.title, artist: track.artist, cover: track.cover,
-        position: audioRef.current?.currentTime || time || 0, duration: track.durationSeconds || 0,
+        // Posición leída del store en el momento (no por prop reactiva: el
+        // reloj a 4 Hz re-renderizaba App y re-creaba este callback 4 veces/seg).
+        position: audioRef.current?.currentTime || usePlayerStore.getState().time || 0, duration: track.durationSeconds || 0,
         playing: false, deviceName: navigator.userAgent.includes('Mobile') ? 'Móvil' : 'Web', quality: '',
       });
       return;
@@ -610,13 +611,13 @@ export function usePlaybackController(deps) {
     } else {
       dispatchAudio({ type: 'USER_PLAY' });
     }
-    const pos = getMachine().sessionPosition ?? getMachine().livePosition ?? time ?? 0;
+    const pos = getMachine().sessionPosition ?? getMachine().livePosition ?? usePlayerStore.getState().time ?? 0;
     api.updateNowPlaying({
       trackId: track.id, title: track.title, artist: track.artist, cover: track.cover,
       position: pos, duration: track.durationSeconds || 0,
       playing: true, deviceName: navigator.userAgent.includes('Mobile') ? 'Móvil' : 'Web', quality: '',
     });
-  }, [track, getMachine, playingRef, playing, dispatchAudio, audioRef, time]);
+  }, [track, getMachine, playingRef, playing, dispatchAudio, audioRef]);
 
   const orderIds = queue.length ? queue : (track ? [track.id] : []);
 

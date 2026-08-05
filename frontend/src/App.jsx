@@ -30,6 +30,7 @@ import { usePlaylistImport } from './hooks/usePlaylistImport.js';
 import { useAudioOutput } from './hooks/useAudioOutput.js';
 import { useTrackPrebuffer } from './hooks/useTrackPrebuffer.js';
 import { useLibraryStore } from './store/libraryStore.js';
+import { usePlayerStore } from './store/playerStore.js';
 import { Icon } from './Icons.jsx';
 import { AuthScreen } from './screens/AuthScreen.jsx';
 import { HomeTab } from './tabs/HomeTab.jsx';
@@ -138,7 +139,7 @@ export default function App() {
   const {
     track, setTrack,
     playing, setPlaying,
-    time, setTime,
+    setTime,
     dur, setDur,
     vol, setVol,
     expanded, setExpanded,
@@ -287,7 +288,7 @@ export default function App() {
   // las acciones del OS leen el controlador desde mediaCtlRef al ejecutarse.
   const mediaCtlRef = useRef({});
   const { setMediaSessionState } = useMediaSession({
-    track, playing, time, dur, vol,
+    track, playing, dur, vol,
     mediaInterrupted, interruptPositionRef,
     audioRef, ctlRef: mediaCtlRef,
     nextTrackActionRef, prevTrackActionRef,
@@ -305,7 +306,7 @@ export default function App() {
     objUrlRef, queueRef, trackRef, radioRef, radioSeedRef, mixSessionRef,
     nextTrackActionRef, prevTrackActionRef, sessionResumeRef,
     systemPausedRef, interruptPositionRef, interruptTrackIdRef,
-    quality, backendDown, downloaded, track, playing, time, vol, queue, shuffle,
+    quality, backendDown, downloaded, track, playing, vol, queue, shuffle,
     setTrack, setPlaying, setTime, setPlaySrc, setLoadingAudio, setMediaInterrupted,
     setQueue, setRecent, setPlayingFrom, showToast, recordPlayStat, setMediaSessionState,
     playErrorRef, consecutiveFailsRef,
@@ -417,8 +418,10 @@ export default function App() {
       } catch {}
       finally { downloadsHydratedRef.current = true; }
     })();
-    // Guardado del estado del reproductor (posición incluida).
-    const save = () => { try { if (persistRef.current.track) localStorage.setItem('velocity.player', JSON.stringify(persistRef.current)); } catch {} };
+    // Guardado del estado del reproductor (posición incluida). La posición se
+    // lee del store en el momento de guardar: suscribirla reactivamente aquí
+    // re-renderizaría App ~4 veces/seg con cada timeupdate.
+    const save = () => { try { const cur = persistRef.current; if (cur.track) localStorage.setItem('velocity.player', JSON.stringify({ ...cur, t: usePlayerStore.getState().time })); } catch {} };
     const iv = setInterval(save, 3000);
     const onHide = () => save();
     window.addEventListener('pagehide', onHide);
@@ -786,8 +789,9 @@ export default function App() {
   const startSelection = (id) => { setSelecting(true); setSelection(new Set(id ? [id] : [])); };
   const clearSelection = () => { setSelecting(false); setSelection(new Set()); };
 
-  const pct = dur > 0 ? (time/dur)*100 : 0;
-  persistRef.current = { track: track || null, queue, t: time };
+  // El % de progreso lo calculan los componentes que lo pintan (PlayerBar,
+  // MiniPlayerBar, ExpandedPlayer) suscritos al store por selector; App no.
+  persistRef.current = { track: track || null, queue };
 
   // Estado de UI actual para el manejador global del botón "retroceder".
   const uiStateRef = useRef({});
@@ -841,7 +845,7 @@ export default function App() {
     { id:'library', label:'Biblioteca', I: Icon.Lib }, { id:'profile', label:'Perfil', I: Icon.User },
   ];
 
-  const playerProps = { track, playing, togglePlay, next, prev, time, dur, seek, vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved: track ? favs.includes(track.id) : false, toggleFav, T, loadingAudio, nextCover, prevCover };
+  const playerProps = { track, playing, togglePlay, next, prev, dur, seek, vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved: track ? favs.includes(track.id) : false, toggleFav, T, loadingAudio, nextCover, prevCover };
 
   const TabContent = (
     <>
@@ -953,7 +957,7 @@ export default function App() {
 
         {track && (
           <div style={{ padding:'8px var(--pad-page) 6px' }}>
-            <MiniPlayerBar track={track} playing={playing} togglePlay={togglePlay} loadingAudio={loadingAudio} T={T} pct={pct} setExpanded={setExpanded} setMenuTarget={setMenuTarget} next={next} prev={prev} />
+            <MiniPlayerBar track={track} playing={playing} togglePlay={togglePlay} loadingAudio={loadingAudio} T={T} setExpanded={setExpanded} setMenuTarget={setMenuTarget} next={next} prev={prev} />
           </div>
         )}
 

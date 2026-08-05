@@ -64,7 +64,12 @@ export function usePlayerStoreBindings() {
 
   const track = usePlayerStore((s) => s.track);
   const playing = usePlayerStore((s) => s.playing);
-  const time = usePlayerStore((s) => s.time);
+  // El reloj de reproducción (timeupdate ~4 Hz) NO se suscribe aquí: hacerlo
+  // re-renderizaba App y todo su árbol ~4 veces/seg. Quien pinta progreso
+  // (PlayerBar, MiniPlayerBar, ExpandedPlayer) se suscribe por selector; el
+  // resto lee usePlayerStore.getState().time en el momento. `time` se conserva
+  // en la API pública como lectura puntual (NO reactiva).
+  const time = usePlayerStore.getState().time;
   const dur = usePlayerStore((s) => s.duration);
   const vol = usePlayerStore((s) => s.volume);
   const expanded = usePlayerStore((s) => s.expanded);

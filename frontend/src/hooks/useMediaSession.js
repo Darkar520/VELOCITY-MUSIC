@@ -16,6 +16,7 @@
 import { useEffect, useRef } from 'react';
 import { trackById } from '../catalog.js';
 import { mediaSessionPlaybackState } from '../audioContinuity.js';
+import { usePlayerStore } from '../store/playerStore.js';
 
 /**
  * @param {object} p
@@ -25,7 +26,7 @@ import { mediaSessionPlaybackState } from '../audioContinuity.js';
  *   poder entregarle setMediaSessionState — igual que hacía App.jsx.
  */
 export function useMediaSession({
-  track, playing, time, dur, vol,
+  track, playing, dur, vol,
   mediaInterrupted, interruptPositionRef,
   audioRef, ctlRef,
   nextTrackActionRef, prevTrackActionRef,
@@ -146,20 +147,35 @@ export function useMediaSession({
 
   // ── Posición en la notificación ──
   // Durante interrupción por vídeo: congelar en interruptPosition (no “contar” segundos).
+  // El reloj llega por suscripción IMPERATIVA al store (no por prop reactiva):
+  // una suscripción con selector re-renderizaría el componente padre (App) ~4
+  // veces/seg; aquí la posición se actualiza sin tocar el árbol de React.
   useEffect(() => {
     if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return;
-    if (!(dur > 0 && isFinite(dur))) return;
-    const pos = mediaInterrupted && interruptPositionRef.current != null
-      ? interruptPositionRef.current
-      : time;
-    try {
-      navigator.mediaSession.setPositionState({
-        duration: dur,
-        position: Math.min(Math.max(0, pos), dur),
-        playbackRate: 1,
-      });
-    } catch {}
-  }, [time, dur, mediaInterrupted]); // eslint-disable-line react-hooks/exhaustive-deps
+    const apply = () => {
+      const s = usePlayerStore.getState();
+      const d = s.duration;
+      if (!(d > 0 && isFinite(d))) return;
+      const pos = mediaInterrupted && interruptPositionRef.current != null
+        ? interruptPositionRef.current
+        : s.time;
+      try {
+        navigator.mediaSession.setPositionState({
+          duration: d,
+          position: Math.min(Math.max(0, pos), d),
+          playbackRate: 1,
+        });
+      } catch {}
+    };
+    apply();
+    let lastTime = usePlayerStore.getState().time;
+    const unsub = usePlayerStore.subscribe((s) => {
+      if (s.time === lastTime) return;
+      lastTime = s.time;
+      apply();
+    });
+    return unsub;
+  }, [dur, mediaInterrupted]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return { setMediaSessionState };
 }

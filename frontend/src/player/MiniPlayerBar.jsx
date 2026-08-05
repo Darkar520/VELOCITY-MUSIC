@@ -17,11 +17,15 @@ export function MiniPlayerBar({
   const storePlaying = usePlayerStore((s) => s.playing);
   const storeLoading = usePlayerStore((s) => s.loadingAudio);
   const storeToggle = usePlayerStore((s) => s.togglePlay);
+  // Progreso: esta barra es quien lo pinta, así que se suscribe ella (no App).
+  const storeTime = usePlayerStore((s) => s.time);
+  const storeDur = usePlayerStore((s) => s.duration);
 
   const track = trackProp ?? storeTrack;
   const playing = playingProp ?? storePlaying;
   const loadingAudio = loadingAudioProp ?? storeLoading;
   const togglePlay = typeof togglePlayProp === 'function' ? togglePlayProp : storeToggle;
+  const pctEff = pct ?? (storeDur > 0 ? (storeTime / storeDur) * 100 : 0);
 
   const { dragX, handlers } = useHSwipe({ onLeft: next, onRight: prev, threshold: 60 });
   const isSliding = Math.abs(dragX) > 0;
@@ -35,7 +39,7 @@ export function MiniPlayerBar({
       className="glass"
       style={{ background:`linear-gradient(135deg, ${hex2rgba(T.accent,.1)}, var(--surf-0))`, border:`1px solid ${hex2rgba(T.accent,.28)}`, borderRadius:20, padding:'10px 12px', display:'flex', alignItems:'center', gap:12, cursor:'pointer', boxShadow:`0 8px 28px ${hex2rgba(T.accent,.16)}, 0 2px 8px #0006`, position:'relative', overflow:'hidden', touchAction:'pan-y', userSelect:'none' }}
     >
-      <div style={{ position:'absolute', bottom:0, left:0, height:2.5, width:`${pct || 0}%`, background:grad(T,90), borderRadius:99, boxShadow:`0 0 8px ${T.accent}`, transition:'width .15s linear', zIndex:2 }} />
+      <div style={{ position:'absolute', bottom:0, left:0, height:2.5, width:`${pctEff || 0}%`, background:grad(T,90), borderRadius:99, boxShadow:`0 0 8px ${T.accent}`, transition:'width .15s linear', zIndex:2 }} />
       <div
         style={{
           width:'var(--thumb)', height:'var(--thumb)', flexShrink:0, borderRadius:11, overflow:'hidden',

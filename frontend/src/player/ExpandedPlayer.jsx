@@ -7,10 +7,11 @@ import { FALLBACK_COVER } from '../constants.js';
 import { Icon } from '../Icons.jsx';
 import { EQViz, Spinner, ProgressRing, DownloadAllButton, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider, SettingCard, ToggleRow, ColorField } from '../components.jsx';
 import { cacheTrack, cacheTracks, trackById, allCached, loadMeta, loadPlayerState, saveMeta, normalizeTrack, bestCoverFor } from '../catalog.js';
+import { usePlayerStore } from '../store/playerStore.js';
 import { CoverSwipe } from './CoverSwipe.jsx';
 import { DeviceChip } from './DeviceChip.jsx';
 
-export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next, prev, time, dur, seek,
+export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next, prev, time: timeProp, dur, seek,
   vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved, toggleFav, T, quality, glow, compact, desktop, onAdd, onMenu, loadingAudio, onQueue, outputs, sinkId, setOutput, lyricOffset = 0, setLyricOffset, audioRef, nextCover, prevCover, inLibrary = false }) {
   const [showLyrics, setShowLyrics] = useState(false);
   // iOS no permite controlar el volumen por software (solo botones físicos).
@@ -33,6 +34,11 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
   // el resaltado vaya a saltos. Aquí leemos currentTime a ~15 Hz mientras la
   // letra está abierta y reproduciendo, para un seguimiento fluido y preciso.
   const [lyricTime, setLyricTime] = useState(0);
+  // Reloj de progreso: del store SOLO mientras el player está abierto (si no,
+  // este árbol completo se re-renderizaría ~4 veces/seg estando oculto).
+  // La prop `time` (tests / llamantes explícitos) tiene prioridad.
+  const sTime = usePlayerStore((s) => (open ? s.time : null));
+  const time = timeProp ?? sTime ?? 0;
   // ~5 Hz basta para resaltar línea; 15 Hz re-renderizaba todo el player (lag).
   useEffect(() => {
     if (!showLyrics && !desktop) return;
@@ -170,7 +176,11 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
   if (!track) return null;
   const pct = dur > 0 ? (time / dur) * 100 : 0;
   const glowF = glow / 100;
-  const art = desktop ? 'clamp(170px, 32vh, 300px)' : 'min(80vw, 360px)';
+  // La carátula debe caber por ANCHO y por ALTO. Antes en móvil solo se acotaba
+  // por ancho (80vw), así que en apaisado o en pantallas bajas desbordaba y
+  // empujaba los controles fuera de la vista. El término 46vh lo impide sin
+  // reducir el tamaño en vertical, que es el caso habitual.
+  const art = desktop ? 'clamp(170px, 32vh, 300px)' : 'min(80vw, 46vh, 360px)';
   const pad = compact ? 'calc(env(safe-area-inset-top, 14px) + 18px) 22px calc(env(safe-area-inset-bottom, 16px) + 26px)' : '52px 26px 36px';
 
   const panelBg = desktop
@@ -194,7 +204,9 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
 
   // ─────────── LAYOUT DESKTOP (estilo Spotify, pantalla completa) ───────────
   if (desktop) {
-    const dArt = 'min(46vh, 440px)';
+    // --cover-xl usa vmin: se adapta al lado MENOR de la ventana, así que la
+    // carátula grande sigue cabiendo al angostar o achatar la ventana.
+    const dArt = 'var(--cover-xl)';
     const Transport = (
       <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:26 }}>
         <button aria-label="Aleatorio" onClick={() => setShuffle(s=>!s)} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer', opacity: shuffle ? 1 : .4 }}><Icon.Shuf c={shuffle ? T.accent : 'var(--txt-1)'} sz={19} /></button>
