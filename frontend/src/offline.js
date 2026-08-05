@@ -5,7 +5,20 @@
 const DB_NAME = 'velocity-offline';
 const STORE = 'tracks';
 const LYRICS_STORE = 'lyrics';
+// v3: store de metadatos SEPARADO del audio. Leer metadatos ya no obliga a
+// deserializar los blobs: `tracks` pesa cientos de MB, `meta` unos pocos KB.
+const META_STORE = 'meta';
 let _db = null;
+
+/** Error de cuota agotada: el lote debe pararse, no seguir fallando pista a pista. */
+export class QuotaError extends Error {
+  constructor(message = 'Almacenamiento lleno') { super(message); this.name = 'QuotaError'; }
+}
+
+function isQuotaError(err) {
+  const n = err && (err.name || '');
+  return n === 'QuotaExceededError' || n === 'NS_ERROR_DOM_QUOTA_REACHED' || n === 'QuotaError';
+}
 
 /**
  * Marca el almacenamiento como PERSISTENTE.
@@ -30,12 +43,15 @@ export async function ensurePersistentStorage() {
 function openDB() {
   if (_db) return Promise.resolve(_db);
   return new Promise((resolve, reject) => {
-    // v2: store de letras sincronizadas para offline (solo biblioteca).
-    const req = indexedDB.open(DB_NAME, 2);
+    // v2: letras sincronizadas. v3: store `meta` (metadatos sin blobs).
+    // La migración es ADITIVA: nunca se toca ni se borra nada de `tracks`, así
+    // que una biblioteca ya descargada no corre riesgo al actualizar.
+    const req = indexedDB.open(DB_NAME, 3);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, { keyPath: 'id' });
       if (!db.objectStoreNames.contains(LYRICS_STORE)) db.createObjectStore(LYRICS_STORE, { keyPath: 'id' });
+      if (!db.objectStoreNames.contains(META_STORE)) db.createObjectStore(META_STORE, { keyPath: 'id' });
     };
     req.onsuccess = () => { _db = req.result; resolve(_db); };
     req.onerror = () => reject(req.error);
@@ -150,6 +166,7 @@ export async function deleteLyrics(id) {
 
 export async function saveTrack(meta, blob) {
   const db = await openDB();
+  if (!blob || !blob.size) throw new Error('blob vacío');
   // Cachear la carátula como data URL (vía proxy mismo-origen) para verla sin
   // conexión. Best-effort: si falla, se guarda la meta con su URL original.
   let m = meta;
@@ -157,12 +174,28 @@ export async function saveTrack(meta, blob) {
     const dataUrl = await coverToDataUrl(meta && meta.cover);
     if (dataUrl && dataUrl.startsWith('data:')) m = { ...meta, cover: dataUrl };
   } catch {}
-  await new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE, 'readwrite');
-    tx.objectStore(STORE).put({ id: m.id, meta: m, blob, at: Date.now() });
-    tx.oncomplete = () => resolve(true);
-    tx.onerror = () => reject(tx.error);
-  });
+  const at = Date.now();
+  // `size`/`type` quedan registrados para poder VERIFICAR la integridad después:
+  // sin ellos una descarga truncada (blob a medias) es indistinguible de una
+  // completa y se reproduce cortada.
+  const size = blob.size;
+  const type = blob.type || '';
+  const stores = db.objectStoreNames.contains(META_STORE) ? [STORE, META_STORE] : [STORE];
+  try {
+    await new Promise((resolve, reject) => {
+      // Una sola transacción para audio + metadatos: o entran los dos, o
+      // ninguno. Así `meta` nunca anuncia una descarga que no existe.
+      const tx = db.transaction(stores, 'readwrite');
+      tx.objectStore(STORE).put({ id: m.id, meta: m, blob, at, size, type });
+      if (stores.length > 1) tx.objectStore(META_STORE).put({ id: m.id, meta: m, at, size, type });
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  } catch (err) {
+    if (isQuotaError(err)) throw new QuotaError();
+    throw err;
+  }
   return m;
 }
 
@@ -210,9 +243,15 @@ export async function backfillCovers() {
     const rec = await getRecord(id);
     if (!rec || !rec.meta) continue;
     rec.meta = { ...rec.meta, cover: dataUrl };
+    const stores = db.objectStoreNames.contains(META_STORE) ? [STORE, META_STORE] : [STORE];
     await new Promise((resolve) => {
-      const tx = db.transaction(STORE, 'readwrite');
+      // Mantener `meta` en sync: si solo se actualizara `tracks`, el camino
+      // rápido seguiría devolviendo la carátula vieja.
+      const tx = db.transaction(stores, 'readwrite');
       tx.objectStore(STORE).put(rec);
+      if (stores.length > 1) {
+        tx.objectStore(META_STORE).put({ id: rec.id, meta: rec.meta, at: rec.at || 0, size: rec.size ?? (rec.blob && rec.blob.size) ?? 0, type: rec.type ?? '' });
+      }
       tx.oncomplete = () => resolve();
       tx.onerror = () => resolve();
     });
@@ -231,16 +270,29 @@ export async function getRecord(id) {
   });
 }
 
+/**
+ * Blob del audio, VERIFICADO.
+ *
+ * Si el tamaño real no coincide con el registrado, la descarga está truncada
+ * (corte de red a media escritura): se devuelve null para que la app la trate
+ * como no descargada y la vuelva a bajar, en vez de reproducir audio cortado.
+ */
 export async function getBlob(id) {
   const r = await getRecord(id);
-  return r ? r.blob : null;
+  if (!r || !r.blob || !r.blob.size) return null;
+  if (Number.isFinite(r.size) && r.size > 0 && r.blob.size !== r.size) return null;
+  return r.blob;
 }
 
 export async function deleteTrack(id) {
   const db = await openDB();
+  const stores = db.objectStoreNames.contains(META_STORE) ? [STORE, META_STORE] : [STORE];
   return new Promise((resolve) => {
-    const tx = db.transaction(STORE, 'readwrite');
+    // Borrar de los dos stores a la vez: si `meta` sobreviviera, la app creería
+    // que la pista sigue descargada y no volvería a ofrecerla.
+    const tx = db.transaction(stores, 'readwrite');
     tx.objectStore(STORE).delete(id);
+    if (stores.length > 1) tx.objectStore(META_STORE).delete(id);
     tx.oncomplete = () => resolve(true);
     tx.onerror = () => resolve(false);
   });
@@ -283,11 +335,47 @@ function eachRecord(db, fn) {
   });
 }
 
+/** Lee todos los registros del store ligero `meta` (sin tocar los blobs). */
+function readMetaStore(db) {
+  return new Promise((resolve) => {
+    if (!db.objectStoreNames.contains(META_STORE)) { resolve(null); return; }
+    try {
+      const tx = db.transaction(META_STORE, 'readonly');
+      const rq = tx.objectStore(META_STORE).getAll();
+      rq.onsuccess = () => resolve(rq.result || []);
+      rq.onerror = () => resolve(null);
+    } catch { resolve(null); }
+  });
+}
+
+/**
+ * Metadatos de todas las descargas.
+ *
+ * Camino rápido: el store `meta` (unos KB). Si está vacío pero hay audio
+ * guardado —biblioteca creada antes de v3—, se recorre `tracks` una única vez y
+ * se rellena `meta` en segundo plano; a partir del siguiente arranque el camino
+ * rápido ya sirve. Nunca se borra nada de `tracks`.
+ */
 export async function listMetas() {
   try {
     const db = await openDB();
+    const fromMeta = await readMetaStore(db);
+    if (fromMeta && fromMeta.length) return fromMeta.map((r) => r.meta).filter(Boolean);
     const out = [];
-    await eachRecord(db, (r) => { if (r && r.meta) out.push(r.meta); });
+    const toMigrate = [];
+    await eachRecord(db, (r) => {
+      if (r && r.meta) {
+        out.push(r.meta);
+        toMigrate.push({ id: r.id, meta: r.meta, at: r.at || 0, size: r.size ?? (r.blob && r.blob.size) ?? 0, type: r.type ?? (r.blob && r.blob.type) ?? '' });
+      }
+    });
+    if (toMigrate.length && db.objectStoreNames.contains(META_STORE)) {
+      try {
+        const tx = db.transaction(META_STORE, 'readwrite');
+        const os = tx.objectStore(META_STORE);
+        toMigrate.forEach((rec) => os.put(rec));
+      } catch { /* la migración es oportunista: si falla, se reintenta luego */ }
+    }
     return out;
   } catch { return []; }
 }
@@ -312,9 +400,11 @@ export async function downloadsInfo() {
 // Borra TODAS las descargas de una vez.
 export async function deleteAll() {
   const db = await openDB();
+  const stores = db.objectStoreNames.contains(META_STORE) ? [STORE, META_STORE] : [STORE];
   return new Promise((resolve) => {
-    const tx = db.transaction(STORE, 'readwrite');
+    const tx = db.transaction(stores, 'readwrite');
     tx.objectStore(STORE).clear();
+    if (stores.length > 1) tx.objectStore(META_STORE).clear();
     tx.oncomplete = () => resolve(true);
     tx.onerror = () => resolve(false);
   });
@@ -326,7 +416,11 @@ export async function pruneInvalid() {
   const db = await openDB();
   const bad = [];
   await eachRecord(db, (r) => {
-    if (r && r.id && (!r.blob || !r.blob.size)) bad.push(r.id);
+    if (!r || !r.id) return;
+    // Sin blob / vacío → corrupto. Tamaño distinto al registrado → truncado.
+    const empty = !r.blob || !r.blob.size;
+    const truncated = Number.isFinite(r.size) && r.size > 0 && r.blob && r.blob.size !== r.size;
+    if (empty || truncated) bad.push(r.id);
   });
   for (const id of bad) await deleteTrack(id);
   return bad;
