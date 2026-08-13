@@ -69,5 +69,32 @@ describe('useLibrarySync account isolation', () => {
     await waitFor(() => expect(useLibraryStore.getState().favs).toEqual(['account-b']));
 
     expect(useLibraryStore.getState().favs).toEqual(['account-b']);
-  });
-});
+      });
+
+      it('offline: hidrata desde la caché local sin llamar a la red y conserva la biblioteca', async () => {
+        const cached = {
+          favs: ['offline-1', 'offline-2'],
+          playlists: [{ id: 'p-off', name: 'Offline PL', trackIds: ['offline-1'] }],
+          savedAlbums: [{ albumId: 'al-off', name: 'Album Off', trackIds: [] }],
+          savedPlaylists: [{ playlistId: 'sp-off', name: 'Guardada Off', trackIds: [] }],
+          recent: ['offline-1'],
+          tracks: [{ id: 'offline-1', title: 'T1', artist: 'A1', cover: 'https://cdn/x.jpg' }],
+        };
+        localStorage.setItem('velocity.lib.a@example.com', JSON.stringify(cached));
+
+        renderHook(() => useLibrarySync({ authed: true, email: 'a@example.com', offline: true }));
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+
+        const s = useLibraryStore.getState();
+        expect(s.favs).toEqual(['offline-1', 'offline-2']);
+        expect(s.playlists).toHaveLength(1);
+        expect(s.savedAlbums).toHaveLength(1);
+        expect(s.savedPlaylists).toHaveLength(1);
+        // Sin red: ningún fetch a la API.
+        expect(api.favorites).not.toHaveBeenCalled();
+        expect(api.playlists).not.toHaveBeenCalled();
+        expect(api.history).not.toHaveBeenCalled();
+        expect(api.savedAlbums).not.toHaveBeenCalled();
+        expect(api.savedPlaylists).not.toHaveBeenCalled();
+      });
+    });

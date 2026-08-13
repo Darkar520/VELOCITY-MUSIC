@@ -5,7 +5,7 @@ import { createApp } from './src/app.js';
 import { StreamCache } from './src/services/streamCache.js';
 import { createLimiter, createInflight } from './src/lib/concurrency.js';
 import { normalizeText } from './src/lib/normalize.js';
-import { resolveActiveMode } from './src/services/resolutionMode.js';
+import { resolveActiveMode, createModeWatchdog } from './src/services/resolutionMode.js';
 import { probeYtDlp, createYtDlpExtractor, createYtDlpCatalog, createSoundCloudCatalog, createSoundCloudExtractor, YT_DLP_BIN_DIR, resolveYtDlpBin } from './src/extractors/ytdlp.js';
 import { startYtDlpAutoUpdate } from './src/services/ytdlpUpdater.js';
 import { createYTMusicCatalog, createYTMusicArtist, createYTMusicAlbum, createYTMusicLyrics, createYTMusicSearchAll, createYTMusicRadio, createYTMusicSong, readyPromise as ytMusicReadyPromise } from './src/extractors/ytmusic.js';
@@ -153,6 +153,24 @@ export async function bootstrap() {
   // Una sola sonda; refreshMode la realiza internamente y actualiza activeMode.
   const { notice } = await resolveActiveMode({ requested: 'full' }, probeYtDlp);
   activeMode = notice ? 'degraded' : 'full';
+
+  // ── Watchdog de auto-recuperación del modo degradado ──
+  // Si la sonda del arranque falló (yt-dlp en medio de un update, red caída,
+  // cluster con varios workers arrancando a la vez en Windows), el modo quedaba
+  // 'degraded' hasta reiniciar el backend — y en degraded NINGUNA canción de
+  // streaming se reproduce (solo las descargadas). Este watchdog re-ejecuta la
+  // sonda mientras el modo siga degradado y sube a 'full' automáticamente en
+  // cuanto yt-dlp responde, sin intervención manual.
+  const modeWatchdog = createModeWatchdog({
+    probe: probeYtDlp,
+    isDegraded: () => activeMode === 'degraded',
+    onRecover: () => {
+      activeMode = 'full';
+      console.log('✅ Watchdog de modo: yt-dlp volvió a estar disponible — modo full restaurado sin reinicio.');
+    },
+    intervalMs: Number(process.env.MODE_WATCHDOG_INTERVAL_MS || 60_000),
+  });
+  modeWatchdog.start();
 
   // ── Resolución de audio escalable ──
   // 1) Límite de concurrencia: como máximo RESOLVE_CONCURRENCY procesos yt-dlp

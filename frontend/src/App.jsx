@@ -210,7 +210,7 @@ export default function App() {
   } = useLibraryStoreBindings();
 
   // Hook de sincronización con backend (reemplaza los 3 useEffect de biblio)
-  useLibrarySync({ authed, email });
+  useLibrarySync({ authed, email, offline: backendDown });
 
   // UI transitoria
   const [openPlaylist, setOpenPlaylist] = useState(null);
@@ -472,7 +472,7 @@ export default function App() {
 
   // ── Feed personalizado: extraído a useHomeFeed (reduce ~190 líneas) ──
   // libReadyRef se pasa como booleano en cada render (App re-renderiza al hidratar lib).
-  useHomeFeed({ authed, libReady: libReadyRef.current, downloaded, recentSearches, onboardPrefs });
+  useHomeFeed({ authed, libReady: libReadyRef.current, downloaded, recentSearches, onboardPrefs, offline: backendDown });
 
   // ── Reanudar descargas pendientes al volver a la app ──
   // Antes esto disparaba downloadMany(pendientes) a los 1200 ms de autenticar,

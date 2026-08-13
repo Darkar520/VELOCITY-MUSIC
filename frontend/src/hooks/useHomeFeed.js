@@ -39,7 +39,7 @@ function cap1(s) {
   return (s || '').charAt(0).toUpperCase() + (s || '').slice(1);
 }
 
-export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onboardPrefs }) {
+export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onboardPrefs, offline = false }) {
   const feedSigRef = useRef('');
   const feedTokenRef = useRef(0);
   const prevFeedNonceRef = useRef(0);
@@ -127,6 +127,12 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
     const myToken = ++feedTokenRef.current;
     const alive = () => myToken === feedTokenRef.current;
     setHomeLoading(true);
+
+    // Modo sin conexión: sin red no hay radio ni búsquedas; el feed se sirve
+    // solo con las secciones locales (biblioteca + descargas). Umbral relajado
+    // para que una biblioteca pequeña no desaparezca del feed.
+    const offlineMode = offline || (typeof navigator !== 'undefined' && navigator.onLine === false);
+    const MIN_SECTION_TRACKS = offlineMode ? 4 : 10;
 
     // Pintado instantáneo desde la caché last-good (si no hay filas aún) mientras
     // se regenera en background. Evita el spinner inicial en arranques en frío.
@@ -266,12 +272,12 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
       const pushRich = (section, mixes, { min = 1, prefix } = {}) => {
         if (!alive()) return;
         try {
-          let list = ensureManyMixes(clean(mixes), { min, max: 10, prefix: prefix || section });
+          let list = ensureManyMixes(clean(mixes), { min, max: 10, prefix: prefix || section, minTracks: MIN_SECTION_TRACKS });
           // Filtrar tracks ya usados en secciones anteriores (dedup cross-section)
           list = list.map((m) => ({
             ...m,
             tracks: m.tracks.filter((t) => !usedIDs.has(t.id)),
-          })).filter((m) => m.tracks.length >= 10);
+          })).filter((m) => m.tracks.length >= MIN_SECTION_TRACKS);
           if (!list.length) return;
           addUsed(list);
           sections.push({ section, mixes: list });
@@ -334,6 +340,36 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
           const ex = ensureManyMixes(saved, { min: 2, prefix: saved[0].label || 'Guardada' });
           if (ex.length >= 2) pushRich('Playlists que guardaste', ex, { prefix: 'Guardada' });
         }
+      }
+
+      // ── MODO SIN CONEXIÓN ─────────────────────────────────────────
+      // Las secciones 1 y 2 (Recientes, Me gusta, Descargas) ya se sirvieron
+      // desde el catálogo local. Sin red no hay radio ni búsquedas: se añaden
+      // las playlists propias/guardadas solo con tracks locales y se termina.
+      if (offlineMode) {
+        const localPlaylistMix = (pl) => {
+          const base = tracksFromIds(pl.trackIds || [], 120);
+          if (!base.length) return null;
+          return { label: pl.name || 'Playlist', tracks: capPerArtist(dedupeByTitle(base), 10).slice(0, IDEAL_MIX_TRACKS) };
+        };
+        const plm = clean((pls || []).slice(0, 12).map(localPlaylistMix));
+        if (plm.length >= 2) pushRich('Desde tus playlists', plm, { prefix: 'Playlist' });
+        else if (plm.length === 1) {
+          const ex = ensureManyMixes(plm, { min: 2, prefix: plm[0].label || 'Playlist', minTracks: MIN_SECTION_TRACKS });
+          if (ex.length >= 2) pushRich('Desde tus playlists', ex, { prefix: 'Playlist' });
+        }
+        const spm = clean((savedPls || []).slice(0, 12).map((p) => localPlaylistMix({ name: p.name, trackIds: p.trackIds || [] })));
+        if (spm.length >= 2) pushRich('Playlists que guardaste', spm, { prefix: 'Guardada' });
+        else if (spm.length === 1) {
+          const ex = ensureManyMixes(spm, { min: 2, prefix: spm[0].label || 'Guardada', minTracks: MIN_SECTION_TRACKS });
+          if (ex.length >= 2) pushRich('Playlists que guardaste', ex, { prefix: 'Guardada' });
+        }
+        if (alive()) {
+          feedSigRef.current = sig;
+          setHomeLoading(false);
+        }
+        clearTimeout(safetyTimer);
+        return;
       }
 
       // ═══ 3) HECHO PARA TI — varios radios de semillas ═══
@@ -559,7 +595,14 @@ export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onbo
         clearTimeout(safetyTimer);
       }
     })();
-  }, [authed, libReady, contentSig, feedNonce, setHomeRows, setHomeLoading, setFeedNonce]);
+  }, [authed, libReady, contentSig, feedNonce, offline, setHomeRows, setHomeLoading, setFeedNonce]);
+
+  useEffect(() => {
+    // Al volver la conexión, regenerar el feed (si estaba en modo offline).
+    const onOnline = () => setFeedNonce(useLibraryStore.getState().feedNonce + 1);
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  }, [setFeedNonce]);
 
   useEffect(() => {
     let h = 0;

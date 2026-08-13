@@ -4,6 +4,7 @@ import fc from 'fast-check';
 import {
   resolveActiveMode,
   isFullResolutionAllowed,
+  createModeWatchdog,
 } from '../src/services/resolutionMode.js';
 
 const RUNS = { numRuns: 100 };
@@ -62,4 +63,87 @@ test('Property 47: modo degraded rechaza resolución de pista completa', () => {
     }),
     RUNS,
   );
+});
+
+// Feature: velocity-music-streaming, Property 48: el watchdog de modo recupera
+// el backend de 'degraded' a 'full' automáticamente cuando yt-dlp reaparece.
+test('Property 48: watchdog recupera el modo full sin reinicio', async () => {
+  // Sonda falla N veces y luego empieza a responder.
+  let failing = true;
+  const probe = async () => !failing;
+  let recovered = 0;
+  const mode = { value: 'degraded' };
+  const wd = createModeWatchdog({
+    probe,
+    isDegraded: () => mode.value === 'degraded',
+    onRecover: () => { mode.value = 'full'; recovered += 1; },
+    intervalMs: 5,
+  });
+  wd.start();
+  try {
+    // Primer intento: sonda falla → sigue degradado.
+    await wd.tick();
+    assert.equal(mode.value, 'degraded');
+    assert.equal(recovered, 0);
+
+    // La sonda empieza a responder → el watchdog recupera y se detiene.
+    failing = false;
+    await wd.tick();
+    assert.equal(mode.value, 'full');
+    assert.equal(recovered, 1);
+
+    // Ya en full: el tick ya no sondea (no debe recaerse ni re-saltar).
+    await wd.tick();
+    assert.equal(recovered, 1);
+  } finally {
+    wd.stop();
+  }
+});
+
+test('watchdog: sonda que lanza excepción no rompe la recuperación posterior', async () => {
+  let calls = 0;
+  const probe = async () => {
+    calls += 1;
+    if (calls === 1) throw new Error('boom');
+    return true;
+  };
+  let recovered = 0;
+  const mode = { value: 'degraded' };
+  const wd = createModeWatchdog({
+    probe,
+    isDegraded: () => mode.value === 'degraded',
+    onRecover: () => { mode.value = 'full'; recovered += 1; },
+    intervalMs: 5,
+  });
+  try {
+    await wd.tick(); // excepción → sigue degradado
+    assert.equal(mode.value, 'degraded');
+    await wd.tick(); // segunda sonda OK → full
+    assert.equal(mode.value, 'full');
+    assert.equal(recovered, 1);
+  } finally {
+    wd.stop();
+  }
+});
+
+test('watchdog: el intervalo periódico sondea hasta recuperar (timers reales)', async () => {
+  let attempts = 0;
+  const probe = async () => (++attempts >= 3);
+  let recovered = 0;
+  const mode = { value: 'degraded' };
+  const wd = createModeWatchdog({
+    probe,
+    isDegraded: () => mode.value === 'degraded',
+    onRecover: () => { mode.value = 'full'; recovered += 1; },
+    intervalMs: 10,
+  });
+  wd.start();
+  await new Promise((r) => setTimeout(r, 80));
+  wd.stop();
+  assert.equal(mode.value, 'full');
+  assert.equal(recovered, 1);
+  // No debe seguir disparándose tras recuperarse.
+  const probesAfter = attempts;
+  await new Promise((r) => setTimeout(r, 40));
+  assert.ok(attempts <= probesAfter + 1, 'el watchdog debe detenerse al recuperar');
 });

@@ -93,7 +93,7 @@ async function hydrateSavedAlbums(albums) {
   return result;
 }
 
-export function useLibrarySync({ authed, email = '' } = {}) {
+export function useLibrarySync({ authed, email = '', offline = false } = {}) {
   const cacheKey = libCacheKey(email);
   const didInitRef = useRef(null);
 
@@ -136,8 +136,28 @@ export function useLibrarySync({ authed, email = '' } = {}) {
       && didInitRef.current === requestCacheKey
       && getAuthGeneration() === requestAuthGeneration
     );
+    // ── Sin conexión: NO llamar a la red. Se conserva lo hidratado desde
+    // localStorage y se incorporan las descargas de IndexedDB al catálogo
+    // (para que el feed offline y la reproducción de descargas funcionen).
+    // Antes se intentaban los 5 fetches y solo se actuaba si alguno resolvía;
+    // con el backend inalcanzable cada intento esperaba su timeout y, si la
+    // caché local era la única fuente, la biblioteca quedaba tal cual (OK),
+    // pero sin garantía explícita. Ahora el camino offline es directo.
+    const isOffline = offline || (typeof navigator !== 'undefined' && navigator.onLine === false);
     (async () => {
       try {
+        if (isOffline) {
+          const [downloadedIds, downloadedMetas] = await Promise.all([
+            offline.listIds().catch(() => []),
+            offline.listMetas().catch(() => []),
+          ]);
+          downloadedMetas.forEach(cacheTrack);
+          if (isCurrent()) {
+            const st = useLibraryStore.getState();
+            writeLibCache(st.favs, st.playlists, st.savedAlbums, st.savedPlaylists, st.recent, email);
+          }
+          return;
+        }
         const [fav, pls, hist, albums, savedPls] = await Promise.all([
           api.favorites().catch(() => null),
           api.playlists().catch(() => null),
@@ -236,7 +256,7 @@ export function useLibrarySync({ authed, email = '' } = {}) {
       } catch { /* silent — offline o backend caído */ }
     })();
     return () => { cancel = true; };
-  }, [authed, email, cacheKey]);
+  }, [authed, email, cacheKey, offline]);
 
   // ─── 3. Re-persistir cache cuando el store cambia ────────────────
   const favs = useLibraryStore((s) => s.favs);

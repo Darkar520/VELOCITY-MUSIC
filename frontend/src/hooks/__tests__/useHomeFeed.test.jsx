@@ -80,4 +80,36 @@ describe('useHomeFeed', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
     expect(useLibraryStore.getState().homeLoading).toBe(false);
   });
+
+  it('modo offline: feed 100% local sin llamadas de red, incluso con biblioteca pequeña', async () => {
+    // Biblioteca pequeña (12 tracks): con el umbral relajado (4) las secciones
+    // locales SIEMPRE aparecen offline; antes se filtraban mixes < 10 tracks y
+    // el feed desaparecía.
+    useLibraryStore.getState().setRecent(seedRecent(12));
+    renderHook(() => useHomeFeed({ ...PROPS, offline: true }));
+    await waitFor(() => {
+      const s = useLibraryStore.getState();
+      expect(s.homeRows.length).toBeGreaterThanOrEqual(1);
+      expect(s.homeLoading).toBe(false);
+    });
+    expect(useLibraryStore.getState().homeRows[0].section).toMatch(/reciente/i);
+    // Sin red: jamás se llama a la API.
+    expect(api.radio).not.toHaveBeenCalled();
+    expect(api.search).not.toHaveBeenCalled();
+  });
+
+  it('modo offline con descargas: sección "Listas para offline" presente sin red', async () => {
+    const dl = [];
+    for (let i = 0; i < 8; i++) {
+      const id = `dl${i}`;
+      cacheTrack({ id, title: `Off ${i}`, artist: `Art ${i % 2}`, cover: 'https://cdn/y.jpg', url: 'mock://dl' });
+      dl.push(id);
+    }
+    useLibraryStore.getState().setRecent(seedRecent(10));
+    renderHook(() => useHomeFeed({ ...PROPS, downloaded: new Set(dl), offline: true }));
+    await waitFor(() => expect(useLibraryStore.getState().homeLoading).toBe(false));
+    const sections = useLibraryStore.getState().homeRows.map((s) => s.section);
+    expect(sections.some((s) => /offline/i.test(s))).toBe(true);
+    expect(api.radio).not.toHaveBeenCalled();
+  });
 });

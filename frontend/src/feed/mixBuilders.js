@@ -68,8 +68,8 @@ export function mixesByChunks(tracks, { size = 50, maxMixes = 6, prefix = 'Mix' 
  * 2) si hay 1 mix con muchas tracks → partir por artista / chunks
  * 3) si no alcanza → devolver lo que haya (caller decide renombrar)
  */
-export function ensureManyMixes(mixes, { min = 3, max = 8, prefix = 'Selección' } = {}) {
-  const clean = (mixes || []).filter((m) => m && (m.tracks || []).length >= 10);
+export function ensureManyMixes(mixes, { min = 3, max = 8, prefix = 'Selección', minTracks = 10 } = {}) {
+  const clean = (mixes || []).filter((m) => m && (m.tracks || []).length >= minTracks);
   if (clean.length >= min) return clean.slice(0, max);
 
   if (clean.length === 1) {
@@ -84,7 +84,7 @@ export function ensureManyMixes(mixes, { min = 3, max = 8, prefix = 'Selección'
       return [
         { label: `${prefix} A`, tracks: all.slice(0, mid) },
         { label: `${prefix} B`, tracks: all.slice(mid) },
-      ].filter((m) => m.tracks.length >= 10);
+      ].filter((m) => m.tracks.length >= minTracks);
     }
   }
 
