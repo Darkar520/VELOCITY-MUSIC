@@ -5,7 +5,7 @@ import { fmt, hex2rgba, grad, hiResCover, dedupeByTitle, capPerArtist, slimTrack
 import { usePersisted, useViewport, useDominantColor, useHSwipe } from '../hooks.js';
 import { FALLBACK_COVER } from '../constants.js';
 import { Icon } from '../Icons.jsx';
-import { EQViz, Spinner, ProgressRing, DownloadAllButton, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider, SettingCard, ToggleRow, ColorField } from '../components.jsx';
+import { EQViz, Spinner, ProgressRing, DownloadAllButton, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider, SettingCard, ToggleRow, ColorField } from '../components.jsx';
 import { cacheTrack, cacheTracks, trackById, allCached, loadMeta, loadPlayerState, saveMeta, normalizeTrack, bestCoverFor } from '../catalog.js';
 import { usePlayerStore } from '../store/playerStore.js';
 import { CoverSwipe } from './CoverSwipe.jsx';
@@ -228,24 +228,31 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
           <button aria-label="Cola de reproducción" onClick={onQueue} className="btn-tap glass" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:42, height:42, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}><Icon.Queue c={T.accent} sz={19} /></button>
         </div>
 
-        {/* Cuerpo: portada + letra (bloque centrado con ancho máximo) */}
-        <div style={{ flex:1, minHeight:0, display:'grid', gridTemplateColumns:'minmax(0,1fr) minmax(0,1fr)', gap:'clamp(24px,4vw,56px)', padding:'0 clamp(20px,4vw,48px)', alignItems:'center', justifyContent:'center', width:'100%', maxWidth:1120, margin:'0 auto' }}>
+        {/* Cuerpo: portada + letra (bloque centrado con ancho máximo).
+            minHeight:0 + overflow hidden en la columna de letra evita que la
+            letra desborde hacia la barra de control inferior (S1). */}
+        <div style={{ flex:1, minHeight:0, display:'grid', gridTemplateColumns:'minmax(0,1fr) minmax(0,1fr)', gap:'clamp(24px,4vw,56px)', padding:'0 clamp(20px,4vw,48px)', alignItems:'center', justifyContent:'center', width:'100%', maxWidth:1120, margin:'0 auto', overflow:'hidden' }}>
           {/* Columna izquierda: portada + info */}
           <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', minWidth:0 }}>
             <CoverSwipe next={next} prev={prev} playing={playing} glowF={glowF} ambientRgba={ambientRgba} art={dArt} track={track} loadingAudio={loadingAudio} nextCover={nextCover} prevCover={prevCover} />
-            <div style={{ width:dArt, maxWidth:'100%', display:'flex', alignItems:'center', gap:14, marginTop:6 }}>
-              <div style={{ flex:1, minWidth:0 }}>
+            {/* Info de pista + acciones: apilado con aire vertical para no pegar
+                título/artista a los botones (S1). */}
+            <div style={{ width:dArt, maxWidth:'100%', display:'flex', flexDirection:'column', marginTop:16 }}>
+              <div style={{ minWidth:0, textAlign:'center' }}>
                 <div style={{ fontSize:26, fontWeight:900, color:'var(--txt-0)', letterSpacing:-.6, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title}</div>
-                <div style={{ fontSize:15, color:T.accent, marginTop:5, fontWeight:700, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.artist}</div>
+                <div style={{ fontSize:15, color:T.accent, marginTop:6, fontWeight:700, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.artist}</div>
               </div>
-              <button aria-label="Me gusta" onClick={() => toggleFav(track.id)} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer', padding:6, flexShrink:0 }}><Icon.Heart c={T.accent} filled={faved} sz={26} /></button>
-              {onAdd && <button aria-label="Añadir" onClick={() => onAdd(track.id)} className="btn-tap" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:42, height:42, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}><Icon.Plus c="var(--txt-1)" sz={20} /></button>}
-              {onMenu && <button aria-label="Más" onClick={() => onMenu(track.id)} className="btn-tap" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:42, height:42, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}><Icon.Dots c="var(--txt-1)" sz={20} /></button>}
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:12, marginTop:16 }}>
+                <button aria-label="Me gusta" onClick={() => toggleFav(track.id)} className="btn-tap" style={{ background: faved ? hex2rgba(T.accent,.14) : 'var(--surf-1)', border:`1px solid ${faved ? hex2rgba(T.accent,.4) : 'var(--line)'}`, borderRadius:'50%', width:42, height:42, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}><Icon.Heart c={faved ? T.accent : 'var(--txt-1)'} filled={faved} sz={20} /></button>
+                {onAdd && <button aria-label="Añadir" onClick={() => onAdd(track.id)} className="btn-tap" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:42, height:42, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}><Icon.Plus c="var(--txt-1)" sz={20} /></button>}
+                {onMenu && <button aria-label="Más" onClick={() => onMenu(track.id)} className="btn-tap" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:42, height:42, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}><Icon.Dots c="var(--txt-1)" sz={20} /></button>}
+              </div>
             </div>
           </div>
 
-          {/* Columna derecha: letra */}
-          <div style={{ height:'min(72vh, 620px)', display:'flex', flexDirection:'column', minWidth:0, background:'linear-gradient(180deg, var(--surf-0), transparent)', border:'1px solid var(--line-soft)', borderRadius:24, overflow:'hidden' }}>
+          {/* Columna derecha: letra. height 100% + maxHeight evita que la letra
+              desborde hacia la barra de control en pantallas bajas (S1). */}
+          <div style={{ alignSelf:'stretch', maxHeight:'min(72vh, 620px)', display:'flex', flexDirection:'column', minWidth:0, minHeight:0, background:'linear-gradient(180deg, var(--surf-0), transparent)', border:'1px solid var(--line-soft)', borderRadius:24, overflow:'hidden' }}>
             <div style={{ display:'flex', alignItems:'center', gap:9, padding:'18px 24px 12px', flexShrink:0 }}>
               <Icon.Mic c={T.accent} sz={18} /><span style={{ fontSize:14, fontWeight:900, color:'var(--txt-0)' }}>Letra</span>
               {lyricState.status==='ok' && lyricState.synced.length>0 && setLyricOffset && (
@@ -273,29 +280,25 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
           </div>
         </div>
 
-        {/* Barra inferior de control */}
-        <div style={{ flexShrink:0, padding:'14px clamp(24px,5vw,64px) 26px', display:'flex', flexDirection:'column', gap:12 }}>
-          <div style={{ display:'flex', alignItems:'center', gap:14 }}>
-            <span style={{ fontSize:11, color:'var(--txt-2)', fontFamily:'monospace', fontWeight:700, width:40, textAlign:'right' }}>{fmt(time)}</span>
-            <div style={{ position:'relative', flex:1, height:16, display:'flex', alignItems:'center' }}>
+        {/* Barra inferior de control — sin vista previa duplicada (S1): el título
+            ya está en la columna izquierda; aquí solo progress + transport centrado
+            + volumen a la derecha, apilados con aire para no solaparse. */}
+        <div style={{ flexShrink:0, padding:'16px clamp(24px,5vw,64px) 28px', display:'flex', flexDirection:'column', gap:18 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:16 }}>
+            <span style={{ fontSize:11, color:'var(--txt-2)', fontFamily:'monospace', fontWeight:700, width:44, textAlign:'right' }}>{fmt(time)}</span>
+            <div style={{ position:'relative', flex:1, height:18, display:'flex', alignItems:'center' }}>
               <div style={{ position:'absolute', left:0, right:0, height:5, background:'var(--surf-2)', borderRadius:99 }} />
               <div style={{ position:'absolute', left:0, top:'50%', transform:'translateY(-50%)', height:5, width:`${pct}%`, background:grad(T,90), borderRadius:99, boxShadow:`0 0 10px ${hex2rgba(T.accent,.6)}`, transition:'width .12s linear' }} />
               <input type="range" min="0" max={dur||100} step="0.1" value={time} aria-label="Progreso" onChange={e => seek(+e.target.value)} style={{ position:'absolute', inset:0, width:'100%', height:'100%', margin:0, opacity:0, cursor:'pointer' }} />
             </div>
-            <span style={{ fontSize:11, color:'var(--txt-2)', fontFamily:'monospace', fontWeight:700, width:40 }}>{fmt(dur)}</span>
+            <span style={{ fontSize:11, color:'var(--txt-2)', fontFamily:'monospace', fontWeight:700, width:44, textAlign:'left' }}>{fmt(dur)}</span>
           </div>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr auto 1fr', alignItems:'center', gap:16 }}>
-            <div style={{ display:'flex', alignItems:'center', gap:12, minWidth:0 }}>
-              <CoverImg src={bestCoverFor(track.id, track.cover)} alt="" radius={12} size={128} style={{ width:52, height:52, flexShrink:0, boxShadow:`0 4px 14px ${hex2rgba(T.accent,.3)}` }} />
-              <div style={{ minWidth:0 }}>
-                <div style={{ fontSize:13, fontWeight:800, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title}</div>
-                <div style={{ fontSize:11, color:'var(--txt-2)', marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.artist}</div>
-              </div>
-            </div>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:24, minHeight:56 }}>
+            <div style={{ width:150, display:'flex', alignItems:'center', justifyContent:'flex-start' }} />
             {Transport}
-            <div style={{ display:'flex', alignItems:'center', justifyContent:'flex-end', gap:12, minWidth:0 }}>
+            <div style={{ width:150, display:'flex', alignItems:'center', justifyContent:'flex-end', gap:12, minWidth:0 }}>
               <DeviceChip outputs={outputs} sinkId={sinkId} setOutput={setOutput} T={T} />
-              {!isIOS && <div style={{ display:'flex', alignItems:'center', gap:8, width:150 }}><Icon.Vol c="var(--txt-2)" sz={17} /><div style={{ flex:1 }}><RangeSlider value={vol} min={0} max={1} step={0.01} onChange={setVol} accent={T.accent} ariaLabel="Volumen" /></div></div>}
+              {!isIOS && <div style={{ display:'flex', alignItems:'center', gap:8, flex:1 }}><Icon.Vol c="var(--txt-2)" sz={17} /><div style={{ flex:1 }}><RangeSlider value={vol} min={0} max={1} step={0.01} onChange={setVol} accent={T.accent} ariaLabel="Volumen" /></div></div>}
             </div>
           </div>
         </div>
@@ -351,17 +354,21 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
           </div>
         )}
 
-        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16, flexShrink:0 }}>
-          <div style={{ minWidth:0, flex:1 }}>
+        {/* Título + acciones: apilado con aire (S1) para que en pantallas bajas no
+            se peguen al progress. */}
+        <div style={{ display:'flex', flexDirection:'column', marginBottom:18, flexShrink:0 }}>
+          <div style={{ minWidth:0, textAlign:'center' }}>
             <div style={{ fontSize:21, fontWeight:900, color:'var(--txt-0)', letterSpacing:-.5, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title}</div>
             <div style={{ fontSize:13, color:T.accent, marginTop:5, fontWeight:700 }}>{track.artist}</div>
           </div>
-          <button aria-label={faved?'Quitar de Me gusta':'Añadir a Me gusta'} onClick={() => toggleFav(track.id)} className="btn-tap" style={{ background: faved ? hex2rgba(T.accent,.14) : 'var(--surf-1)', border:`1px solid ${faved ? hex2rgba(T.accent,.4) : 'var(--line)'}`, borderRadius:'50%', width:38, height:38, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', marginRight:10, flexShrink:0 }}><Icon.Heart c={faved ? T.accent : 'var(--txt-1)'} filled={faved} sz={18} /></button>
-          {onAdd && <button aria-label="Añadir" onClick={() => onAdd(track.id)} className="btn-tap" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:38, height:38, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', marginRight:10, flexShrink:0 }}><Icon.Plus c="var(--txt-1)" sz={18} /></button>}
-          {onMenu && <button aria-label="Más" onClick={() => onMenu(track.id)} className="btn-tap" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:38, height:38, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}><Icon.Dots c="var(--txt-1)" sz={18} /></button>}
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:12, marginTop:16 }}>
+            <button aria-label={faved?'Quitar de Me gusta':'Añadir a Me gusta'} onClick={() => toggleFav(track.id)} className="btn-tap" style={{ background: faved ? hex2rgba(T.accent,.14) : 'var(--surf-1)', border:`1px solid ${faved ? hex2rgba(T.accent,.4) : 'var(--line)'}`, borderRadius:'50%', width:40, height:40, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}><Icon.Heart c={faved ? T.accent : 'var(--txt-1)'} filled={faved} sz={18} /></button>
+            {onAdd && <button aria-label="Añadir" onClick={() => onAdd(track.id)} className="btn-tap" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:40, height:40, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}><Icon.Plus c="var(--txt-1)" sz={18} /></button>}
+            {onMenu && <button aria-label="Más" onClick={() => onMenu(track.id)} className="btn-tap" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:40, height:40, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}><Icon.Dots c="var(--txt-1)" sz={18} /></button>}
+          </div>
         </div>
 
-        <div style={{ marginBottom:18, flexShrink:0 }}>
+        <div style={{ marginBottom:20, flexShrink:0 }}>
           <div style={{ position:'relative', height:16, display:'flex', alignItems:'center', marginBottom:4 }}>
             <div style={{ position:'absolute', left:0, right:0, height:5, background:'var(--surf-2)', borderRadius:99 }} />
             <div style={{ position:'absolute', left:0, top:'50%', transform:'translateY(-50%)', height:5, width:`${pct}%`, background:grad(T,90), borderRadius:99, boxShadow:`0 0 10px ${hex2rgba(T.accent,.6)}`, transition:'width .12s linear' }} />
