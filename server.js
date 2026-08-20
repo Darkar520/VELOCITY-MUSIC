@@ -69,7 +69,12 @@ process.on('unhandledRejection', (reason) => {
 export async function bootstrap() {
   // Caché de URLs de audio persistente en disco: sobrevive reinicios y comparte
   // resultados entre peticiones. TTL por entrada (≈4 h) igual que antes.
-  const cache = new StreamCache({ persistPath: path.join(__dirname, 'data', 'stream-cache.json') });
+  // Respeta VELOCITY_DATA_DIR (staging aísla su caché de la de producción,
+  // igual que hace jsondb con velocity-db.json).
+  const cacheDataDir = process.env.VELOCITY_DATA_DIR
+    ? path.resolve(process.env.VELOCITY_DATA_DIR)
+    : path.join(__dirname, 'data');
+  const cache = new StreamCache({ persistPath: path.join(cacheDataDir, 'stream-cache.json') });
   // Volcar la caché a disco al salir para no perder resoluciones recientes.
   for (const sig of ['exit', 'SIGINT', 'SIGTERM']) {
     try { process.on(sig, () => { cache.flush(); if (sig !== 'exit') process.exit(0); }); } catch {}

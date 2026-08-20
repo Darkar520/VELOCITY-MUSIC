@@ -17,7 +17,12 @@ process.env.PORT = process.env.PORT || '3001';
 process.env.VELOCITY_DATA_DIR = process.env.VELOCITY_DATA_DIR || 'data-staging';
 // Nunca usar el cluster/PG de producción en staging por accidente.
 delete process.env.CLUSTER;
-if (!process.env.STAGING_USE_POSTGRES) delete process.env.USE_POSTGRES;
+// Fijar '0' (no borrar): server.js llama a loadEnv() al importarse y un `delete`
+// dejaría la clave ausente, con lo que loadEnv la re-añadiría desde .env y
+// staging intentaría conectarse al PostgreSQL de producción (y moriría si no
+// hay credenciales locales). Con '0' presente, loadEnv la respeta y staging
+// usa su almacén JSON aislado. STAGING_USE_POSTGRES=1 permite PG explícito.
+if (!process.env.STAGING_USE_POSTGRES) process.env.USE_POSTGRES = '0';
 // Secreto de pruebas (no el de producción).
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'staging-only-secret-not-for-prod';
 

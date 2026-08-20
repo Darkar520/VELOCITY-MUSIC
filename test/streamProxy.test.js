@@ -1,11 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fc from 'fast-check';
+import { Writable } from 'node:stream';
 import {
   validateProxyParams,
   buildResponseHeaders,
   classifyUpstreamStatus,
   createStreamProxyHandler,
+  planUpstreamRange,
+  parseContentRange,
+  RANGE_CHUNK_BYTES,
 } from '../src/services/streamProxy.js';
 
 const RUNS = { numRuns: 100 };
@@ -38,6 +42,29 @@ function makeRes() {
       return this;
     },
   };
+}
+
+// res tipo Writable que acumula el cuerpo (para el modo 'full' que hace pipe).
+function makeStreamingRes() {
+  const chunks = [];
+  const res = new Writable({
+    write(chunk, _enc, cb) { chunks.push(Buffer.from(chunk)); cb(); },
+  });
+  res.statusCode = null; res.body = null; res.headers = null; res.headersSent = false;
+  res.status = (c) => { res.statusCode = c; return res; };
+  res.json = (o) => { res.body = o; res.headersSent = true; };
+  res.writeHead = (c, h) => { res.statusCode = c; res.headers = h; res.headersSent = true; };
+  res.chunks = chunks;
+  return res;
+}
+
+// Body web a partir de un Buffer (lo que devuelve fetch de Node).
+function webBody(buf) {
+  return new Response(buf).body;
+}
+
+function contentRange(start, end, total) {
+  return { start, end, total };
 }
 
 // Feature: velocity-music-streaming, Property 17: El proxy preserva las cabeceras
@@ -73,15 +100,17 @@ test('Property 17: preserva cabeceras de audio relevantes', () => {
   );
 });
 
-// Feature: velocity-music-streaming, Property 18: El proxy reenvía la cabecera
-// Range sin modificar.
-// Validates: Requirements 4.2
-test('Property 18: reenvía Range sin modificar', async () => {
+// Feature: velocity-music-streaming, Property 18 (actualizada 2026-08):
+// Los Range ACOTADOS y dentro del límite de chunk se reenvían sin modificar;
+// los abiertos o grandes se acotan a RANGE_CHUNK_BYTES porque googlevideo
+// (cliente android_vr) responde 403 a rangos abiertos y a chunks > ~1 MiB.
+test('Property 18: Range acotado pequeño se reenvía sin modificar', async () => {
   await fc.assert(
     fc.asyncProperty(
       fc.integer({ min: 0, max: 100000 }),
-      fc.integer({ min: 100001, max: 999999 }),
-      async (start, end) => {
+      fc.integer({ min: 1, max: RANGE_CHUNK_BYTES }),
+      async (start, len) => {
+        const end = start + len - 1;
         const rangeValue = `bytes=${start}-${end}`;
         let forwarded;
         const fetchImpl = async (_url, init) => {
@@ -103,6 +132,186 @@ test('Property 18: reenvía Range sin modificar', async () => {
     ),
     RUNS,
   );
+});
+
+// ── planUpstreamRange: casos concretos de la normalización ──
+test('planUpstreamRange: normalización de rangos de cliente', () => {
+  assert.deepEqual(planUpstreamRange(undefined), { kind: 'full' });
+  assert.deepEqual(planUpstreamRange(''), { kind: 'full' });
+  assert.deepEqual(planUpstreamRange('bytes=0-'), {
+    kind: 'bounded', range: `bytes=0-${RANGE_CHUNK_BYTES - 1}`,
+  });
+  assert.deepEqual(planUpstreamRange('bytes=100000-'), {
+    kind: 'bounded', range: `bytes=100000-${100000 + RANGE_CHUNK_BYTES - 1}`,
+  });
+  assert.deepEqual(planUpstreamRange('bytes=0-1023'), { kind: 'passthrough', range: 'bytes=0-1023' });
+  assert.deepEqual(planUpstreamRange(`bytes=0-${RANGE_CHUNK_BYTES - 1}`), {
+    kind: 'passthrough', range: `bytes=0-${RANGE_CHUNK_BYTES - 1}`,
+  });
+  // Un byte más que el chunk → se acota.
+  assert.deepEqual(planUpstreamRange(`bytes=0-${RANGE_CHUNK_BYTES}`), {
+    kind: 'bounded', range: `bytes=0-${RANGE_CHUNK_BYTES - 1}`,
+  });
+  // Rango acotado enorme (petición típica de Chrome) → acotado.
+  assert.deepEqual(planUpstreamRange('bytes=0-15728640'), {
+    kind: 'bounded', range: `bytes=0-${RANGE_CHUNK_BYTES - 1}`,
+  });
+  // Sufijo y basura → passthrough (lo decide el upstream).
+  assert.deepEqual(planUpstreamRange('bytes=-500'), { kind: 'passthrough', range: 'bytes=-500' });
+  assert.deepEqual(planUpstreamRange('garbage'), { kind: 'passthrough', range: 'garbage' });
+});
+
+// Propiedad: para cualquier rango con start válido, el plan nunca deja un
+// rango abierto o mayor que RANGE_CHUNK_BYTES hacia upstream.
+test('planUpstreamRange PBT: nunca envía rangos abiertos ni chunks grandes', () => {
+  fc.assert(
+    fc.property(fc.integer({ min: 0, max: 10 ** 9 }), fc.integer({ min: 0, max: 10 ** 9 }), (a, b) => {
+      const start = Math.min(a, b);
+      const end = Math.max(a, b);
+      for (const range of [`bytes=${start}-`, `bytes=${start}-${end}`]) {
+        const plan = planUpstreamRange(range);
+        assert.ok(plan.kind === 'passthrough' || plan.kind === 'bounded');
+        const m = /^bytes=(\d+)-(\d+)$/.exec(plan.range);
+        assert.ok(m, `el plan debe ser un rango acotado, fue ${plan.range}`);
+        const planStart = Number(m[1]);
+        const planEnd = Number(m[2]);
+        assert.equal(planStart, start, 'el start debe conservarse');
+        assert.ok(planEnd - planStart + 1 <= RANGE_CHUNK_BYTES, 'el chunk no debe superar el límite');
+      }
+    }),
+    RUNS,
+  );
+});
+
+// ── parseContentRange ──
+test('parseContentRange: parses válido, null ante basura', () => {
+  assert.deepEqual(parseContentRange('bytes 0-524287/3810167'), contentRange(0, 524287, 3810167));
+  assert.deepEqual(parseContentRange('bytes */3810167'), { start: null, end: null, total: 3810167 });
+  assert.deepEqual(parseContentRange('bytes 0-524287/*'), { start: 0, end: 524287, total: null });
+  assert.equal(parseContentRange('bytes 5-3/10'), null);
+  assert.equal(parseContentRange('garbage'), null);
+  assert.equal(parseContentRange(null), null);
+});
+
+// ── Handler: rangos abiertos del navegador → chunk acotado upstream ──
+test('Handler: bytes=0- del navegador se acota a un chunk y se responde 206', async () => {
+  let forwarded;
+  const fetchImpl = async (_url, init) => {
+    forwarded = init.headers.Range;
+    return {
+      status: 206,
+      headers: new Map([
+        ['content-type', 'audio/webm'],
+        ['content-range', `bytes 0-${RANGE_CHUNK_BYTES - 1}/3000000`],
+        ['content-length', String(RANGE_CHUNK_BYTES)],
+      ]),
+      body: null,
+    };
+  };
+  const handler = createStreamProxyHandler({ resolveUrl: async () => ({ url: 'https://cdn/audio' }), fetchImpl });
+  const res = makeRes();
+  await handler({ query: { artist: 'A', title: 'B' }, headers: { range: 'bytes=0-' } }, res);
+  assert.equal(forwarded, `bytes=0-${RANGE_CHUNK_BYTES - 1}`);
+  assert.equal(res.statusCode, 206);
+});
+
+// ── Handler: seek del navegador (bytes=N-) → chunk acotado desde N ──
+test('Handler: seek bytes=1500000- se acota a un chunk desde 1500000', async () => {
+  let forwarded;
+  const fetchImpl = async (_url, init) => {
+    forwarded = init.headers.Range;
+    return {
+      status: 206,
+      headers: new Map([
+        ['content-type', 'audio/webm'],
+        ['content-range', `bytes 1500000-${1500000 + RANGE_CHUNK_BYTES - 1}/3000000`],
+      ]),
+      body: null,
+    };
+  };
+  const handler = createStreamProxyHandler({ resolveUrl: async () => ({ url: 'https://cdn/audio' }), fetchImpl });
+  const res = makeRes();
+  await handler({ query: { artist: 'A', title: 'B' }, headers: { range: 'bytes=1500000-' } }, res);
+  assert.equal(forwarded, `bytes=1500000-${1500000 + RANGE_CHUNK_BYTES - 1}`);
+  assert.equal(res.statusCode, 206);
+});
+
+// ── Handler: sin Range (descargas/prebuffer) → encadena chunks y responde 200
+// con el cuerpo completo ──
+test('Handler: sin Range encadena chunks acotados y entrega el cuerpo completo como 200', async () => {
+  const chunk = RANGE_CHUNK_BYTES;
+  const total = 2 * chunk + 1234;
+  const bodies = [Buffer.alloc(chunk, 1), Buffer.alloc(chunk, 2), Buffer.alloc(1234, 3)];
+  const fetchedRanges = [];
+  const fetchImpl = async (_url, init) => {
+    const range = init.headers.Range;
+    fetchedRanges.push(range);
+    const m = /^bytes=(\d+)-(\d+)$/.exec(range);
+    const start = Number(m[1]);
+    const end = Number(m[2]);
+    const i = Math.floor(start / chunk);
+    const body = bodies[i];
+    const realEnd = Math.min(end, start + body.length - 1);
+    return {
+      status: 206,
+      headers: new Map([
+        ['content-type', 'audio/webm'],
+        ['content-range', `bytes ${start}-${realEnd}/${total}`],
+        ['content-length', String(body.length)],
+      ]),
+      body: webBody(body),
+    };
+  };
+  const handler = createStreamProxyHandler({ resolveUrl: async () => ({ url: 'https://cdn/audio' }), fetchImpl });
+  const res = makeStreamingRes();
+  await handler({ query: { artist: 'A', title: 'B' }, headers: {} }, res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(fetchedRanges.length, 3, '3 chunks para 2×512KiB + 1234B');
+  assert.equal(fetchedRanges[0], `bytes=0-${chunk - 1}`);
+  assert.equal(fetchedRanges[1], `bytes=${chunk}-${2 * chunk - 1}`);
+  assert.equal(fetchedRanges[2], `bytes=${2 * chunk}-${3 * chunk - 1}`);
+  const joined = Buffer.concat(res.chunks);
+  assert.equal(joined.length, total, 'el cuerpo entregado debe ser el archivo completo');
+});
+
+// ── Handler: sin Range y upstream que ignora Range (CDN normal) → 200 tal cual ──
+test('Handler: sin Range con upstream 200 se sirve tal cual (compatibilidad)', async () => {
+  let fetchCount = 0;
+  const fetchImpl = async () => {
+    fetchCount += 1;
+    return { status: 200, headers: new Map([['content-type', 'audio/webm']]), body: null };
+  };
+  const handler = createStreamProxyHandler({ resolveUrl: async () => ({ url: 'https://cdn/audio' }), fetchImpl });
+  const res = makeRes();
+  await handler({ query: { artist: 'A', title: 'B' }, headers: {} }, res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(fetchCount, 1, 'un solo fetch cuando el upstream responde 200');
+});
+
+// ── Handler: 403 en el primer chunk sin Range → reintento forceRefresh ──
+test('Handler: 403 en modo full dispara reintento con forceRefresh', async () => {
+  let resolveCount = 0;
+  let forced = false;
+  const resolveUrl = async (_params, opts = {}) => {
+    resolveCount += 1;
+    if (opts.forceRefresh) forced = true;
+    return { url: resolveCount === 1 ? 'https://cdn/expired' : 'https://cdn/fresh' };
+  };
+  const fetchImpl = async (url) => ({
+    status: url.includes('expired') ? 403 : 206,
+    headers: new Map([
+      ['content-type', 'audio/webm'],
+      ['content-range', `bytes 0-${RANGE_CHUNK_BYTES - 1}/${RANGE_CHUNK_BYTES}`],
+    ]),
+    body: url.includes('expired') ? null : webBody(Buffer.alloc(RANGE_CHUNK_BYTES, 7)),
+  });
+  const handler = createStreamProxyHandler({ resolveUrl, fetchImpl, timeoutMs: 5000 });
+  const res = makeStreamingRes();
+  await handler({ query: { artist: 'A', title: 'B' }, headers: {} }, res);
+  assert.equal(resolveCount, 2);
+  assert.equal(forced, true);
+  assert.equal(res.statusCode, 200);
+  assert.equal(Buffer.concat(res.chunks).length, RANGE_CHUNK_BYTES);
 });
 
 // Feature: velocity-music-streaming, Property 19: Validación de entrada del
@@ -184,10 +393,7 @@ test('Property 20: mapeo de fallos upstream a 502/504', async () => {
 // Validates: Requirements 4.8
 test('Unit: error tras cabeceras enviadas termina sin estado', async () => {
   const res = makeRes();
-  // body cuyo pipe lanzará no aplica aquí; simulamos headersSent + error en fetch
-  // posterior no es trivial. Validamos la rama headersSent del handler:
   res.headersSent = true;
-  // Forzamos un fetch que lanza tras marcar headersSent.
   const handler = createStreamProxyHandler({
     resolveUrl: async () => ({ url: 'https://x' }),
     fetchImpl: async () => {
@@ -195,6 +401,5 @@ test('Unit: error tras cabeceras enviadas termina sin estado', async () => {
     },
   });
   await handler({ query: { artist: 'A', title: 'B' }, headers: {} }, res);
-  // Como headersSent ya era true, no se envía nuevo estado; se termina la respuesta.
   assert.equal(res.ended, true);
 });

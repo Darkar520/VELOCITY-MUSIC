@@ -133,7 +133,9 @@ test('proxy: un redirect legítimo del CDN sí se sigue y sirve el audio', async
   });
   const r = fakeRes();
   await handler(REQ, r);
-  assert.equal(r.statusCode, 206);
+  // Sin Range del cliente el proxy agrega los chunks y responde 200 completo
+  // (normalización de Range 2026-08; antes reenviaba el 206 tal cual).
+  assert.equal(r.statusCode, 200);
   assert.deepEqual(visited, [
     'https://cf-media.sndcdn.com/track',
     'https://rr1.googlevideo.com/videoplayback',
