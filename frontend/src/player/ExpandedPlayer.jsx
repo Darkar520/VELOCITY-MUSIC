@@ -218,9 +218,12 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
       </div>
     );
     return (
-      <div style={{ position:'fixed', inset:0, zIndex:90, opacity: open?1:0, pointerEvents: open?'auto':'none', transition:'opacity .38s ease', display:'flex', flexDirection:'column', background:`radial-gradient(120% 90% at 50% -10%, ${ambientRgba(.28 + glowF*.22)}, transparent 58%), var(--bg-0)`, fontFamily:'Inter,sans-serif' }}>
+      <div style={{ position:'fixed', inset:0, zIndex:90, opacity: open?1:0, pointerEvents: open?'auto':'none', transition:'opacity .38s ease', display:'flex', flexDirection:'column', background:'var(--bg-0)', fontFamily:'Inter,sans-serif' }}>
+        {/* Halo ambiental único, fuera del grid de portada/letra: nunca adquiere
+            los límites rectangulares de una columna. */}
+        <div aria-hidden style={{ position:'absolute', top:'12%', left:'5%', width:'min(46vw, 560px)', height:'min(64vh, 560px)', borderRadius:'50%', background:`radial-gradient(ellipse, ${ambientRgba(.18 + glowF*.08)} 0%, ${ambientRgba(.06 + glowF*.03)} 44%, transparent 72%)`, filter:'blur(72px)', opacity: playing ? .55 : .3, pointerEvents:'none', zIndex:0 }} />
         {/* Barra superior */}
-        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'20px 32px', flexShrink:0 }}>
+        <div style={{ position:'relative', zIndex:1, display:'flex', alignItems:'center', justifyContent:'space-between', padding:'20px 32px', flexShrink:0 }}>
           <button aria-label="Minimizar" onClick={onClose} className="btn-tap glass" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:42, height:42, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}><Icon.ChevD c="var(--txt-1)" sz={20} /></button>
           <div style={{ textAlign:'center' }}>
             <div style={{ fontSize:9.5, fontWeight:900, letterSpacing:3, color:'var(--txt-2)', textTransform:'uppercase' }}>Reproduciendo desde</div>
@@ -232,12 +235,12 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
         {/* Cuerpo: portada + letra (bloque centrado con ancho máximo).
             minHeight:0 + overflow hidden en la columna de letra evita que la
             letra desborde hacia la barra de control inferior (S1). */}
-        <div style={{ flex:1, minHeight:0, display:'grid', gridTemplateColumns:'minmax(0,1fr) minmax(0,1fr)', gap:'clamp(24px,4vw,56px)', padding:'0 clamp(20px,4vw,48px)', alignItems:'center', justifyContent:'center', width:'100%', maxWidth:1120, margin:'0 auto', overflowY:'auto', overflowX:'hidden', overscrollBehavior:'contain' }}>
+        <div style={{ position:'relative', zIndex:1, flex:1, minHeight:0, display:'grid', gridTemplateColumns:'minmax(0,1fr) minmax(0,1fr)', gap:'clamp(24px,4vw,56px)', padding:'0 clamp(20px,4vw,48px)', alignItems:'center', justifyContent:'center', width:'100%', maxWidth:1120, margin:'0 auto', overflow:'visible' }}>
           {/* Columna izquierda: solo portada. El título y las acciones se
               renderizan en la fila inferior, junto a los controles, para que
               nunca compitan con la altura disponible del cuerpo. */}
           <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', minWidth:0, minHeight:0 }}>
-            <CoverSwipe next={next} prev={prev} playing={playing} glowF={glowF} ambientRgba={ambientRgba} art={dArt} track={track} loadingAudio={loadingAudio} nextCover={nextCover} prevCover={prevCover} />
+            <CoverSwipe next={next} prev={prev} playing={playing} glowF={glowF} ambientRgba={ambientRgba} art={dArt} track={track} loadingAudio={loadingAudio} nextCover={nextCover} prevCover={prevCover} desktop={desktop} />
           </div>
 
           {/* Columna derecha: letra. height 100% + maxHeight evita que la letra
@@ -273,7 +276,7 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
         {/* Barra inferior de control — el progreso ocupa su propia fila; la
             información y acciones de la pista quedan en la columna izquierda,
             el transporte centrado y la salida/volumen a la derecha. */}
-        <div style={{ flexShrink:0, padding:'16px clamp(24px,5vw,64px) 28px', display:'flex', flexDirection:'column', gap:18 }}>
+        <div style={{ position:'relative', zIndex:1, flexShrink:0, padding:'16px clamp(24px,5vw,64px) 28px', display:'flex', flexDirection:'column', gap:18 }}>
           <div style={{ display:'flex', alignItems:'center', gap:16 }}>
             <span style={{ fontSize:11, color:'var(--txt-2)', fontFamily:'monospace', fontWeight:700, width:44, textAlign:'right' }}>{fmt(time)}</span>
             <div style={{ position:'relative', flex:1, height:18, display:'flex', alignItems:'center' }}>

@@ -29,7 +29,31 @@ import {
   pruneAcknowledgedFavoriteIntents,
 } from '../favoriteOutbox.js';
 import { backfillLibraryLyrics } from '../offlineLibrary.js';
-import * as offline from '../offline.js';
+// El alias NO puede llamarse `offline`: el hook recibe un parámetro booleano
+// con ese mismo nombre y lo sombreaba, así que `offline.listIds()` lanzaba
+// TypeError de forma sincrónica (antes del .catch) y el catch global del
+// efecto se lo tragaba. Consecuencia: en la rama online nunca se ejecutaban
+// el backfill de metadatos, saveMeta() ni writeLibCache(), de modo que la
+// caché local quedaba sin los metadatos de la biblioteca y al abrir la app
+// sin internet no se veía nada.
+import * as offlineDb from '../offline.js';
+
+/**
+ * Lee las descargas de IndexedDB sin poder romper el resto del sync.
+ * Cualquier fallo (o un módulo mockeado a medias) degrada a listas vacías.
+ */
+async function readDownloads() {
+  const safe = async (fn) => {
+    try {
+      return typeof fn === 'function' ? await fn() : [];
+    } catch { return []; }
+  };
+  const [ids, metas] = await Promise.all([
+    safe(offlineDb.listIds),
+    safe(offlineDb.listMetas),
+  ]);
+  return [Array.isArray(ids) ? ids : [], Array.isArray(metas) ? metas : []];
+}
 
 function libCacheKey(email) {
   return 'velocity.lib.' + cacheIdentity(email, getToken());
@@ -147,11 +171,11 @@ export function useLibrarySync({ authed, email = '', offline = false } = {}) {
     (async () => {
       try {
         if (isOffline) {
-          const [downloadedIds, downloadedMetas] = await Promise.all([
-            offline.listIds().catch(() => []),
-            offline.listMetas().catch(() => []),
-          ]);
+          const [, downloadedMetas] = await readDownloads();
           downloadedMetas.forEach(cacheTrack);
+          // Persistir los metadatos en el catálogo: sin esto, un arranque
+          // offline posterior vuelve a quedarse sin títulos ni carátulas.
+          if (downloadedMetas.length) saveMeta();
           if (isCurrent()) {
             const st = useLibraryStore.getState();
             writeLibCache(st.favs, st.playlists, st.savedAlbums, st.savedPlaylists, st.recent, email);
@@ -182,8 +206,17 @@ export function useLibrarySync({ authed, email = '', offline = false } = {}) {
         if (hist !== null)     store.setRecent(hist.map(h => h.trackId));
         if (savedPls !== null) store.setSavedPlaylists(savedPls);
         if (pls !== null) {
+          // `null` = fallo de red en ESA playlist; `[]` = playlist realmente
+          // vacía. Antes ambos casos colapsaban a `[]`, así que un timeout
+          // puntual vaciaba la playlist y el efecto 3 persistía el vacío,
+          // haciendo permanente la pérdida.
+          const cachedPls = store.playlists || [];
           const withTracks = await Promise.all(pls.map(async p => {
-            const ids = await api.playlistTracks(p.id).catch(() => []);
+            const ids = await api.playlistTracks(p.id).catch(() => null);
+            if (ids === null) {
+              const cached = cachedPls.find((c) => c.id === p.id);
+              return { id: p.id, name: p.name, trackIds: cached?.trackIds || [] };
+            }
             return { id: p.id, name: p.name, trackIds: ids };
           }));
           if (isCurrent()) store.setPlaylists(withTracks);
@@ -207,10 +240,7 @@ export function useLibrarySync({ authed, email = '', offline = false } = {}) {
         // Las descargas son otra fuente de verdad: sus metadatos deben entrar
         // al catálogo antes de programar letras, aunque nunca hayan sido parte
         // de favoritos o playlists.
-        const [downloadedIds, downloadedMetas] = await Promise.all([
-          offline.listIds().catch(() => []),
-          offline.listMetas().catch(() => []),
-        ]);
+        const [downloadedIds, downloadedMetas] = await readDownloads();
         downloadedMetas.forEach(cacheTrack);
 
         // Subir metadatos locales al backend (sync cross-device).

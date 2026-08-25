@@ -225,8 +225,11 @@ export function useLibraryActions({ authed, email = '', showToast } = {}) {
     if (trackIds?.length) offlinePack(trackIds);
     try { await api.saveAlbum(album); showToast?.('Álbum guardado en tu biblioteca'); }
     catch {
-      store.unsaveAlbum(album.albumId);
-      showToast?.('No se pudo guardar el álbum');
+      // No revertir el guardado local: un timeout/429/5xx hacía desaparecer
+      // el álbum recién guardado ("a veces los álbumes no aparecen").
+      // Mismo criterio que savePlaylist: se conserva local y se reintenta.
+      setTimeout(() => api.saveAlbum(album).catch(() => {}), 2000);
+      showToast?.('Guardado localmente · se sincronizará después');
     }
   }, [showToast, offlinePack]);
 

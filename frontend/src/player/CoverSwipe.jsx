@@ -5,7 +5,7 @@ import { usePersisted, useViewport, useDominantColor, useHSwipe } from '../hooks
 import { Icon } from '../Icons.jsx';
 import { EQViz, Spinner, ProgressRing, DownloadAllButton, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider, SettingCard, ToggleRow, ColorField } from '../components.jsx';
 
-export function CoverSwipe({ next, prev, playing, glowF, ambientRgba, art, track, loadingAudio, nextCover, prevCover }) {
+export function CoverSwipe({ next, prev, playing, glowF, ambientRgba, art, track, loadingAudio, nextCover, prevCover, desktop = false }) {
   const [dragX, setDragX] = useState(0);
   const [slideTo, setSlideTo] = useState(null); // null | 'next' | 'prev' | 'back'
   const sx = useRef(0), sy = useRef(0), lock = useRef(null), wRef = useRef(0);
@@ -41,8 +41,11 @@ export function CoverSwipe({ next, prev, playing, glowF, ambientRgba, art, track
   const transition = slideTo ? 'transform .34s cubic-bezier(.22,1,.36,1)' : 'none';
   const groupTx = slideTo === 'next' ? -w : slideTo === 'prev' ? w : (slideTo === 'back' ? 0 : dragX);
 
+  // El halo ambiental se dibuja en la capa radial circular de abajo. Evitamos
+  // una sombra con el color dominante aplicada a la caja: sus límites
+  // rectangulares se perciben como un bloque detrás de la carátula.
   const coverFace = (src, alt, size = 512) => (
-    <div style={{ position:'relative', width:'100%', height:'100%', borderRadius:28, overflow:'hidden', boxShadow:`0 24px 70px ${ambientRgba(.30)}` }}>
+    <div style={{ position:'relative', width:'100%', height:'100%', borderRadius:28, overflow:'hidden' }}>
       <CoverImg src={src} alt={alt || ''} radius={28} size={size} style={{ width:'100%', height:'100%' }} />
       <div style={{ position:'absolute', inset:0, borderRadius:28, boxShadow:'inset 0 1px 0 #ffffff22, inset 0 0 0 1px #ffffff10', pointerEvents:'none' }} />
     </div>
@@ -50,8 +53,8 @@ export function CoverSwipe({ next, prev, playing, glowF, ambientRgba, art, track
 
   return (
     <div style={{ position:'relative', display:'flex', justifyContent:'center', alignItems:'center', marginBottom:22, flexShrink:0, touchAction:'pan-y' }}>
-      {/* Fondo difuminado suave (edge-to-edge, radial, sin bordes) */}
-      <div aria-hidden className="breathe" style={{ position:'absolute', width:`calc(${art} * 1.9)`, height:`calc(${art} * 1.9)`, top:'50%', left:'50%', borderRadius:'50%', background:`radial-gradient(circle, ${ambientRgba(.8)}, ${ambientRgba(.34)} 46%, transparent 72%)`, filter:'blur(90px)', opacity: playing ? .55 + glowF*.45 : .3, transition:'opacity .6s ease, background 1.4s ease', pointerEvents:'none', zIndex:0 }} />
+      {/* Halo circular ambiental; en desktop se pinta en el root para que el grid no lo recorte. */}
+      {!desktop && <div aria-hidden className="breathe" style={{ position:'absolute', width:`calc(${art} * 1.5)`, height:`calc(${art} * 1.5)`, top:'50%', left:'50%', borderRadius:'50%', background:`radial-gradient(circle, ${ambientRgba(.85)}, ${ambientRgba(.4)} 42%, transparent 70%)`, filter:'blur(60px)', opacity: playing ? .45 + glowF*.55 : .22, transition:'opacity .6s ease, background 1.4s ease', pointerEvents:'none', zIndex:0 }} />}
       {/* Carrusel: portada actual + vecinas para el peek al deslizar */}
       <div
         ref={boxRef}
