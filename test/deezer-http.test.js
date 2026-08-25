@@ -111,21 +111,15 @@ test('DeezerHttpClient devuelve null para un ID de pista inválido sin llamar a 
   assert.equal(calls, 0);
 });
 
-test('DeezerHttpClient añade el parámetro de calidad a getStreamUrl', async () => {
-  let requestedUrl;
+test('DeezerHttpClient conserva streams completos del gateway con calidad solicitada', async () => {
   let requestBody;
   const client = new DeezerHttpClient({
     baseUrl: 'https://deezer.test',
     gatewayUrl: 'https://gateway.test',
     fetchImpl: async (url, options) => {
-      if (url.toString().includes('gateway.test')) {
-        // Gateway API request
-        requestBody = options?.body ? JSON.parse(options.body) : null;
-        return jsonResponse({ results: { streamUrl: 'https://cdn.test/audio.mp3' } });
-      }
-      // Regular API request for getTrack (preview fallback)
-      requestedUrl = url;
-      return jsonResponse({ preview: 'https://cdn.test/preview.mp3' });
+      assert.ok(url.toString().includes('gateway.test'), 'no debe consultarse la API pública como preview');
+      requestBody = options?.body ? JSON.parse(options.body) : null;
+      return jsonResponse({ results: { streamUrl: 'https://cdn.test/audio.mp3' } });
     },
     logger: silentLogger,
   });
@@ -136,4 +130,40 @@ test('DeezerHttpClient añade el parámetro de calidad a getStreamUrl', async ()
   assert.deepEqual(result, { stream: 'https://cdn.test/audio.mp3', format: 'MP3_320' });
   assert.equal(requestBody?.method, 'song.getData');
   assert.equal(requestBody?.input?.SNG_ID, '42');
+});
+
+test('DeezerHttpClient no sustituye un stream completo por el preview público', async () => {
+  let calls = 0;
+  const client = new DeezerHttpClient({
+    fetchImpl: async () => {
+      calls += 1;
+      return jsonResponse({ preview: 'https://cdn.test/preview.mp3' });
+    },
+    logger: silentLogger,
+  });
+
+  const result = await client.getStreamUrl('42', 'MP3_320');
+
+  assert.equal(result, null);
+  assert.equal(calls, 0, 'sin gateway no debe consultar /track solo para obtener un preview');
+});
+test('DeezerHttpClient ignora formatos PREVIEW devueltos por el gateway', async () => {
+  let calls = 0;
+  const client = new DeezerHttpClient({
+    gatewayUrl: 'https://gateway.test',
+    fetchImpl: async () => {
+      calls += 1;
+      return jsonResponse({
+        results: {
+          DATA: { MEDIA: { FORMATS: [{ format: 'PREVIEW', url: 'https://cdn.test/preview.mp3' }] } },
+        },
+      });
+    },
+    logger: silentLogger,
+  });
+
+  const result = await client.getStreamUrl('42', 'MP3_320', 'test-arl-token');
+
+  assert.equal(result, null);
+  assert.equal(calls, 3, 'solo debe probar los métodos del gateway, nunca degradar a /track');
 });

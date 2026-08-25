@@ -95,10 +95,6 @@ export function usePlaybackController(deps) {
   const playSnapRef = useRef(null);
   /** Evita fan-out duplicado al iniciar/reponer una misma radio. */
   const radioRequestRef = useRef(null);
-  /** Prebuffer completo a Blob de la pista actual (anti-tartamudeo en multitarea). */
-  const prebufferRef = useRef({ id: null, controller: null, timer: null });
-  const prebufferFnRef = useRef(() => {});
-  const cancelPrebufferRef = useRef(() => {});
 
   const getMachine = useCallback(() => usePlayerStore.getState().getMachineState(), []);
   const patchMachine = useCallback((p) => usePlayerStore.getState().patchMachine(p), []);
@@ -156,7 +152,6 @@ export function usePlaybackController(deps) {
 
   useEffect(() => () => {
     usePlayerStore.getState().setPolicyEffectCtx(null);
-    try { cancelPrebufferRef.current(); } catch { /* ignore */ }
   }, []);
 
   const clearYieldedFocus = useCallback(() => {
@@ -229,62 +224,6 @@ export function usePlaybackController(deps) {
     }, durMs + 350);
   }, [audioRef, fadeRafRef, fadeSafetyRef, vol]);
 
-  // ── Prebuffer completo a Blob de la pista actual (anti-tartamudeo en multitarea) ──
-  // Descarga la pista completa en segundo plano y cambia el <audio> a un blob:
-  // local. Con la pista en memoria, la reproducción es inmune a los bajones de
-  // ancho de banda cuando otra app (p. ej. Instagram) satura la red del móvil.
-  // La posición se preserva vía la máquina: STREAM_READY con srcStatus 'ready'
-  // hace seek a livePosition (que fijamos al currentTime real antes del swap).
-  // No aplica a pistas descargadas (ya son blob) ni a fuentes ya locales.
-  cancelPrebufferRef.current = () => {
-    const p = prebufferRef.current;
-    if (p.timer) { try { clearTimeout(p.timer); } catch { /* ignore */ } }
-    if (p.controller) { try { p.controller.abort(); } catch { /* ignore */ } }
-    prebufferRef.current = { id: null, controller: null, timer: null };
-  };
-
-  prebufferFnRef.current = (trackId, url) => {
-    if (!trackId || typeof url !== 'string') return;
-    if (url.startsWith('blob:') || url.startsWith('data:')) return; // ya local
-    if (downloaded.has(trackId)) return;                             // ya offline
-    if (prebufferRef.current.id === trackId) return;                 // ya en curso/hecho
-    cancelPrebufferRef.current();
-    const controller = new AbortController();
-    // Retraso corto: dar ventaja al arranque del <audio> antes de competir por
-    // ancho de banda con la descarga completa.
-    const timer = setTimeout(async () => {
-      let blob = null;
-      try {
-        // priority:'low' evita que la descarga completa robe ancho de banda al
-        // buffering inicial del elemento. El proxy solo exige firma HMAC (no Bearer).
-        const res = await fetch(url, { signal: controller.signal, priority: 'low' });
-        if (!res.ok) return;
-        blob = await res.blob();
-      } catch { return; } // abort / red: la reproducción sigue en streaming normal
-      if (controller.signal.aborted) return;
-      // La pista debe seguir siendo la actual y sonando.
-      if (prebufferRef.current.id !== trackId) return;
-      if (getMachine().trackId !== trackId || getMachine().intent !== 'play') return;
-      if (!blob || blob.size < 4096) return;
-      const a = audioRef.current;
-      const curSrc = (a && (a.currentSrc || a.getAttribute('src'))) || '';
-      if (curSrc.startsWith('blob:')) return; // ya reproduce un blob
-      const objUrl = URL.createObjectURL(blob);
-      if (objUrlRef.current) { try { URL.revokeObjectURL(objUrlRef.current); } catch { /* ignore */ } }
-      objUrlRef.current = objUrl;
-      // Preservar la posición real: el reducer de STREAM_READY hace seek a
-      // livePosition cuando srcStatus==='ready' (swap mid-play).
-      const pos = a && Number.isFinite(a.currentTime) ? a.currentTime : (getMachine().livePosition || 0);
-      patchMachine({ livePosition: pos > 1.5 ? pos : 0 });
-      // El cambio de src dispara un evento 'pause' del <audio>; marcarlo como
-      // self-pause para que onPause no lo interprete como pausa externa (yield).
-      if (selfPauseRef) selfPauseRef.current = true;
-      dispatchAudio({ type: 'STREAM_READY', trackId, url: objUrl });
-      setTimeout(() => { if (selfPauseRef) selfPauseRef.current = false; }, 1500);
-    }, 3000);
-    prebufferRef.current = { id: trackId, controller, timer };
-  };
-
   ensureStreamFnRef.current = async (trackId) => {
     const t = trackById(trackId)
       || (trackRef.current?.id === trackId ? trackRef.current : null)
@@ -320,25 +259,15 @@ export function usePlaybackController(deps) {
           return;
         }
       }
-      // Warm resolve en paralelo (no bloquear firma). No repetirlo si la
-      // siguiente pista ya fue precalentada por prefetchNext: duplicar esta
-      // petición durante el arranque hace que el spinner parpadee y compite
-      // por CPU/red con la resolución que sí necesita la pista actual.
-      const warmKey = `${trackId}:${qParam}`;
-      if (!prefetchedRef.current.has(warmKey)) {
-        prefetchedRef.current.add(warmKey);
-        api.prefetchStream(sp);
-        if (prefetchedRef.current.size > 40) {
-          prefetchedRef.current = new Set([...prefetchedRef.current].slice(-20));
-        }
-      }
+      // Usar solo la firma de la pista actual. Si una precarga anterior ya dejó
+      // la firma en caché, peek evita otra petición; si no, ensureStreamUrl es
+      // la única resolución del camino crítico.
       let url = api.peekStreamUrl(sp, 30);
       if (!url) url = await api.ensureStreamUrl(sp);
       if (getMachine().trackId !== trackId || getMachine().intent !== 'play') return;
       setTrack((prev) => (prev && prev.id === trackId ? { ...prev, url } : { ...t, url }));
       signFailRef.current = { id: null, n: 0 };
       dispatchAudio({ type: 'STREAM_READY', trackId, url });
-      prebufferFnRef.current(trackId, url);
     } catch (err) {
       if (getMachine().trackId !== trackId || getMachine().intent !== 'play') return;
       const n = signFailRef.current.id === trackId ? signFailRef.current.n + 1 : 1;
@@ -537,7 +466,6 @@ export function usePlaybackController(deps) {
     const qParam = QUALITY_MAP[quality] || 'high';
     const sp = streamParamsFor(t, qParam);
 
-    cancelPrebufferRef.current();
     if (objUrlRef.current) { URL.revokeObjectURL(objUrlRef.current); objUrlRef.current = null; }
 
     // TRACK_SET: live/session=0, clearSrc (hardStop), ensureStream. Seek 0.
@@ -576,12 +504,11 @@ export function usePlaybackController(deps) {
     afterPlaySideEffects(t, trackWithQuality, initialQueue, qParam, opts);
 
     // UN solo camino de firma: TRACK_SET → ensureStream (arriba).
-    // El warm resolve también vive en ensureStream, para no lanzar una
-    // segunda resolución en paralelo cada vez que se pulsa play.
+    // Si una precarga de una pista siguiente dejó la firma en caché, peek la
+    // reutiliza sin añadir otra resolución al arranque de la pista actual.
     const peeked = api.peekStreamUrl(sp, 45);
     if (peeked) {
       dispatchAudio({ type: 'STREAM_READY', trackId: t.id, url: peeked });
-      prebufferFnRef.current(t.id, peeked);
     }
     // Si no hay peek: ensureStream del TRACK_SET firma y hace STREAM_READY.
     // No llamar ensureStreamUrl aquí (duplicaba firma → un catch tocaba toast

@@ -225,3 +225,35 @@ test('Property 5: el backoff ante respuestas rate-limit crece exponencialmente',
     RUNS,
   );
 });
+
+test('DeezerProvider rechaza previews y conserva formatos completos del gateway', async () => {
+  const previewResponses = [
+    { stream: 'https://cdn.test/preview.mp3', format: 'PREVIEW', isPreview: true },
+    { results: { preview: 'https://cdn.test/preview.mp3' } },
+    { streams: [{ url: 'https://cdn.test/preview.mp3', format: 'PREVIEW' }] },
+  ];
+
+  for (const response of previewResponses) {
+    const provider = providerWith({
+      async getStreamUrl() { return response; },
+    });
+    assert.equal(
+      await provider.getStreamUrl({ id: 'track-preview' }, 'MP3_320'),
+      null,
+      `no debe aceptar ${JSON.stringify(response)}`,
+    );
+  }
+
+  const fullUrl = 'https://cdn.test/audio/full.mp3';
+  const provider = providerWith({
+    async getStreamUrl() {
+      return {
+        streams: [
+          { url: 'https://cdn.test/preview.mp3', format: 'PREVIEW' },
+          { url: fullUrl, format: 'MP3_320' },
+        ],
+      };
+    },
+  });
+  assert.equal(await provider.getStreamUrl({ id: 'track-full' }, 'MP3_320'), fullUrl);
+});

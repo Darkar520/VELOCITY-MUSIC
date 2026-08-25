@@ -70,14 +70,8 @@ export class DeezerHttpClient {
       }
     }
 
-    // Si llegamos aquí, no pudimos obtener el stream
-    // Podríamos intentar obtener el preview de 30s de la API pública como fallback
-    const trackData = await this.getTrack(id);
-    if (trackData && trackData.preview) {
-      this._log('info', 'Usando preview de 30s en lugar de stream completo', `track/${id}`);
-      return { stream: trackData.preview, format: 'PREVIEW', isPreview: true };
-    }
-
+    // La API pública de Deezer solo expone previews de unos 30 s; no son un
+    // sustituto válido de un stream completo y nunca deben entrar en la caché.
     return null;
   }
 
@@ -232,6 +226,7 @@ export class DeezerHttpClient {
   /** Extrae la URL del stream de una respuesta de la API de gateway */
   _extractStreamUrlFromGatewayResponse(response, quality) {
     if (!response || typeof response !== 'object') return null;
+    if (isPreviewMarked(response) || isPreviewMarked(response.results)) return null;
 
     // Buscamos en diferentes ubicaciones posibles
     const candidates = [
@@ -245,14 +240,15 @@ export class DeezerHttpClient {
 
     for (const candidate of candidates) {
       if (Array.isArray(candidate)) {
-        // Buscamos el formato solicitado
+        // Buscamos el formato solicitado, ignorando previews.
         for (const format of candidate) {
-          if (format.format === quality || format.quality === quality) {
+          if (isPreviewMarked(format)) continue;
+          if (format?.format === quality || format?.quality === quality) {
             return format.url || format.media || format.link;
           }
         }
-        // Si no encontramos el formato específico, usamos el primero
-        const first = candidate[0];
+        // Si no encontramos el formato específico, usamos el primero completo.
+        const first = candidate.find((format) => !isPreviewMarked(format));
         if (first && (first.url || first.media || first.link)) {
           return first.url || first.media || first.link;
         }
@@ -275,6 +271,16 @@ export class DeezerHttpClient {
 }
 
 export default DeezerHttpClient;
+
+function isPreviewMarked(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  if (value.isPreview === true || value.is_preview === true) return true;
+  return ['format', 'quality', 'code', 'type'].some((key) => {
+    const marker = value[key];
+    if (typeof marker !== 'string') return false;
+    return marker.trim().toUpperCase().replace(/[\s-]+/g, '_') === 'PREVIEW';
+  });
+}
 
 function normalizeId(value) {
   if (value === null || value === undefined) return null;

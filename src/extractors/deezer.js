@@ -440,8 +440,9 @@ function buildSearchOptions(limit, token) {
 }
 
 function selectStreamUrl(response, requestedQuality, parser, originalQuality) {
-  // Handle different response structures
-  if (!response) return null;
+  // Handle different response structures. A public Deezer preview is never a
+  // valid full-track stream, even when it is returned under `stream`.
+  if (!response || isPreviewMarked(response)) return null;
 
   // Case 1: Response has a direct stream URL
   if (response.stream && typeof response.stream === 'string') {
@@ -463,6 +464,7 @@ function selectStreamUrl(response, requestedQuality, parser, originalQuality) {
 
   // Case 3: Response is from gateway API with different structure
   if (response.results && typeof response.results === 'object') {
+    if (isPreviewMarked(response.results)) return null;
     // Try to extract stream URL from gateway response
     const candidates = [
       response.results.DATA?.MEDIA?.FORMATS,
@@ -470,20 +472,20 @@ function selectStreamUrl(response, requestedQuality, parser, originalQuality) {
       response.results.stream_url,
       response.results.url,
       response.results.link,
-      response.results.preview,
     ];
 
     for (const candidate of candidates) {
       if (Array.isArray(candidate)) {
-        // Find the requested quality
+        // Find the requested quality, never treating a preview format as audio.
         for (const format of candidate) {
-          const formatQuality = parser.normalizeQualityFormat(format.format || format.quality);
-          if (formatQuality === requestedQuality && (format.url || format.media || format.link)) {
+          if (isPreviewMarked(format)) continue;
+          const formatQuality = parser.normalizeQualityFormat(format?.format || format?.quality);
+          if (formatQuality === requestedQuality && (format?.url || format?.media || format?.link)) {
             return format.url || format.media || format.link;
           }
         }
-        // Return first available
-        const first = candidate[0];
+        // Return the first non-preview format when the exact quality is absent.
+        const first = candidate.find((format) => !isPreviewMarked(format));
         if (first && (first.url || first.media || first.link)) {
           return first.url || first.media || first.link;
         }
@@ -494,6 +496,16 @@ function selectStreamUrl(response, requestedQuality, parser, originalQuality) {
   }
 
   return null;
+}
+
+function isPreviewMarked(value) {
+  if (!isObject(value)) return false;
+  if (value.isPreview === true || value.is_preview === true) return true;
+  return ['format', 'quality', 'code', 'type'].some((key) => {
+    const marker = value[key];
+    if (typeof marker !== 'string') return false;
+    return marker.trim().toUpperCase().replace(/[\s-]+/g, '_') === 'PREVIEW';
+  });
 }
 
 function collectStreamEntries(value, entries = [], seen = new Set()) {
@@ -507,6 +519,7 @@ function collectStreamEntries(value, entries = [], seen = new Set()) {
     return entries;
   }
   if (!isObject(value) || seen.has(value)) return entries;
+  if (isPreviewMarked(value)) return entries;
   seen.add(value);
 
   const url = value.url ?? value.streamUrl ?? value.stream_url ?? value.link ?? value.source;
