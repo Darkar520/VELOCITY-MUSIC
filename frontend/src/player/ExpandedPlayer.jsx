@@ -204,8 +204,9 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
 
   // ─────────── LAYOUT DESKTOP (estilo Spotify, pantalla completa) ───────────
   if (desktop) {
-    // --cover-xl usa vmin: se adapta al lado MENOR de la ventana, así que la
-    // carátula grande sigue cabiendo al angostar o achatar la ventana.
+    // La portada ocupa su propia columna. La información de la pista y sus
+    // acciones viven en el footer, que tiene una fila reservada y no puede
+    // quedar recortada por la altura variable de la portada.
     const dArt = 'var(--cover-xl)';
     const Transport = (
       <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:26 }}>
@@ -231,23 +232,12 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
         {/* Cuerpo: portada + letra (bloque centrado con ancho máximo).
             minHeight:0 + overflow hidden en la columna de letra evita que la
             letra desborde hacia la barra de control inferior (S1). */}
-        <div style={{ flex:1, minHeight:0, display:'grid', gridTemplateColumns:'minmax(0,1fr) minmax(0,1fr)', gap:'clamp(24px,4vw,56px)', padding:'0 clamp(20px,4vw,48px)', alignItems:'center', justifyContent:'center', width:'100%', maxWidth:1120, margin:'0 auto', overflow:'hidden' }}>
-          {/* Columna izquierda: portada + info */}
-          <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', minWidth:0 }}>
+        <div style={{ flex:1, minHeight:0, display:'grid', gridTemplateColumns:'minmax(0,1fr) minmax(0,1fr)', gap:'clamp(24px,4vw,56px)', padding:'0 clamp(20px,4vw,48px)', alignItems:'center', justifyContent:'center', width:'100%', maxWidth:1120, margin:'0 auto', overflowY:'auto', overflowX:'hidden', overscrollBehavior:'contain' }}>
+          {/* Columna izquierda: solo portada. El título y las acciones se
+              renderizan en la fila inferior, junto a los controles, para que
+              nunca compitan con la altura disponible del cuerpo. */}
+          <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', minWidth:0, minHeight:0 }}>
             <CoverSwipe next={next} prev={prev} playing={playing} glowF={glowF} ambientRgba={ambientRgba} art={dArt} track={track} loadingAudio={loadingAudio} nextCover={nextCover} prevCover={prevCover} />
-            {/* Info de pista + acciones: apilado con aire vertical para no pegar
-                título/artista a los botones (S1). */}
-            <div style={{ width:dArt, maxWidth:'100%', display:'flex', flexDirection:'column', marginTop:16 }}>
-              <div style={{ minWidth:0, textAlign:'center' }}>
-                <div style={{ fontSize:26, fontWeight:900, color:'var(--txt-0)', letterSpacing:-.6, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title}</div>
-                <div style={{ fontSize:15, color:T.accent, marginTop:6, fontWeight:700, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.artist}</div>
-              </div>
-              <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:12, marginTop:16 }}>
-                <button aria-label="Me gusta" onClick={() => toggleFav(track.id)} className="btn-tap" style={{ background: faved ? hex2rgba(T.accent,.14) : 'var(--surf-1)', border:`1px solid ${faved ? hex2rgba(T.accent,.4) : 'var(--line)'}`, borderRadius:'50%', width:42, height:42, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}><Icon.Heart c={faved ? T.accent : 'var(--txt-1)'} filled={faved} sz={20} /></button>
-                {onAdd && <button aria-label="Añadir" onClick={() => onAdd(track.id)} className="btn-tap" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:42, height:42, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}><Icon.Plus c="var(--txt-1)" sz={20} /></button>}
-                {onMenu && <button aria-label="Más" onClick={() => onMenu(track.id)} className="btn-tap" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:42, height:42, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}><Icon.Dots c="var(--txt-1)" sz={20} /></button>}
-              </div>
-            </div>
           </div>
 
           {/* Columna derecha: letra. height 100% + maxHeight evita que la letra
@@ -280,9 +270,9 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
           </div>
         </div>
 
-        {/* Barra inferior de control — sin vista previa duplicada (S1): el título
-            ya está en la columna izquierda; aquí solo progress + transport centrado
-            + volumen a la derecha, apilados con aire para no solaparse. */}
+        {/* Barra inferior de control — el progreso ocupa su propia fila; la
+            información y acciones de la pista quedan en la columna izquierda,
+            el transporte centrado y la salida/volumen a la derecha. */}
         <div style={{ flexShrink:0, padding:'16px clamp(24px,5vw,64px) 28px', display:'flex', flexDirection:'column', gap:18 }}>
           <div style={{ display:'flex', alignItems:'center', gap:16 }}>
             <span style={{ fontSize:11, color:'var(--txt-2)', fontFamily:'monospace', fontWeight:700, width:44, textAlign:'right' }}>{fmt(time)}</span>
@@ -293,12 +283,22 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
             </div>
             <span style={{ fontSize:11, color:'var(--txt-2)', fontFamily:'monospace', fontWeight:700, width:44, textAlign:'left' }}>{fmt(dur)}</span>
           </div>
-          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:24, minHeight:56 }}>
-            <div style={{ width:150, display:'flex', alignItems:'center', justifyContent:'flex-start' }} />
+          <div style={{ display:'grid', gridTemplateColumns:'minmax(200px,1fr) auto minmax(190px,1fr)', alignItems:'center', gap:'clamp(16px,3vw,32px)', minHeight:56 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:14, minWidth:0 }}>
+              <div style={{ minWidth:0, flex:'1 1 auto' }}>
+                <div style={{ fontSize:13, fontWeight:800, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title}</div>
+                <div style={{ fontSize:11, color:T.accent, marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.artist}</div>
+              </div>
+              <div style={{ display:'flex', alignItems:'center', gap:8, flexShrink:0 }}>
+                <button aria-label="Me gusta" onClick={() => toggleFav(track.id)} className="btn-tap" style={{ background: faved ? hex2rgba(T.accent,.14) : 'var(--surf-1)', border:`1px solid ${faved ? hex2rgba(T.accent,.4) : 'var(--line)'}`, borderRadius:'50%', width:38, height:38, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}><Icon.Heart c={faved ? T.accent : 'var(--txt-1)'} filled={faved} sz={18} /></button>
+                {onAdd && <button aria-label="Añadir" onClick={() => onAdd(track.id)} className="btn-tap" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:38, height:38, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}><Icon.Plus c="var(--txt-1)" sz={18} /></button>}
+                {onMenu && <button aria-label="Más" onClick={() => onMenu(track.id)} className="btn-tap" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:38, height:38, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}><Icon.Dots c="var(--txt-1)" sz={18} /></button>}
+              </div>
+            </div>
             {Transport}
-            <div style={{ width:150, display:'flex', alignItems:'center', justifyContent:'flex-end', gap:12, minWidth:0 }}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'flex-end', gap:12, minWidth:0 }}>
               <DeviceChip outputs={outputs} sinkId={sinkId} setOutput={setOutput} T={T} />
-              {!isIOS && <div style={{ display:'flex', alignItems:'center', gap:8, flex:1 }}><Icon.Vol c="var(--txt-2)" sz={17} /><div style={{ flex:1 }}><RangeSlider value={vol} min={0} max={1} step={0.01} onChange={setVol} accent={T.accent} ariaLabel="Volumen" /></div></div>}
+              {!isIOS && <div style={{ display:'flex', alignItems:'center', gap:8, flex:1, minWidth:0 }}><Icon.Vol c="var(--txt-2)" sz={17} /><div style={{ flex:1, minWidth:0 }}><RangeSlider value={vol} min={0} max={1} step={0.01} onChange={setVol} accent={T.accent} ariaLabel="Volumen" /></div></div>}
             </div>
           </div>
         </div>

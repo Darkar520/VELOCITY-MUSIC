@@ -58,7 +58,7 @@ export function PlayerBar({
   );
 
   return (
-    <div className="glass" style={{ flexShrink:0, height:90, borderTop:'1px solid var(--line-soft)', background:'#06080fcc', display:'grid', gridTemplateColumns:'minmax(150px,1fr) 2fr minmax(110px,1fr)', alignItems:'center', gap:16, padding:'0 clamp(12px, 1.5vw, 22px)' }}>
+    <div className="glass" style={{ flexShrink:0, minWidth:0, height:90, borderTop:'1px solid var(--line-soft)', background:'#06080fcc', display:'grid', gridTemplateColumns:'minmax(170px,1fr) minmax(260px,2fr) minmax(140px,1fr)', alignItems:'center', gap:16, padding:'0 clamp(12px, 1.5vw, 22px)' }}>
       <div style={{ display:'flex', alignItems:'center', gap:12, minWidth:0 }}>
         <div className="press" onClick={onExpand} style={{ width:52, height:52, flexShrink:0, borderRadius:12, overflow:'hidden', cursor:'pointer', boxShadow:`0 4px 14px ${hex2rgba(T.accent,.3)}` }}>
           <CoverImg key={`${track.id}-${String(coverDisplay).slice(0,40)}`} src={coverDisplay} alt="" radius={12} size={128} style={{ width:52, height:52 }} />
