@@ -70,6 +70,26 @@ describe('ExpandedPlayer', () => {
     expect(root.style.pointerEvents).toBe('auto');
   });
 
+  it('desktop: halo ambiental perceptible incluso en pausa (regresión fondo plano)', () => {
+    // Regresión f8dfdcc: el raíz desktop quedó en background plano
+    // (var(--bg-0)) y el halo div bajó a alpha .18 con opacity .3 en pausa →
+    // alpha efectiva ≈ .054, imperceptible. El wash radial vuelve al raíz y el
+    // halo mantiene opacidad efectiva sobre el umbral de percepción en pausa,
+    // sin capturar clics y fuera del grid (sin bordes de columna).
+    const { container } = setup({ desktop: true, playing: false });
+    const root = container.firstChild;
+    const style = root.getAttribute('style') || '';
+    expect(style).toContain('radial-gradient');
+    const alphaMatch = style.match(/rgba\(\d+,\s*\d+,\s*\d+,\s*(0?\.\d+)\)/);
+    expect(alphaMatch).toBeTruthy();
+    expect(parseFloat(alphaMatch[1])).toBeGreaterThanOrEqual(0.3);
+
+    const halo = root.children[0];
+    expect(halo.getAttribute('aria-hidden')).toBe('true');
+    expect(parseFloat(halo.style.opacity)).toBeGreaterThanOrEqual(0.5);
+    expect(halo.style.pointerEvents).toBe('none');
+  });
+
   it('muestra el título y el artista de la pista', async () => {
     setup();
     // "Toxicity" es a la vez título y álbum → hay más de una coincidencia.

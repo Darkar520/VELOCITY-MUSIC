@@ -50,8 +50,15 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
   }, [showLyrics, desktop, audioRef, playing, track?.id]);
   // Tiempo efectivo: el de alta frecuencia si la letra está abierta, si no el prop.
   const effTime = showLyrics ? lyricTime : time;
-  // Color dominante extraído de la portada actual
-  const dominantColor = useDominantColor(track?.cover);
+  // Color dominante de la portada actual. useDominantColor asume recibir la
+  // imagen por el proxy propio (/img?u=…, mismo origen) para que el canvas no
+  // quede "tainted" y getImageData funcione (ver hooks.js). El enrutado lo hace
+  // hiResCover(): track.cover llega en CRUDO (lh3.googleusercontent.com,
+  // i.ytimg.com…), y con un origen cruzado getImageData lanza SecurityError
+  // siempre → el ambiente caía sistemáticamente al acento del tema.
+  // Solo desktop se proxifica: en móvil el halo pinta con esta misma
+  // ambientRgba y no debe cambiar de aspecto (se pasa track.cover intacta).
+  const dominantColor = useDominantColor(desktop ? hiResCover(track?.cover, 512) : track?.cover);
   const ambientHex = dominantColor?.hex || T.accent;
   const ambientR = dominantColor?.r ?? parseInt(T.accent.slice(1,3),16);
   const ambientG = dominantColor?.g ?? parseInt(T.accent.slice(3,5),16);
@@ -218,10 +225,12 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
       </div>
     );
     return (
-      <div style={{ position:'fixed', inset:0, zIndex:90, opacity: open?1:0, pointerEvents: open?'auto':'none', transition:'opacity .38s ease', display:'flex', flexDirection:'column', background:'var(--bg-0)', fontFamily:'Inter,sans-serif' }}>
+      <div style={{ position:'fixed', inset:0, zIndex:90, opacity: open?1:0, pointerEvents: open?'auto':'none', transition:'opacity .38s ease', display:'flex', flexDirection:'column', background:`radial-gradient(120% 90% at 50% -10%, ${ambientRgba(.28 + glowF*.22)}, transparent 58%), var(--bg-0)`, fontFamily:'Inter,sans-serif' }}>
         {/* Halo ambiental único, fuera del grid de portada/letra: nunca adquiere
-            los límites rectangulares de una columna. */}
-        <div aria-hidden style={{ position:'absolute', top:'12%', left:'5%', width:'min(46vw, 560px)', height:'min(64vh, 560px)', borderRadius:'50%', background:`radial-gradient(ellipse, ${ambientRgba(.18 + glowF*.08)} 0%, ${ambientRgba(.06 + glowF*.03)} 44%, transparent 72%)`, filter:'blur(72px)', opacity: playing ? .55 : .3, pointerEvents:'none', zIndex:0 }} />
+            los límites rectangulares de una columna. Alfas y opacidad por encima
+            del umbral de percepción también EN PAUSA (regresión: con .18*.3 el
+            halo era invisible y el fondo se veía negro plano). */}
+        <div aria-hidden style={{ position:'absolute', top:'10%', left:'6%', width:'min(52vw, 640px)', height:'min(66vh, 640px)', borderRadius:'50%', background:`radial-gradient(ellipse, ${ambientRgba(.30 + glowF*.12)} 0%, ${ambientRgba(.10 + glowF*.05)} 44%, transparent 72%)`, filter:'blur(72px)', opacity: playing ? .85 : .6, pointerEvents:'none', zIndex:0 }} />
         {/* Barra superior */}
         <div style={{ position:'relative', zIndex:1, display:'flex', alignItems:'center', justifyContent:'space-between', padding:'20px 32px', flexShrink:0 }}>
           <button aria-label="Minimizar" onClick={onClose} className="btn-tap glass" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:42, height:42, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}><Icon.ChevD c="var(--txt-1)" sz={20} /></button>
