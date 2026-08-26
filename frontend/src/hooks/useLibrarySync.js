@@ -3,7 +3,10 @@
  *
  * Responsabilidades:
  *   1. Hidratar el libraryStore desde localStorage al montar (offline-first).
- *      Clave: 'velocity.lib.<email>' (per-usuario, evita mezclar cuentas).
+ *      Clave: 'velocity.lib.<identidad>' — la identidad canónica deriva de la
+ *      sub del JWT (misma online/offline, estable ante rotación de token);
+ *      ver cacheIdentity() y libCacheCandidates(). Per-usuario, evita mezclar
+ *      cuentas.
  *      Antes había duplicación con App.jsx — este hook es ahora la ÚNICA fuente.
  *   2. Cuando authed=true, hacer fetch inicial de favs/playlists/recent/saved.
  *   3. Re-persistir cache cuando el store cambia.
@@ -24,6 +27,7 @@ import {
   loadPendingFavs,
   mergeFavoriteIds,
   cacheIdentity,
+  legacyCacheIdentities,
   favoriteIntentVersion,
   loadFavoriteIntents,
   pruneAcknowledgedFavoriteIntents,
@@ -59,31 +63,77 @@ function libCacheKey(email) {
   return 'velocity.lib.' + cacheIdentity(email, getToken());
 }
 
-function readLibCache(email) {
+/**
+ * Claves candidatas para LEER la caché, de más a menos canónica.
+ *
+ * La primaria deriva de cacheIdentity(), que con JWT usa la sub de la cuenta:
+ * misma clave online que offline y estable entre rotaciones de token. Las
+ * restantes son claves legacy de versiones anteriores (por email, o por
+ * sufijo del token en invitados): permiten leer cachés escritas antes de la
+ * migración sin pérdida; el primer cambio del store las re-escribe bajo la
+ * clave canónica (efecto 3), completando la migración sola.
+ */
+function libCacheCandidates(email) {
+  const candidates = [libCacheKey(email)];
   try {
-    const raw = localStorage.getItem(libCacheKey(email));
-    if (!raw) return null;
-    return JSON.parse(raw);
-  } catch { return null; }
+    const normalized = String(email || '').trim().toLowerCase();
+    const stored = String(localStorage.getItem('velocity.email') || '').trim().toLowerCase();
+    const legacyEmail = normalized || stored;
+    if (legacyEmail) candidates.push(`velocity.lib.${legacyEmail}`);
+  } catch { /* localStorage indisponible */ }
+  const token = getToken() || '';
+  if (token) candidates.push(`velocity.lib.guest-${token.slice(-12)}`);
+  return [...new Set(candidates)];
 }
 
-function writeLibCache(favIds, pls, albums, savedPls, recentIds, email) {
+function readLibCache(email) {
+  for (const key of libCacheCandidates(email)) {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      return JSON.parse(raw);
+    } catch { /* clave corrupta: probar la siguiente candidata */ }
+  }
+  return null;
+}
+
+function writeLibCache(favIds, pls, albums, savedPls, recentIds, email, { confirmed = null } = {}) {
   try {
-    const libIds = new Set([...(favIds || []), ...(recentIds || [])]);
-    (pls || []).forEach(p => (p.trackIds || []).forEach(id => libIds.add(id)));
-    (albums || []).forEach(a => (a.trackIds || []).forEach(id => libIds.add(id)));
-    (savedPls || []).forEach(p => (p.trackIds || []).forEach(id => libIds.add(id)));
+    const key = libCacheKey(email);
+    let prev = null;
+    try { prev = JSON.parse(localStorage.getItem(key) || 'null'); } catch { /* corrupta: sin protección */ }
+    const arr = (v) => (Array.isArray(v) ? v : []);
+    // Protección anti-vaciado permanente (regresión: una caché con 286
+    // favoritos acabó reducida a 1). POR COLECCIÓN: pasar de N elementos a 0
+    // en la caché exige la confirmación de la respuesta íntegra del servidor
+    // para ESA colección. Vaciados transitorios o parciales (401 espurio,
+    // cuerpo no-JSON tomado por [], fallo de red en parte del sync) conservan
+    // los últimos datos conocidos de las colecciones no confirmadas.
+    const protect = (next, field) => (
+      arr(next).length || !arr(prev?.[field]).length || confirmed?.[field]
+        ? arr(next)
+        : arr(prev[field])
+    );
+    const outFavs = protect(favIds, 'favs');
+    const outRecent = protect(recentIds, 'recent');
+    const outPls = protect(pls, 'playlists');
+    const outAlbums = protect(albums, 'savedAlbums');
+    const outSavedPls = protect(savedPls, 'savedPlaylists');
+    const libIds = new Set([...outFavs, ...outRecent]);
+    outPls.forEach(p => (p.trackIds || []).forEach(id => libIds.add(id)));
+    outAlbums.forEach(a => (a.trackIds || []).forEach(id => libIds.add(id)));
+    outSavedPls.forEach(p => (p.trackIds || []).forEach(id => libIds.add(id)));
     // Filtrar covers data:/blob: para no exceder quota de localStorage.
     const tracks = [...libIds].map(trackById).filter(Boolean).map(t =>
       (typeof t.cover === 'string' && (t.cover.startsWith('data:') || t.cover.startsWith('blob:')))
         ? { ...t, cover: '' } : t
     );
-    localStorage.setItem(libCacheKey(email), JSON.stringify({
-      favs: favIds || [],
-      playlists: pls || [],
-      savedAlbums: albums || [],
-      savedPlaylists: savedPls || [],
-      recent: recentIds || [],
+    localStorage.setItem(key, JSON.stringify({
+      favs: outFavs,
+      playlists: outPls,
+      savedAlbums: outAlbums,
+      savedPlaylists: outSavedPls,
+      recent: outRecent,
       tracks,
     }));
   } catch { /* quota excedido */ }
@@ -120,6 +170,7 @@ async function hydrateSavedAlbums(albums) {
 export function useLibrarySync({ authed, email = '', offline = false } = {}) {
   const cacheKey = libCacheKey(email);
   const didInitRef = useRef(null);
+  const emptyIntentRef = useRef({ cacheKey: null, values: null });
 
   // ─── 1. Hidratar desde localStorage al montar/cambiar de cuenta ────
   useEffect(() => {
@@ -137,7 +188,8 @@ export function useLibrarySync({ authed, email = '', offline = false } = {}) {
     const c = readLibCache(email);
     if (!c) return;
     const scope = cacheIdentity(email, getToken());
-    const pending = loadPendingFavs(globalThis.localStorage, scope);
+    const legacyScopes = legacyCacheIdentities(email, getToken());
+    const pending = loadPendingFavs(globalThis.localStorage, scope, legacyScopes);
     const localIntents = loadFavoriteIntents(scope);
     if (Array.isArray(c.tracks))        c.tracks.forEach(cacheTrack);
     if (Array.isArray(c.favs))          store.setFavs(mergeFavoriteIds(mergeFavoriteIds(c.favs, pending), localIntents));
@@ -154,6 +206,7 @@ export function useLibrarySync({ authed, email = '', offline = false } = {}) {
     const requestCacheKey = cacheKey;
     const requestAuthGeneration = getAuthGeneration();
     const requestScope = cacheIdentity(email, getToken());
+    const requestLegacyScopes = legacyCacheIdentities(email, getToken());
     const requestIntentVersion = favoriteIntentVersion(requestScope);
     const isCurrent = () => (
       !cancel
@@ -191,7 +244,7 @@ export function useLibrarySync({ authed, email = '', offline = false } = {}) {
         ]);
         if (!isCurrent()) return;
         const store = useLibraryStore.getState();
-        const pending = loadPendingFavs(globalThis.localStorage, requestScope);
+        const pending = loadPendingFavs(globalThis.localStorage, requestScope, requestLegacyScopes);
         // Incluir intenciones posteriores al inicio de esta petición: el
         // response puede representar el estado remoto anterior al toggle.
         const recentIntents = loadFavoriteIntents(requestScope, requestIntentVersion);
@@ -211,6 +264,17 @@ export function useLibrarySync({ authed, email = '', offline = false } = {}) {
           // puntual vaciaba la playlist y el efecto 3 persistía el vacío,
           // haciendo permanente la pérdida.
           const cachedPls = store.playlists || [];
+          // Pintar YA los nombres desde la respuesta del servidor conservando
+          // los trackIds locales: resolver los trackIds frescos requiere una
+          // petición por playlist y no debe retrasar el render (mismo patrón
+          // que álbumes guardados más abajo).
+          if (isCurrent()) {
+            store.setPlaylists(pls.map((p) => ({
+              id: p.id,
+              name: p.name,
+              trackIds: (cachedPls.find((c) => c.id === p.id)?.trackIds) || [],
+            })));
+          }
           const withTracks = await Promise.all(pls.map(async p => {
             const ids = await api.playlistTracks(p.id).catch(() => null);
             if (ids === null) {
@@ -232,6 +296,11 @@ export function useLibrarySync({ authed, email = '', offline = false } = {}) {
             ...(cachedAlbums.find((cached) => cached.albumId === album.albumId) || {}),
             ...album,
           }));
+          // Pintar primero con lo que ya se sabe (nombre/caráula del backend o
+          // de la caché local): la expansión a trackIds dispara una petición
+          // por álbum (2 workers en paralelo) y no debe retrasar —ni impedir—
+          // que la sección sea visible.
+          if (isCurrent()) store.setSavedAlbums(mergedAlbums);
           hydratedAlbums = await hydrateSavedAlbums(mergedAlbums);
           if (isCurrent()) store.setSavedAlbums(hydratedAlbums);
         }
@@ -270,7 +339,18 @@ export function useLibrarySync({ authed, email = '', offline = false } = {}) {
             saveMeta();
             const finalPlaylists = useLibraryStore.getState().playlists;
             const finalAlbums = useLibraryStore.getState().savedAlbums;
-            writeLibCache(finalFavs, finalPlaylists, finalAlbums, finalSavedPlaylists, recentIds, email);
+            // Cada colección solo puede vaciarse en caché si SU respuesta fue
+            // íntegra (no null). Un fallo de red en cualquiera conserva los
+            // últimos datos conocidos de esa colección (ver writeLibCache).
+            writeLibCache(finalFavs, finalPlaylists, finalAlbums, finalSavedPlaylists, recentIds, email, {
+              confirmed: {
+                favs: fav !== null,
+                playlists: pls !== null,
+                savedAlbums: albums !== null,
+                savedPlaylists: savedPls !== null,
+                recent: hist !== null,
+              },
+            });
             // Sincronización silenciosa por cuenta y por pista. Las fallidas
             // permanecen pendientes y se reintentan en el siguiente arranque.
             backfillLibraryLyrics({
@@ -294,11 +374,23 @@ export function useLibrarySync({ authed, email = '', offline = false } = {}) {
   const savedAlbums = useLibraryStore((s) => s.savedAlbums);
   const savedPlaylists = useLibraryStore((s) => s.savedPlaylists);
   const recent = useLibraryStore((s) => s.recent);
+  const emptyIntents = useLibraryStore((s) => s.emptyIntents);
 
   useEffect(() => {
-    if (!authed || didInitRef.current !== cacheKey) return;
-    writeLibCache(favs, playlists, savedAlbums, savedPlaylists, recent, email);
-  }, [authed, cacheKey, email, favs, playlists, savedAlbums, savedPlaylists, recent]);
+    if (!authed || didInitRef.current !== cacheKey) {
+      emptyIntentRef.current = { cacheKey: null, values: null };
+      return;
+    }
+    const current = { ...(emptyIntents || {}) };
+    const previous = emptyIntentRef.current;
+    const baseline = previous.cacheKey === cacheKey ? (previous.values || {}) : {};
+    const confirmed = {};
+    ['favs', 'playlists', 'savedAlbums', 'savedPlaylists', 'recent'].forEach((field) => {
+      if ((Number(current[field]) || 0) > (Number(baseline[field]) || 0)) confirmed[field] = true;
+    });
+    writeLibCache(favs, playlists, savedAlbums, savedPlaylists, recent, email, { confirmed });
+    emptyIntentRef.current = { cacheKey, values: current };
+  }, [authed, cacheKey, email, favs, playlists, savedAlbums, savedPlaylists, recent, emptyIntents]);
 }
 
 export default useLibrarySync;

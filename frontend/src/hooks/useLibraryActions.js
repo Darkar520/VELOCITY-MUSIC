@@ -22,6 +22,7 @@ import {
   loadPendingFavs,
   savePendingFavs,
   cacheIdentity,
+  legacyCacheIdentities,
   noteFavoriteIntent,
   acknowledgeFavoriteIntent,
 } from '../favoriteOutbox.js';
@@ -35,17 +36,21 @@ const RETRY_MAX_MS = 30_000;
  */
 export function useLibraryActions({ authed, email = '', showToast } = {}) {
   const pendingScope = authed ? cacheIdentity(email, getToken()) : '';
+  const pendingLegacyScopes = authed ? legacyCacheIdentities(email, getToken()) : [];
+  const pendingLegacySignature = pendingLegacyScopes.join('\u0000');
   const pendingAuthGeneration = getAuthGeneration();
   const scopeStateRef = useRef(null);
   if (!scopeStateRef.current
     || scopeStateRef.current.scope !== pendingScope
+    || scopeStateRef.current.legacySignature !== pendingLegacySignature
     || scopeStateRef.current.authGeneration !== pendingAuthGeneration) {
     const previous = scopeStateRef.current;
     previous?.timers.forEach((timer) => clearTimeout(timer));
     scopeStateRef.current = {
       scope: pendingScope,
+      legacySignature: pendingLegacySignature,
       authGeneration: pendingAuthGeneration,
-      pending: loadPendingFavs(globalThis.localStorage, pendingScope),
+      pending: loadPendingFavs(globalThis.localStorage, pendingScope, pendingLegacyScopes),
       workers: new Map(),
       timers: new Map(),
       attempts: new Map(),

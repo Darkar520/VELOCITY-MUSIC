@@ -53,10 +53,27 @@ export function pendingFavsKey(identity = '') {
   return identity ? `${PENDING_FAVS_KEY}.${encodeURIComponent(String(identity))}` : PENDING_FAVS_KEY;
 }
 
-export function loadPendingFavs(storage = globalThis.localStorage, identity = '') {
+/**
+ * Identidades que podían haber sido usadas por la outbox antes de migrar a
+ * `u:<sub>`. La clave canónica se añade por separado por pendingFavsKeys().
+ */
+export function legacyCacheIdentities(email = '', token = '') {
+  const identities = [];
+  const normalized = String(email || '').trim().toLowerCase();
+  if (normalized) identities.push(normalized);
+  if (token) identities.push(`guest-${String(token).slice(-12)}`);
+  return [...new Set(identities)];
+}
+
+export function pendingFavsKeys(identity = '', legacyIdentities = []) {
+  const identities = [identity, ...(Array.isArray(legacyIdentities) ? legacyIdentities : [])];
+  return [...new Set(identities.map((value) => pendingFavsKey(value)))];
+}
+
+function parsePendingFavs(raw) {
   const result = new Map();
   try {
-    const saved = JSON.parse(storage?.getItem(pendingFavsKey(identity)) || '[]');
+    const saved = JSON.parse(raw || '[]');
     if (Array.isArray(saved)) {
       for (const entry of saved) {
         if (Array.isArray(entry) && entry[0] && (entry[1] === 'add' || entry[1] === 'remove')) {
@@ -65,6 +82,38 @@ export function loadPendingFavs(storage = globalThis.localStorage, identity = ''
       }
     }
   } catch {}
+  return result;
+}
+
+/**
+ * Lee la outbox canónica y las claves legacy, y migra las operaciones legacy
+ * a la clave canónica de la cuenta. La clave canónica tiene prioridad si una
+ * operación aparece en ambas, porque representa la escritura más reciente de
+ * la versión migrada; las operaciones de pistas distintas se combinan.
+ */
+export function loadPendingFavs(storage = globalThis.localStorage, identity = '', legacyIdentities = []) {
+  const result = new Map();
+  const keys = pendingFavsKeys(identity, legacyIdentities);
+  let hasLegacy = false;
+  for (const [index, key] of keys.entries()) {
+    let raw = null;
+    try { raw = storage?.getItem(key); } catch { /* storage indisponible */ }
+    if (!raw) continue;
+    const parsed = parsePendingFavs(raw);
+    if (index > 0 && parsed.size) hasLegacy = true;
+    for (const [id, op] of parsed) {
+      // Canonical first: don't let a legacy value override it on collision.
+      if (!result.has(id)) result.set(id, op);
+    }
+  }
+
+  if (hasLegacy && identity && result.size) {
+    try {
+      const canonicalKey = keys[0];
+      storage?.setItem(canonicalKey, JSON.stringify([...result.entries()]));
+      for (const key of keys.slice(1)) storage?.removeItem?.(key);
+    } catch { /* conservar la legacy si la migración no puede escribirse */ }
+  }
   return result;
 }
 
@@ -94,8 +143,49 @@ export function mergeFavoriteIds(remoteIds, pending) {
   return result;
 }
 
+/**
+ * Extrae el claim `sub` de un JWT sin dependencias ni red.
+ *
+ * La identidad canónica se deriva de él porque cumple las dos propiedades que
+ * el fallback anterior (`guest-<últimos 12 del token>`) no cumplía:
+ *   - Es la MISMA online y offline: el token vive en localStorage y decodificarlo
+ *     no requiere red, mientras que el email puede no estar disponible al abrir
+ *     la app sin conexión (api.me() falla), produciendo una clave distinta de
+ *     la que escribió la sesión online.
+ *   - Es estable ante rotación del token: el `sub` identifica a la cuenta; los
+ *     últimos bytes del propio token cambian con cada emisión y dejaban la
+ *     caché anterior inalcanzable.
+ */
+function jwtSub(token = '') {
+  try {
+    const part = String(token || '').split('.')[1] || '';
+    if (!part) return '';
+    const b64 = part.replace(/-/g, '+').replace(/_/g, '/');
+    let bytes;
+    if (typeof atob === 'function') {
+      const bin = atob(b64);
+      bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+    } else if (typeof Buffer !== 'undefined') {
+      bytes = new Uint8Array(Buffer.from(b64, 'base64'));
+    } else {
+      return '';
+    }
+    const payload = JSON.parse(new TextDecoder().decode(bytes));
+    const sub = payload?.sub;
+    return sub == null ? '' : String(sub);
+  } catch { return ''; }
+}
+
 export function cacheIdentity(email, token = '') {
+  // 1) Canónica: sub del JWT. Preferida incluso con email conocido: así la
+  //    resolución es simétrica (mismo resultado con o sin red) y sobrevive a
+  //    cambios/rotaciones de token y de email.
+  const sub = jwtSub(token);
+  if (sub) return `u:${sub}`;
+  // 2) Legacy: email normalizado (cachés antiguas, entornos de prueba sin JWT).
   const normalized = String(email || '').trim().toLowerCase();
   if (normalized) return normalized;
+  // 3) Legacy: invitados con token no-JWT (comportamiento previo intacto).
   return token ? `guest-${String(token).slice(-12)}` : 'guest';
 }

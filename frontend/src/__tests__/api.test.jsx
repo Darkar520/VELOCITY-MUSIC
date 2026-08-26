@@ -80,6 +80,8 @@ describe('api.search', () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ results: [{ id: '1', title: 'X' }] }),
+      // jsonOrThrow lee el cuerpo como texto para rechazar HTML/no-JSON.
+      text: async () => JSON.stringify({ results: [{ id: '1', title: 'X' }] }),
     });
     const r = await api.search('Joji');
     expect(mockFetch).toHaveBeenCalled();
@@ -95,6 +97,7 @@ describe('api.search', () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ results: [] }),
+      text: async () => JSON.stringify({ results: [] }),
     });
     await api.search('test', undefined, 50);
     expect(mockFetch).toHaveBeenCalled();
@@ -122,9 +125,11 @@ describe('api.lyrics', () => {
   });
 
   it('200 → devuelve data', async () => {
+    const lyricsPayload = { synced: '[00:01.00] Hello', plain: 'Hello', source: 'lrclib' };
     mockFetch.mockResolvedValueOnce({
       ok: true,
-      json: async () => ({ synced: '[00:01.00] Hello', plain: 'Hello', source: 'lrclib' }),
+      json: async () => lyricsPayload,
+      text: async () => JSON.stringify(lyricsPayload),
     });
     const r = await api.lyrics({ artist: 'X', title: 'Y' });
     expect(r.synced).toContain('Hello');

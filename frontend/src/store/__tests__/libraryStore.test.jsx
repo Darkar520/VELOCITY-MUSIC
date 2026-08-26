@@ -120,6 +120,34 @@ describe('libraryStore', () => {
     expect(store.isPlaylistSaved('mix1')).toBe(false);
   });
 
+  it('marca los borrados locales de la última colección y reset limpia las señales', () => {
+    const store = useLibraryStore.getState();
+    store.setFavs(['f1']);
+    store.removeFav('f1');
+    store.setPlaylists([{ id: 'p1', name: 'P', trackIds: [] }]);
+    store.deletePlaylist('p1');
+    store.saveAlbum({ albumId: 'al1' });
+    store.unsaveAlbum('al1');
+    store.savePlaylist({ playlistId: 'mix1', name: 'Mix' });
+    store.unsavePlaylist('mix1');
+
+    expect(useLibraryStore.getState().emptyIntents).toMatchObject({
+      favs: 1,
+      playlists: 1,
+      savedAlbums: 1,
+      savedPlaylists: 1,
+    });
+
+    store.reset();
+    expect(useLibraryStore.getState().emptyIntents).toEqual({
+      favs: 0,
+      playlists: 0,
+      recent: 0,
+      savedAlbums: 0,
+      savedPlaylists: 0,
+    });
+  });
+
   it('reset limpia todo el estado de library', () => {
     const store = useLibraryStore.getState();
     store.toggleFav('a');

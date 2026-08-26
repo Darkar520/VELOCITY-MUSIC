@@ -29,10 +29,25 @@ let _onUnauthorized = null;
 export function setOnUnauthorized(fn) { _onUnauthorized = fn; }
 
 async function jsonOrThrow(res) {
-  const data = await res.json().catch(() => ({}));
+  // Leer como texto y parsear manualmente: un 200 cuyo cuerpo NO es JSON
+  // (p. ej. HTML de error del CDN/Worker cuando el túnel al backend está
+  // caído) antes se convertía silenciosamente en {} y, de ahí, en colecciones
+  // vacías ("d.favorites || []") que el sync trataba como verdad del servidor.
+  // Eso sobrescribía la biblioteca local con un estado degradado. Ahora se
+  // propaga como error y los llamadores conservan lo que ya tenían.
+  const text = await res.text().catch(() => '');
+  const trimmed = text.trim();
+  let data = {};
+  if (trimmed) {
+    try {
+      data = JSON.parse(trimmed);
+    } catch {
+      throw Object.assign(new Error(res.statusText || 'respuesta no-JSON'), { status: res.status, data: {}, nonJson: true });
+    }
+  }
   if (!res.ok) {
     if (res.status === 401) { setToken(null); if (_onUnauthorized) _onUnauthorized(); }
-    throw Object.assign(new Error(data.error || res.statusText), { status: res.status, data });
+    throw Object.assign(new Error((data && data.error) || res.statusText), { status: res.status, data });
   }
   return data;
 }

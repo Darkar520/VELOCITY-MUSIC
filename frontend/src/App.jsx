@@ -353,7 +353,13 @@ export default function App() {
   // Cargar descargas offline + manejar expiración de sesión (401 → re-login)
   useEffect(() => {
     setOnUnauthorized(() => {
-      useLibraryStore.getState().reset();
+      // Un 401 invalida la SESIÓN, nunca los datos locales. Resetear aquí la
+      // biblioteca grababa en piedra un vaciado transitorio: bastaba un 401
+      // espurio (túnel caído, CDN devolviendo 401) para que el efecto de
+      // persistencia de useLibrarySync escribiera el store vacío sobre una
+      // caché buena. El aislamiento de cuenta sigue garantizado: al pasar
+      // authed=false, useLibrarySync hace reset del store EN MEMORIA y la
+      // caché por cuenta queda intacta para el siguiente login.
       setAuthed(false);
       showToast('Tu sesión expiró. Inicia sesión de nuevo.');
     });

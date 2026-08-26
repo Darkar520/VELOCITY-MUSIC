@@ -179,3 +179,190 @@ describe('useLibrarySync: el módulo offline no queda sombreado por el parámetr
     });
   });
 });
+
+describe('useLibrarySync: identidad de caché estable y caché a prueba de vaciados', () => {
+  const b64url = (obj) => btoa(JSON.stringify(obj)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const jwtWithSub = (sub, sig) => [b64url({ alg: 'HS256', typ: 'JWT' }), b64url({ sub }), sig || 'sig'].join('.');
+  const tick = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+  it('offline sin email: hidrata desde la clave canónica derivada del sub del token', async () => {
+    // Regresión (sospechoso C): sin velocity.email la identidad caía a
+    // guest-<últimos 12 del token>, distinta de la clave que escribió la
+    // sesión online (<email>). Offline la caché era inalcanzable y el efecto 1
+    // dejaba el store vacío tras reset().
+    api.getToken.mockReturnValue(jwtWithSub('acc-off'));
+    localStorage.setItem('velocity.lib.u:acc-off', JSON.stringify({
+      favs: ['f1', 'f2'],
+      playlists: [],
+      savedAlbums: [],
+      savedPlaylists: [],
+      recent: [],
+      tracks: [],
+    }));
+
+    renderHook(() => useLibrarySync({ authed: true, email: '', offline: true }));
+    await tick();
+
+    expect(useLibraryStore.getState().favs).toEqual(['f1', 'f2']);
+  });
+
+  it('la rotación del token (misma cuenta) no pierde la biblioteca hidratada', async () => {
+    api.getToken.mockReturnValue(jwtWithSub('acc-rot', 'firma-vieja'));
+    localStorage.setItem('velocity.lib.u:acc-rot', JSON.stringify({
+      favs: ['keep-1'], playlists: [], savedAlbums: [], savedPlaylists: [], recent: [], tracks: [],
+    }));
+    const { rerender } = renderHook(
+      ({ offline }) => useLibrarySync({ authed: true, email: '', offline }),
+      { initialProps: { offline: true } },
+    );
+    await tick();
+    expect(useLibraryStore.getState().favs).toEqual(['keep-1']);
+
+    // Rota el token: misma sub, firma distinta. La identidad (y la clave)
+    // deben seguir siendo las mismas; un cambio de clave dispararía reset().
+    api.getToken.mockReturnValue(jwtWithSub('acc-rot', 'firma-nueva'));
+    await act(async () => { rerender({ offline: true }); });
+    await tick();
+
+    expect(useLibraryStore.getState().favs).toEqual(['keep-1']);
+  });
+
+  it('lee cachés legacy escritas por email y migra a la clave canónica', async () => {
+    api.getToken.mockReturnValue(jwtWithSub('acc-mig'));
+    localStorage.setItem('velocity.email', 'legacy@x.com');
+    localStorage.setItem('velocity.lib.legacy@x.com', JSON.stringify({
+      favs: ['lf1'], playlists: [], savedAlbums: [], savedPlaylists: [], recent: [], tracks: [],
+    }));
+
+    renderHook(() => useLibrarySync({ authed: true, email: '', offline: true }));
+    await tick();
+
+    expect(useLibraryStore.getState().favs).toEqual(['lf1']);
+    // El primer persistido re-escribe bajo la clave canónica (migración).
+    await waitFor(() => {
+      const raw = localStorage.getItem('velocity.lib.u:acc-mig');
+      expect(raw && JSON.parse(raw).favs).toEqual(['lf1']);
+    });
+  });
+
+  it('un sync parcial no vacía en caché las colecciones sin confirmación del servidor', async () => {
+    // Regresión (sospechosos A+D): respuestas vacías —o cuerpos no-JSON que
+    // colapsaban a []— sobrescribían una caché buena de forma permanente.
+    // Ahora, solo las colecciones cuya respuesta fue íntegra pueden quedar
+    // vacías; las que fallaron conservan sus últimos datos conocidos.
+    const rich = {
+      favs: Array.from({ length: 286 }, (_, i) => `f${i}`),
+      playlists: [{ id: 'p1', name: 'PL', trackIds: ['t1'] }],
+      savedAlbums: [{ albumId: 'al1', name: 'Disco', cover: 'c.jpg', trackIds: [] }],
+      savedPlaylists: [{ playlistId: 'mix1', name: 'Mix', trackIds: [] }],
+      recent: ['r1'],
+      tracks: [],
+    };
+    api.getToken.mockReturnValue(jwtWithSub('acc-guard'));
+    localStorage.setItem('velocity.lib.u:acc-guard', JSON.stringify(rich));
+    api.favorites.mockRejectedValue(new Error('red caída'));     // sin confirmar → protegida
+    api.history.mockRejectedValue(new Error('red caída'));       // sin confirmar → protegida
+    api.playlists.mockResolvedValue([]);                          // confirmada → vaciada
+    api.savedAlbums.mockResolvedValue([]);                        // confirmada → vaciada
+    api.savedPlaylists.mockResolvedValue([]);                     // confirmada → vaciada
+
+    renderHook(() => useLibrarySync({ authed: true, email: '', offline: false }));
+    // saveMeta() corre justo después del intento de escritura final: al haber
+    // llegado ahí, el guard ya decidió sobre la caché.
+    await waitFor(() => expect(catalog.saveMeta).toHaveBeenCalled());
+    await tick();
+
+    const raw = JSON.parse(localStorage.getItem('velocity.lib.u:acc-guard'));
+    expect(raw.favs).toHaveLength(286);
+    expect(raw.recent).toEqual(['r1']);
+    expect(raw.playlists).toEqual([]);
+    expect(raw.savedAlbums).toEqual([]);
+    expect(raw.savedPlaylists).toEqual([]);
+  });
+
+  it('un vaciado confirmado por las cinco colecciones del servidor sí se persiste', async () => {
+    api.getToken.mockReturnValue(jwtWithSub('acc-wipe'));
+    localStorage.setItem('velocity.lib.u:acc-wipe', JSON.stringify({
+      favs: ['f1'], playlists: [], savedAlbums: [], savedPlaylists: [], recent: [], tracks: [],
+    }));
+    api.favorites.mockResolvedValue([]);
+    api.playlists.mockResolvedValue([]);
+    api.history.mockResolvedValue([]);
+    api.savedAlbums.mockResolvedValue([]);
+    api.savedPlaylists.mockResolvedValue([]);
+
+    renderHook(() => useLibrarySync({ authed: true, email: '', offline: false }));
+    await waitFor(() => expect(catalog.saveMeta).toHaveBeenCalled());
+
+    await waitFor(() => {
+      const raw = JSON.parse(localStorage.getItem('velocity.lib.u:acc-wipe'));
+      expect(raw.favs).toEqual([]);
+    });
+  });
+
+  it('un borrado local del último favorito persiste [] sin desactivar el guard', async () => {
+    localStorage.setItem('velocity.lib.a@example.com', JSON.stringify({
+      favs: ['fav-last'], playlists: [], savedAlbums: [], savedPlaylists: [], recent: [], tracks: [],
+    }));
+
+    renderHook(() => useLibrarySync({ authed: true, email: 'a@example.com', offline: true }));
+    await tick();
+    act(() => { useLibraryStore.getState().removeFav('fav-last'); });
+
+    await waitFor(() => {
+      const raw = JSON.parse(localStorage.getItem('velocity.lib.a@example.com'));
+      expect(raw.favs).toEqual([]);
+    });
+  });
+
+  it('un borrado local del último álbum persiste [] sin desactivar el guard', async () => {
+    localStorage.setItem('velocity.lib.a@example.com', JSON.stringify({
+      favs: [], playlists: [], savedAlbums: [{ albumId: 'album-last', name: 'Último' }],
+      savedPlaylists: [], recent: [], tracks: [],
+    }));
+
+    renderHook(() => useLibrarySync({ authed: true, email: 'a@example.com', offline: true }));
+    await tick();
+    act(() => { useLibraryStore.getState().unsaveAlbum('album-last'); });
+
+    await waitFor(() => {
+      const raw = JSON.parse(localStorage.getItem('velocity.lib.a@example.com'));
+      expect(raw.savedAlbums).toEqual([]);
+    });
+  });
+
+  it('los álbumes guardados se pintan sin esperar la hidratación de trackIds', async () => {
+    // Regresión (sospechoso E): store.setSavedAlbums ocurría DESPUÉS de una
+    // petición api.album por cada álbum; si eran lentas o fallaban, la sección
+    // tardaba o no llegaba a verse incluso CON conexión.
+    api.savedAlbums.mockResolvedValue([{ albumId: 'al-9', name: 'Disco Lento', cover: 'c.jpg' }]);
+    api.album.mockImplementation(() => new Promise(() => {}));
+
+    renderHook(() => useLibrarySync({ authed: true, email: 'a@example.com' }));
+
+    await waitFor(() => {
+      expect(useLibraryStore.getState().savedAlbums[0]).toMatchObject({ albumId: 'al-9', name: 'Disco Lento' });
+    });
+  });
+
+  it('las playlists propias se pintan conservando trackIds locales aunque playlistTracks no resuelva', async () => {
+    localStorage.setItem('velocity.lib.a@example.com', JSON.stringify({
+      favs: [],
+      playlists: [{ id: 'pl-9', name: 'Nombre viejo', trackIds: ['t1', 't2'] }],
+      savedAlbums: [],
+      savedPlaylists: [],
+      recent: [],
+      tracks: [],
+    }));
+    api.playlists.mockResolvedValue([{ id: 'pl-9', name: 'PL renombrada' }]);
+    api.playlistTracks.mockImplementation(() => new Promise(() => {}));
+
+    renderHook(() => useLibrarySync({ authed: true, email: 'a@example.com' }));
+
+    await waitFor(() => {
+      const pl = useLibraryStore.getState().playlists.find((p) => p.id === 'pl-9');
+      expect(pl).toMatchObject({ name: 'PL renombrada' });
+      expect(pl.trackIds).toEqual(['t1', 't2']);
+    });
+  });
+});

@@ -19,6 +19,18 @@
  */
 import { create } from 'zustand';
 
+const EMPTY_INTENT_FIELDS = ['favs', 'playlists', 'recent', 'savedAlbums', 'savedPlaylists'];
+
+function bumpEmptyIntent(state, field) {
+  const current = state.emptyIntents || {};
+  return {
+    ...current,
+    [field]: (Number(current[field]) || 0) + 1,
+  };
+}
+
+const EMPTY_INTENTS_INITIAL = Object.fromEntries(EMPTY_INTENT_FIELDS.map((field) => [field, 0]));
+
 // ─── Selectores finos ──────────────────────────────────────────────
 export const useFavs = () => (s) => s.favs;
 export const usePlaylists = () => (s) => s.playlists;
@@ -40,6 +52,7 @@ export const useLibraryStore = create((set, get) => ({
   homeLoading: false,
   feedNonce: 0,
   catVer: 0,
+  emptyIntents: { ...EMPTY_INTENTS_INITIAL },
 
   // ─── Setters directos (para hidratación desde backend/cache) ──
   setFavs: (favs) => set({ favs: Array.isArray(favs) ? favs : [] }),
@@ -58,9 +71,12 @@ export const useLibraryStore = create((set, get) => ({
   toggleFav: (trackId) => {
     if (!trackId) return false;
     const has = get().favs.includes(trackId);
-    set((s) => ({
-      favs: has ? s.favs.filter((x) => x !== trackId) : [trackId, ...s.favs],
-    }));
+    set((s) => {
+      const favs = has ? s.favs.filter((x) => x !== trackId) : [trackId, ...s.favs];
+      return has && s.favs.length > 0 && favs.length === 0
+        ? { favs, emptyIntents: bumpEmptyIntent(s, 'favs') }
+        : { favs };
+    });
     return !has;
   },
 
@@ -72,7 +88,12 @@ export const useLibraryStore = create((set, get) => ({
 
   /** Quita un fav. */
   removeFav: (trackId) => {
-    set((s) => ({ favs: s.favs.filter((x) => x !== trackId) }));
+    set((s) => {
+      const favs = s.favs.filter((x) => x !== trackId);
+      return s.favs.length > 0 && favs.length === 0
+        ? { favs, emptyIntents: bumpEmptyIntent(s, 'favs') }
+        : { favs };
+    });
   },
 
   isFav: (trackId) => get().favs.includes(trackId),
@@ -94,7 +115,12 @@ export const useLibraryStore = create((set, get) => ({
   },
 
   deletePlaylist: (playlistId) => {
-    set((s) => ({ playlists: s.playlists.filter((p) => p.id !== playlistId) }));
+    set((s) => {
+      const playlists = s.playlists.filter((p) => p.id !== playlistId);
+      return s.playlists.length > 0 && playlists.length === 0
+        ? { playlists, emptyIntents: bumpEmptyIntent(s, 'playlists') }
+        : { playlists };
+    });
   },
 
   addToPlaylist: (playlistId, trackId) => {
@@ -134,7 +160,12 @@ export const useLibraryStore = create((set, get) => ({
   },
 
   unsaveAlbum: (albumId) => {
-    set((s) => ({ savedAlbums: s.savedAlbums.filter((a) => a.albumId !== albumId) }));
+    set((s) => {
+      const savedAlbums = s.savedAlbums.filter((a) => a.albumId !== albumId);
+      return s.savedAlbums.length > 0 && savedAlbums.length === 0
+        ? { savedAlbums, emptyIntents: bumpEmptyIntent(s, 'savedAlbums') }
+        : { savedAlbums };
+    });
   },
 
   isAlbumSaved: (albumId) => get().savedAlbums.some((a) => a.albumId === albumId),
@@ -146,7 +177,12 @@ export const useLibraryStore = create((set, get) => ({
   },
 
   unsavePlaylist: (playlistId) => {
-    set((s) => ({ savedPlaylists: s.savedPlaylists.filter((p) => p.playlistId !== playlistId) }));
+    set((s) => {
+      const savedPlaylists = s.savedPlaylists.filter((p) => p.playlistId !== playlistId);
+      return s.savedPlaylists.length > 0 && savedPlaylists.length === 0
+        ? { savedPlaylists, emptyIntents: bumpEmptyIntent(s, 'savedPlaylists') }
+        : { savedPlaylists };
+    });
   },
 
   isPlaylistSaved: (playlistId) => get().savedPlaylists.some((p) => p.playlistId === playlistId),
@@ -162,6 +198,7 @@ export const useLibraryStore = create((set, get) => ({
     homeLoading: false,
     feedNonce: 0,
     catVer: 0,
+    emptyIntents: { ...EMPTY_INTENTS_INITIAL },
   }),
 }));
 
