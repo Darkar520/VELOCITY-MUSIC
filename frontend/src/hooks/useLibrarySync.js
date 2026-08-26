@@ -247,9 +247,21 @@ export function useLibrarySync({ authed, email = '', offline = false } = {}) {
     // caché local era la única fuente, la biblioteca quedaba tal cual (OK),
     // pero sin garantía explícita. Ahora el camino offline es directo.
     const isOffline = offline || (typeof navigator !== 'undefined' && navigator.onLine === false);
+    // Un `offline` MAL DETECTADO no debe impedir la PRIMERA sincronización.
+    // Regresión (Brave en móvil): `backendDown` sale de un único ping a
+    // /api/status; en cuanto daba falso negativo, esta rama devolvía siempre
+    // antes de tocar la red, así que 'velocity.lib.<identidad>' no se creaba
+    // NUNCA en ese navegador y cada arranque encontraba la biblioteca vacía
+    // (Me gusta · 0, sin playlists ni álbumes) mientras las descargas —que
+    // viven en IndexedDB y no pasan por el ping— sí se veían. Login y
+    // streaming tampoco pasan por el ping, de ahí la asimetría.
+    // Si no hay caché utilizable no hay NADA que preservar, así que vale la
+    // pena intentar la red: cada petición ya degrada a null por su cuenta y
+    // writeLibCache no crea entradas vacías (no puede envenenar la clave).
+    const skipNetwork = isOffline && libCacheScore(readLibCache(email)) > 0;
     (async () => {
       try {
-        if (isOffline) {
+        if (skipNetwork) {
           const [, downloadedMetas] = await readDownloads();
           downloadedMetas.forEach(cacheTrack);
           // Persistir los metadatos en el catálogo: sin esto, un arranque

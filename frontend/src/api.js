@@ -57,15 +57,27 @@ export const api = {
   async status() {
     return jsonOrThrow(await fetch('/api/status'));
   },
-  // Ping ligero para detectar si el backend está caído (timeout 5s).
-  async pingBackend() {
-    try {
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 5000);
-      const res = await fetch('/api/status', { signal: ctrl.signal });
-      clearTimeout(t);
-      return res.ok;
-    } catch { return false; }
+  // Ping ligero para detectar si el backend está caído.
+  // Un ÚNICO intento con timeout de 5 s daba falsos negativos en redes
+  // móviles y a través del túnel: la app quedaba en "Sin conexión a internet"
+  // teniendo internet. El coste de ese falso negativo no era solo cosmético:
+  // bloqueaba la sincronización de biblioteca (ver useLibrarySync), así que en
+  // un navegador donde el ping fallaba la biblioteca nunca llegaba a cachearse.
+  // Ahora se reintenta antes de declarar el backend caído. 2×7 s < 15 s, el
+  // intervalo de sondeo de App.jsx, para no solapar comprobaciones. Sin
+  // conexión real el fetch rechaza al instante, así que el reintento no
+  // añade espera perceptible.
+  async pingBackend({ attempts = 2, timeoutMs = 7000 } = {}) {
+    for (let i = 0; i < attempts; i += 1) {
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), timeoutMs);
+        const res = await fetch('/api/status', { signal: ctrl.signal });
+        clearTimeout(t);
+        if (res.ok) return true;
+      } catch { /* reintentar: timeout corto o fallo transitorio del túnel */ }
+    }
+    return false;
   },
   // Reintenta ante estados transitorios: 502/503 (catálogo lento/cold-start) y
   // 429 (rate limit). Respeta Retry-After si el servidor lo envía (acotado a 3s

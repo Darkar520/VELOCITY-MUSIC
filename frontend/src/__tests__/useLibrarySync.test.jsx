@@ -328,11 +328,50 @@ describe('useLibrarySync: identidad de caché estable y caché a prueba de vacia
 
   it('un arranque offline sin caché no crea una entrada vacía que envenene la clave', async () => {
     api.getToken.mockReturnValue(jwtWithSub('acc-fresh'));
+    api.favorites.mockRejectedValue(new Error('sin red'));
+    api.playlists.mockRejectedValue(new Error('sin red'));
+    api.history.mockRejectedValue(new Error('sin red'));
+    api.savedAlbums.mockRejectedValue(new Error('sin red'));
+    api.savedPlaylists.mockRejectedValue(new Error('sin red'));
 
     renderHook(() => useLibrarySync({ authed: true, email: '', offline: true }));
     await tick();
 
     expect(localStorage.getItem('velocity.lib.u:acc-fresh')).toBeNull();
+  });
+
+  it('offline MAL DETECTADO y sin caché: sí sincroniza y deja la biblioteca cacheada', async () => {
+    // Regresión (Brave móvil): `backendDown` sale de un ping a /api/status.
+    // Con un falso negativo, la rama offline devolvía antes de tocar la red,
+    // así que la caché por identidad no se creaba NUNCA en ese navegador: cada
+    // arranque mostraba "Me gusta · 0 canciones" y ninguna colección, mientras
+    // las descargas (IndexedDB, sin ping) sí aparecían. Sin caché que
+    // preservar no hay motivo para saltarse la red.
+    api.getToken.mockReturnValue(jwtWithSub('acc-falso-offline'));
+    api.favorites.mockResolvedValue(['real-1', 'real-2']);
+    api.savedAlbums.mockResolvedValue([{ albumId: 'al-1', name: 'Disco' }]);
+
+    renderHook(() => useLibrarySync({ authed: true, email: '', offline: true }));
+
+    await waitFor(() => expect(useLibraryStore.getState().favs).toEqual(['real-1', 'real-2']));
+    await waitFor(() => {
+      const raw = localStorage.getItem('velocity.lib.u:acc-falso-offline');
+      expect(raw).toBeTruthy();
+      expect(JSON.parse(raw).favs).toEqual(['real-1', 'real-2']);
+    });
+  });
+
+  it('offline real CON caché sigue sin llamar a la red (no se toca el camino bueno)', async () => {
+    api.getToken.mockReturnValue(jwtWithSub('acc-offline-ok'));
+    localStorage.setItem('velocity.lib.u:acc-offline-ok', JSON.stringify({
+      favs: ['cached-1'], playlists: [], savedAlbums: [], savedPlaylists: [], recent: [], tracks: [],
+    }));
+
+    renderHook(() => useLibrarySync({ authed: true, email: '', offline: true }));
+    await tick();
+
+    expect(api.favorites).not.toHaveBeenCalled();
+    expect(useLibraryStore.getState().favs).toEqual(['cached-1']);
   });
 
   it('un borrado local del último favorito persiste [] sin desactivar el guard', async () => {
