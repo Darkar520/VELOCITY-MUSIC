@@ -300,6 +300,41 @@ describe('useLibrarySync: identidad de caché estable y caché a prueba de vacia
     });
   });
 
+  it('una caché canónica VACÍA no bloquea la hidratación desde la legacy con datos', async () => {
+    // Regresión: readLibCache devolvía la primera candidata que existía. Un
+    // arranque con el backend caído creaba 'velocity.lib.u:<sub>' vacía y,
+    // al existir, ganaba sobre la legacy por email: la biblioteca real
+    // quedaba inalcanzable incluso en modo offline ("no aparece nada").
+    api.getToken.mockReturnValue(jwtWithSub('acc-poison'));
+    localStorage.setItem('velocity.email', 'dueño@x.com');
+    localStorage.setItem('velocity.lib.u:acc-poison', JSON.stringify({
+      favs: [], playlists: [], savedAlbums: [], savedPlaylists: [], recent: [], tracks: [],
+    }));
+    localStorage.setItem('velocity.lib.dueño@x.com', JSON.stringify({
+      favs: ['real-1', 'real-2'],
+      playlists: [],
+      savedAlbums: [{ albumId: 'al-real', name: 'Disco' }],
+      savedPlaylists: [],
+      recent: [],
+      tracks: [],
+    }));
+
+    renderHook(() => useLibrarySync({ authed: true, email: '', offline: true }));
+    await tick();
+
+    expect(useLibraryStore.getState().favs).toEqual(['real-1', 'real-2']);
+    expect(useLibraryStore.getState().savedAlbums).toHaveLength(1);
+  });
+
+  it('un arranque offline sin caché no crea una entrada vacía que envenene la clave', async () => {
+    api.getToken.mockReturnValue(jwtWithSub('acc-fresh'));
+
+    renderHook(() => useLibrarySync({ authed: true, email: '', offline: true }));
+    await tick();
+
+    expect(localStorage.getItem('velocity.lib.u:acc-fresh')).toBeNull();
+  });
+
   it('un borrado local del último favorito persiste [] sin desactivar el guard', async () => {
     localStorage.setItem('velocity.lib.a@example.com', JSON.stringify({
       favs: ['fav-last'], playlists: [], savedAlbums: [], savedPlaylists: [], recent: [], tracks: [],

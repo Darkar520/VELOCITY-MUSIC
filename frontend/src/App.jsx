@@ -117,15 +117,23 @@ export default function App() {
   useEffect(() => {
     if (!authed) return;
     let cancel = false;
+    let iv = null;
     const check = async () => {
       const ok = await api.pingBackend();
-      if (!cancel) setBackendDown(!ok);
+      if (cancel) return;
+      setBackendDown(!ok);
+      // Mientras el backend no responda, sondear en segundo plano: al volver,
+      // la app sale de modo offline y useLibrarySync re-sincroniza sola (el
+      // flag `offline` es dependencia de su efecto de fetch). Antes había que
+      // pulsar Reintentar o recargar para salir del estado degradado.
+      if (ok && iv) { clearInterval(iv); iv = null; }
+      if (!ok && !iv) iv = setInterval(check, 15000);
     };
     check();
     // Re-checkear cuando vuelve la conexión.
     const onOnline = () => check();
     window.addEventListener('online', onOnline);
-    return () => { cancel = true; window.removeEventListener('online', onOnline); };
+    return () => { cancel = true; if (iv) clearInterval(iv); window.removeEventListener('online', onOnline); };
   }, [authed]);
 
   // Sincronizar el perfil (nombre + avatar) desde el backend al abrir sesión.
@@ -919,12 +927,15 @@ export default function App() {
     </div>
   ) : null;
 
-  // Banner "Modo sin conexión": visible cuando el backend está caído.
+  // Banner de estado degradado: visible cuando el backend no responde.
+  const netDown = typeof navigator !== 'undefined' && navigator.onLine === false;
   const offlineBanner = backendDown ? (
     <div className="fade-up" style={{ position:'fixed', top:'env(safe-area-inset-top, 0px)', left:0, right:0, zIndex:125, display:'flex', alignItems:'center', gap:10, background:'var(--surf-0)', border:'1px solid var(--line)', borderBottom:`1px solid ${hex2rgba(T.accent,.3)}`, padding:'10px 16px', boxShadow:'0 4px 16px #0006' }}>
       <Icon.WifiOff c={T.accent} sz={18} />
       <div style={{ flex:1, minWidth:0 }}>
-        <div style={{ fontSize:12, fontWeight:800, color:'var(--txt-0)' }}>Modo sin conexión</div>
+        {/* Distinguir las dos causas: "sin internet" confundía cuando la red
+            del usuario funcionaba y lo caído era el servidor. */}
+        <div style={{ fontSize:12, fontWeight:800, color:'var(--txt-0)' }}>{netDown ? 'Sin conexión a internet' : 'Servidor no disponible'}</div>
         <div style={{ fontSize:10, color:'var(--txt-2)', marginTop:1 }}>Tu biblioteca y descargas están disponibles. Búsqueda y streaming requieren conexión.</div>
       </div>
       <button onClick={() => { api.pingBackend().then(ok => { if (ok) { setBackendDown(false); showToast('Conexión restablecida'); } else showToast('El servidor sigue sin responder'); }); }} className="press" style={{ flexShrink:0, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:99, padding:'6px 14px', cursor:'pointer', color:'var(--txt-1)', fontSize:11, fontWeight:700 }}>Reintentar</button>

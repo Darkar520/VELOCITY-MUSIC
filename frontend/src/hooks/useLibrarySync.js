@@ -86,15 +86,34 @@ function libCacheCandidates(email) {
   return [...new Set(candidates)];
 }
 
+/** Cantidad de contenido real de una caché (para elegir entre candidatas). */
+function libCacheScore(cached) {
+  if (!cached || typeof cached !== 'object') return -1;
+  const len = (v) => (Array.isArray(v) ? v.length : 0);
+  return len(cached.favs) + len(cached.playlists) + len(cached.savedAlbums)
+    + len(cached.savedPlaylists) + len(cached.recent);
+}
+
 function readLibCache(email) {
+  // Se elige la candidata con MÁS contenido, no la primera que exista.
+  // Regresión: un arranque sin backend dejaba la clave canónica creada pero
+  // vacía; al existir, ganaba sobre la legacy por email y la biblioteca real
+  // (286 favoritos) quedaba inalcanzable para siempre ("no aparece nada"
+  // incluso en modo offline). La canónica se evalúa primero, así que en
+  // empate sigue ganando ella y no se mezclan cuentas: las candidatas son
+  // solo las de ESTA identidad (sub, email actual/almacenado, token actual).
+  let best = null;
+  let bestScore = -1;
   for (const key of libCacheCandidates(email)) {
     try {
       const raw = localStorage.getItem(key);
       if (!raw) continue;
-      return JSON.parse(raw);
+      const parsed = JSON.parse(raw);
+      const score = libCacheScore(parsed);
+      if (score > bestScore) { best = parsed; bestScore = score; }
     } catch { /* clave corrupta: probar la siguiente candidata */ }
   }
-  return null;
+  return best;
 }
 
 function writeLibCache(favIds, pls, albums, savedPls, recentIds, email, { confirmed = null } = {}) {
@@ -128,6 +147,13 @@ function writeLibCache(favIds, pls, albums, savedPls, recentIds, email, { confir
       (typeof t.cover === 'string' && (t.cover.startsWith('data:') || t.cover.startsWith('blob:')))
         ? { ...t, cover: '' } : t
     );
+    // No CREAR una entrada vacía. Si nunca hubo caché bajo esta clave y no hay
+    // nada que guardar (arranque con el backend caído, store recién reseteado),
+    // escribirla dejaría una canónica vacía que bloquea la lectura de las
+    // claves legacy y hace permanente la pérdida de biblioteca.
+    const nothingToStore = !outFavs.length && !outPls.length && !outAlbums.length
+      && !outSavedPls.length && !outRecent.length && !tracks.length;
+    if (!prev && nothingToStore) return;
     localStorage.setItem(key, JSON.stringify({
       favs: outFavs,
       playlists: outPls,

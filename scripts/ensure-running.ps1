@@ -35,8 +35,40 @@ function HttpOk {
   } catch { return $false }
 }
 
+function PublicOk {
+  # El hostname público es lo único que importa para los clientes: un 530
+  # significa que Cloudflare no tiene el tunnel del dominio conectado.
+  try {
+    $r = Invoke-WebRequest 'https://velocitymusic.uk/api/status' -UseBasicParsing -TimeoutSec 8
+    return ($r.StatusCode -eq 200)
+  } catch { return $false }
+}
+
 function TunnelUp {
-  return [bool](Get-Process cloudflared -EA SilentlyContinue)
+  # Comprobar la EXISTENCIA del proceso no basta: un quick tunnel
+  # ("tunnel --url http://localhost:3000") deja cloudflared corriendo con una
+  # URL trycloudflare aleatoria y NO sirve velocitymusic.uk. El watchdog lo
+  # daba por bueno y el dominio devolvía 530 indefinidamente: los clientes
+  # quedaban en "Servidor no disponible" con el backend local sano.
+  $procs = @(Get-CimInstance Win32_Process -Filter "Name='cloudflared.exe'" -EA SilentlyContinue)
+  if (-not $procs) { return $false }
+  $named = @($procs | Where-Object { $_.CommandLine -and $_.CommandLine -match 'config\.yml' -and $_.CommandLine -match '\brun\b' })
+  if (-not $named) {
+    ELog 'cloudflared corriendo pero NO es el named tunnel - reemplazando'
+    foreach ($p in $procs) { try { Stop-Process -Id $p.ProcessId -Force -EA SilentlyContinue } catch {} }
+    Start-Sleep 2
+    return $false
+  }
+  # Named tunnel presente: validar que el dominio responde, pero solo si el
+  # backend local está sano. Si Node está caído, el fallo público no es del
+  # tunnel y reciclarlo en cada ciclo sería churn inútil.
+  if ((HttpOk) -and -not (PublicOk)) {
+    ELog 'named tunnel arriba pero el dominio no responde - reciclando'
+    foreach ($p in $named) { try { Stop-Process -Id $p.ProcessId -Force -EA SilentlyContinue } catch {} }
+    Start-Sleep 2
+    return $false
+  }
+  return $true
 }
 
 # --- 1) PostgreSQL ---
