@@ -48,6 +48,44 @@ export function DetailView({ view, T, play, addToTarget, onMenu, onToggleFav, go
     <button onClick={() => setView(null)} className="press" style={{ display:'flex', alignItems:'center', gap:6, background:'none', border:'none', cursor:'pointer', color:'var(--txt-1)', marginBottom:18, paddingTop:4, fontSize:13, fontWeight:700 }}><Icon.ChevL c="var(--txt-1)" sz={18} /> Atrás</button>
   );
 
+  // ── Canción compartida (deep-link /track/:id) ──
+  if (view.type === 'track') {
+    const sharedTrack = d?.track || trackById(view.trackId);
+    return (
+      <div className="fade-up" style={{ paddingBottom:8 }}>
+        <Back />
+        {detailLoading && !sharedTrack ? (
+          <div style={{ display:'flex', justifyContent:'center', padding:'40px 0' }}><Spinner c={T.accent} sz={24} /></div>
+        ) : !sharedTrack ? (
+          <div style={{ textAlign:'center', padding:'40px 20px' }}>
+            <div style={{ fontSize:32, marginBottom:12 }}>😕</div>
+            <div style={{ fontSize:14, fontWeight:700, color:'var(--txt-0)', marginBottom:6 }}>No se pudo cargar esta canción</div>
+            <div style={{ fontSize:12, color:'var(--txt-2)', lineHeight:1.5 }}>El enlace puede haber caducado o la canción ya no estar disponible.</div>
+          </div>
+        ) : (
+          <>
+            <div style={{ display:'flex', alignItems:'flex-end', gap:18, marginBottom:24 }}>
+              <CoverImg src={sharedTrack.cover} alt={sharedTrack.title} radius={18} style={{ width:'var(--card-w)', aspectRatio:'1', flexShrink:0, boxShadow:`0 16px 40px ${hex2rgba(T.accent,.3)}` }} />
+              <div style={{ minWidth:0 }}>
+                <div style={{ fontSize:9, fontWeight:900, letterSpacing:2.5, color:T.accent, textTransform:'uppercase' }}>Canción compartida</div>
+                <div style={{ fontSize:'var(--fs-h2)', fontWeight:900, color:'var(--txt-0)', letterSpacing:-.6, marginTop:3 }}>{sharedTrack.title}</div>
+                <div style={{ fontSize:12.5, color:'var(--txt-1)', fontWeight:700, marginTop:5 }}>{sharedTrack.artist}</div>
+                {sharedTrack.album && sharedTrack.album !== 'Sencillo' && (
+                  <button onClick={() => goAlbum(sharedTrack.albumId, sharedTrack.album, sharedTrack.artist, sharedTrack.title, sharedTrack.cover)} className="press" style={{ background:'none', border:'none', cursor: sharedTrack.albumId ? 'pointer' : 'default', padding:0, fontSize:11.5, color:'var(--txt-2)', marginTop:5, textAlign:'left' }} disabled={!sharedTrack.albumId}>{sharedTrack.album}</button>
+                )}
+              </div>
+            </div>
+            <div style={{ display:'flex', gap:8, marginBottom:18, flexWrap:'wrap' }}>
+              <button onClick={() => play(sharedTrack, [sharedTrack.id], { from: null })} className="btn-tap" style={{ display:'flex', alignItems:'center', gap:8, background:grad(T), border:'none', borderRadius:99, padding:'10px 22px', cursor:'pointer', color:'#04060a', fontSize:12.5, fontWeight:800, boxShadow:`0 6px 18px ${hex2rgba(T.accent,.45)}` }}><Icon.Play c="#04060a" sz={16} /> Reproducir</button>
+              {sharedTrack.albumId && <button onClick={() => goAlbum(sharedTrack.albumId, sharedTrack.album, sharedTrack.artist, sharedTrack.title, sharedTrack.cover)} className="btn-tap" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:99, padding:'10px 18px', cursor:'pointer', color:'var(--txt-1)', fontSize:12, fontWeight:700 }}>Ir al álbum</button>}
+            </div>
+            <TrackRow track={sharedTrack} active={sharedTrack.id === track?.id} playing={playing} T={T} onClick={() => play(sharedTrack, [sharedTrack.id], { from: null })} onFav={toggleFav} faved={favs.includes(sharedTrack.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={isDownloaded(sharedTrack)} downloading={downloading.has(sharedTrack.id)} onSwipeQueue={addToQueue} />
+          </>
+        )}
+      </div>
+    );
+  }
+
   // ── Mezcla / playlist generada (tracklist embebido en la vista) ──
   if (view.type === 'mix') {
     const songs = (view.tracks || []).map(t => trackById(t.id) || t).filter(Boolean);
@@ -228,4 +266,3 @@ export function DetailView({ view, T, play, addToTarget, onMenu, onToggleFav, go
 
 // ═══════════════════════════════════════════════════════════════
 // SIDEBAR (escritorio)
-

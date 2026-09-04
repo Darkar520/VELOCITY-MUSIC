@@ -26,6 +26,7 @@ import { useAudioErrorRecovery } from './hooks/useAudioErrorRecovery.js';
 import { useAudioElement } from './hooks/useAudioElement.js';
 import { useAudioResumeGuard } from './hooks/useAudioResumeGuard.js';
 import { useCatalogNavigation } from './hooks/useCatalogNavigation.js';
+import { useSharedRoute } from './hooks/useSharedRoute.js';
 import { usePlaylistImport } from './hooks/usePlaylistImport.js';
 import { useAudioOutput } from './hooks/useAudioOutput.js';
 import { useTrackPrebuffer } from './hooks/useTrackPrebuffer.js';
@@ -785,6 +786,10 @@ export default function App() {
     recent, favs, downloaded,
     playingFrom, playlists, savedPlaylists,
   });
+
+  // Resolver enlaces compartidos después de autenticar. Esto conserva el
+  // home como entrada normal y solo intercepta /track/:id y /album/:id.
+  useSharedRoute({ authed, goAlbum, setExpanded, setView, setDetailData, setDetailLoading });
 
   const onLogout = () => {
     api.sessionEnd(); // fire-and-forget: cerrar sesión en PG antes de limpiar token

@@ -132,6 +132,26 @@ describe('App shell — flujos críticos', () => {
     expect(document.querySelector('audio')).toBeTruthy();
   });
 
+  it('deep-link de canción abre la vista compartida en lugar del home', async () => {
+    const originalPath = window.location.pathname;
+    window.history.replaceState({}, '', '/track/shared-route-1');
+    apiMock.getTracks.mockResolvedValue([{
+      id: 'shared-route-1', title: 'Canción compartida', artist: 'Artista compartido',
+      album: 'Álbum compartido', albumId: 'album-shared-1', cover: 'https://i.ytimg.com/vi/shared/hqdefault.jpg',
+    }]);
+
+    try {
+      render(<App />);
+      await waitFor(() => expect(screen.getAllByText('Canción compartida').length).toBeGreaterThan(0));
+      const titles = screen.getAllByText('Canción compartida');
+      expect(titles[0].closest('main')).toBeTruthy();
+      expect(apiMock.getTracks).toHaveBeenCalledWith(['shared-route-1']);
+    } finally {
+      window.history.replaceState({}, '', originalPath || '/');
+      apiMock.getTracks.mockImplementation(async () => []);
+    }
+  });
+
   // ── FLUJO 1: play → URL firmada + audio.play() ───────────────────────────
   it('flujo play: la pista recibe una URL FIRMADA (exp+sig) y se llama play()', async () => {
     const { a } = seedTracks();
