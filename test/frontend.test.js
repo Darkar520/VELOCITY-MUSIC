@@ -133,6 +133,15 @@ test('Frontend catalog: normalizeTrack YouTube no incluye param stream', () => {
   assert.ok(!t.url.includes('stream='), 'pistas de YouTube no deben tener param stream');
 });
 
+test('Frontend catalog: migra artwork YTM antiguo a proxy con fallback', () => {
+  const id = 'legacy-artwork-' + Date.now();
+  const cover = 'https://yt3.googleusercontent.com/art=w1200-h1200-l90-rj';
+  cacheTrack({ id, title: 'T', artist: 'A', cover });
+  const parsed = new URL(trackById(id).cover, 'https://velocity.test');
+  assert.equal(parsed.pathname, '/img');
+  assert.equal(parsed.searchParams.get('id'), id);
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // CATALOG — saveMeta/loadMeta persistencia
 // ─────────────────────────────────────────────────────────────────────────────
@@ -177,6 +186,23 @@ test('Frontend helpers: hiResCover respeta el size solicitado', () => {
   assert.ok(r900.includes('w900-h900'), 'debe pedir tamaño 900');
   assert.notEqual(r512, r900, '512 y 900 deben ser URLs distintas');
   assert.ok(r512.startsWith('/img?u='), 'debe rutear por proxy');
+});
+
+test('Frontend catalog: artwork de Google conserva videoId para fallback y resize', () => {
+  const track = normalizeTrack({
+    id: 'jSNvyzsNEaQ',
+    title: 'infinite source',
+    artist: 'Deftones',
+    artworkUrl: 'https://yt3.googleusercontent.com/art=w1200-h1200-l90-rj',
+  });
+  const parsed = new URL(track.cover, 'https://velocity.test');
+  assert.equal(parsed.pathname, '/img');
+  assert.equal(parsed.searchParams.get('id'), 'jSNvyzsNEaQ');
+  assert.equal(parsed.searchParams.get('u'), 'https://yt3.googleusercontent.com/art=w1200-h1200-l90-rj');
+
+  const resized = new URL(hiResCover(track.cover, 512), 'https://velocity.test');
+  assert.equal(resized.searchParams.get('id'), 'jSNvyzsNEaQ');
+  assert.match(resized.searchParams.get('u'), /=w512-h512/);
 });
 
 test('Frontend helpers: hiResCover maneja URL sin patrón de tamaño (devuelve original)', () => {

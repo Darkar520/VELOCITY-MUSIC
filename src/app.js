@@ -122,6 +122,8 @@ export function createApp(deps = {}) {
     nowPlayingSvc = null,
     // ── Servicio de revocación de tokens (logout real) ──
     revocationService = null,
+    // Inyectable para probar el proxy de carátulas sin tocar la red.
+    fetchImpl = globalThis.fetch,
     staticDir = path.join(__dirname, '..', 'public'),
   } = deps;
 
@@ -253,19 +255,43 @@ export function createApp(deps = {}) {
   // envenenaba la caché), y permite que el service worker las cachee offline.
   // Allowlist estricta de hosts de imágenes (previene SSRF / proxy abierto).
   const COVER_HOSTS = /(^|\.)(googleusercontent\.com|ggpht\.com|ytimg\.com|mzstatic\.com)$/i;
+  const YOUTUBE_VIDEO_ID = /^[A-Za-z0-9_-]{6,20}$/;
   app.get('/img', async (req, res) => {
     let url;
     try { url = new URL(String(req.query.u || '')); } catch { return res.status(400).end(); }
     if (url.protocol !== 'https:' || !COVER_HOSTS.test(url.hostname)) return res.status(400).end();
-    try {
-      const r = await fetch(url, { headers: { 'User-Agent': 'VelocityMusic/1.0' } });
-      if (!r.ok) return res.status(502).end();
-      const type = r.headers.get('content-type') || 'image/jpeg';
-      if (!type.startsWith('image/')) return res.status(415).end();
+    const sendCover = (type, data) => {
       res.setHeader('Content-Type', type);
       res.setHeader('Cache-Control', 'public, max-age=2592000, immutable'); // 30 días
-      return res.end(Buffer.from(await r.arrayBuffer()));
-    } catch { return res.status(502).end(); }
+      return res.end(data);
+    };
+    const fetchImage = async (target) => {
+      try {
+        const r = await fetchImpl(target, { headers: { 'User-Agent': 'VelocityMusic/1.0' } });
+        if (!r.ok) return null;
+        const type = r.headers.get('content-type') || 'image/jpeg';
+        if (!type.startsWith('image/')) return { invalidType: true };
+        return { type, data: Buffer.from(await r.arrayBuffer()) };
+      } catch {
+        return null;
+      }
+    };
+
+    const primary = await fetchImage(url);
+    if (primary?.data) return sendCover(primary.type, primary.data);
+
+    // Algunas URLs de artwork `yt3.googleusercontent.com` que sigue entregando
+    // ytmusic-api ya no son servidas por Google. Con el videoId usamos la
+    // miniatura estable de YouTube como respaldo, sin aceptar URLs arbitrarias.
+    const videoId = String(req.query.id || '').trim();
+    const canUseYoutubeFallback = url.hostname.endsWith('googleusercontent.com')
+      && YOUTUBE_VIDEO_ID.test(videoId);
+    if (canUseYoutubeFallback) {
+      const fallback = await fetchImage(`https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`);
+      if (fallback?.data) return sendCover(fallback.type, fallback.data);
+    }
+
+    return res.status(primary?.invalidType ? 415 : 502).end();
   });
 
   // Secreto compartido: JWT + firma HMAC de stream (mismo valor, propósitos distintos).

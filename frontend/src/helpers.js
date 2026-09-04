@@ -28,15 +28,38 @@ const needsProxy = (url) => {
   try { return PROXY_HOSTS.test(new URL(url).hostname); } catch { return false; }
 };
 
+const resizeCoverUrl = (url, size) => {
+  let rewritten = url;
+  if (/=w\d+-h\d+/.test(url)) rewritten = url.replace(/=w\d+-h\d+/, `=w${size}-h${size}`);
+  else if (/=s\d+/.test(url)) rewritten = url.replace(/=s\d+/, `=s${size}`);
+  else if (/\d+x\d+bb\.(jpg|png)/i.test(url)) rewritten = url.replace(/\d+x\d+bb\.(jpg|png)/i, `${size}x${size}bb.$1`);
+  return rewritten;
+};
+
+// `normalizeTrack` puede envolver una portada de Google con /img para que el
+// backend conozca el videoId de respaldo. Mantener el resize dentro de `u`
+// conserva el contrato de 512/900px y evita descargar 1200px en miniaturas.
+const resizeProxyCover = (url, size) => {
+  if (typeof url !== 'string' || !url.startsWith('/img?')) return null;
+  try {
+    const proxy = new URL(url, 'https://velocity.invalid');
+    const inner = proxy.searchParams.get('u');
+    if (!inner) return url;
+    proxy.searchParams.set('u', resizeCoverUrl(inner, size));
+    return `${proxy.pathname}?${proxy.searchParams.toString()}`;
+  } catch {
+    return url;
+  }
+};
+
 export const hiResCover = (url, size = 512) => {
   if (!url || typeof url !== 'string') return url;
   // data: y blob: URLs van directo (no necesitan proxy ni resize)
   if (url.startsWith('data:') || url.startsWith('blob:')) return url;
   const s = Math.max(64, Math.min(1200, Math.round(size)));
-  let rewritten = url;
-  if (/=w\d+-h\d+/.test(url)) rewritten = url.replace(/=w\d+-h\d+/, `=w${s}-h${s}`);
-  else if (/=s\d+/.test(url)) rewritten = url.replace(/=s\d+/, `=s${s}`);
-  else if (/\d+x\d+bb\.(jpg|png)/i.test(url)) rewritten = url.replace(/\d+x\d+bb\.(jpg|png)/i, `${s}x${s}bb.$1`);
+  const proxy = resizeProxyCover(url, s);
+  if (proxy) return proxy;
+  const rewritten = resizeCoverUrl(url, s);
   // Pasar por el proxy del backend: resuelve CORS, cachea 30 días, y permite
   // que el service worker las sirva offline.
   if (needsProxy(rewritten)) return `/img?u=${encodeURIComponent(rewritten)}`;

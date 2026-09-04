@@ -9,12 +9,35 @@ const _catalog = new Map();
 
 export const hasCover = (c) => !!c && c !== FALLBACK_COVER;
 const isDataUrl = (c) => typeof c === 'string' && c.startsWith('data:');
+const GOOGLE_ARTWORK_HOST = /(^|\.)googleusercontent\.com$/i;
+
+// El CDN de artwork de Google puede devolver 400 para algunas URLs que
+// ytmusic-api aún entrega. Envolver solo esas URLs con el proxy same-origin
+// permite conservar la portada oficial y activar un respaldo por videoId si
+// el upstream falla. Las URLs de otras fuentes quedan intactas.
+function resilientArtworkUrl(url, id) {
+  if (!url || typeof url !== 'string' || !id || url.startsWith('data:') || url.startsWith('blob:')) return url;
+  // Solo migrar URLs con el formato de artwork de YTM. Esto deja intactas
+  // URLs genéricas de Google usadas por integraciones o fixtures antiguos.
+  if (!/=w\d+-h\d+|=s\d+/.test(url)) return url;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:' || !GOOGLE_ARTWORK_HOST.test(parsed.hostname)) return url;
+    const query = new URLSearchParams({ u: url, id: String(id) });
+    return `/img?${query.toString()}`;
+  } catch {
+    return url;
+  }
+}
+
 // Miniaturas de video de YouTube (i.ytimg.com) son captures del video,
 // NO artwork oficial del album. Preferimos siempre la portada canonica
 // (lh3/yt3.googleusercontent) sobre estos thumbs.
 const isVideoThumb = (c) => typeof c === 'string' && c.includes('i.ytimg.com');
 export function cacheTrack(t) {
   if (t && t.id) {
+    const resilientCover = resilientArtworkUrl(t.cover, t.id);
+    if (resilientCover !== t.cover) t = { ...t, cover: resilientCover };
     const prev = _catalog.get(t.id);
     if (prev) {
       // Prioridad de carátula (mayor → menor):
@@ -101,6 +124,7 @@ loadMeta();
 
 // Normaliza un TrackMetadata del backend a la forma del frontend (con url de streaming).
 export function normalizeTrack(t) {
+  const rawCover = t.artworkUrl || t.cover || '';
   const n = {
     id: t.id,
     title: t.title || 'Sin título',
@@ -112,7 +136,7 @@ export function normalizeTrack(t) {
     // Sin artwork → cadena vacía (CoverImg muestra el fallback al renderizar).
     // No usar FALLBACK_COVER aquí: es un data: URL que saveMeta borra a '',
     // dejando pistas sin carátula tras persistir.
-    cover: t.artworkUrl || t.cover || '',
+    cover: resilientArtworkUrl(rawCover, t.id),
     durationSeconds: t.durationSeconds || t.duration || 0,
   };
   n.url = api.streamUrl({
