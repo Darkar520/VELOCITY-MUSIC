@@ -20,6 +20,18 @@ import * as offline from '../offline.js';
 import { dedupeByTitle, capPerArtist } from '../helpers.js';
 import { cacheTrack, trackById, allCached, saveMeta, normalizeTrack } from '../catalog.js';
 
+// El enlace compartido debe salir del mismo origen que sirve la aplicación.
+// Evita dominios antiguos/inexistentes y mantiene funcionando los previews.
+export function buildTrackShareUrl(id, origin = (typeof window !== 'undefined' ? window.location.origin : 'https://velocitymusic.uk')) {
+  const trackId = String(id ?? '').trim();
+  if (!trackId) return '';
+  try {
+    return new URL(`/track/${encodeURIComponent(trackId)}`, origin).toString();
+  } catch {
+    return '';
+  }
+}
+
 export function useCatalogNavigation({
   setExpanded, setView, setOpenPlaylist, setTab,
   setDetailData, setDetailLoading, setCatVer,
@@ -276,7 +288,8 @@ export function useCatalogNavigation({
   };
 
   const shareTrack = (t) => {
-    const url = `https://velocity.music/track/${t.id}`;
+    const url = buildTrackShareUrl(t?.id);
+    if (!url) { showToast('No se pudo compartir la canción'); return; }
     if (navigator.share) navigator.share({ title:t.title, text:`${t.title} — ${t.artist}`, url }).catch(()=>{});
     else if (navigator.clipboard) navigator.clipboard.writeText(url).then(() => showToast('Enlace copiado')).catch(() => showToast('No se pudo copiar'));
     else showToast(url);
