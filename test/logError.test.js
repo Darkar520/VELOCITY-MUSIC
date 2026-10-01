@@ -34,6 +34,7 @@ test('formatErrorLog: no registra el query string de rutas sensibles', () => {
   for (const path of [
     '/api/stream-proxy?artist=A&exp=1&sig=SECRETO',
     '/api/stream-sign?artist=A&sig=SECRETO',
+    '/api/playback/prepare?artist=A&stream=https%3A%2F%2Fprivate.example%2Fsource',
     '/api/admin/stats?key=CLAVE',
     '/api/setup/extractor/install?key=CLAVE',
   ]) {

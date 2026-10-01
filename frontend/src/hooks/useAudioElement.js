@@ -1,9 +1,8 @@
 /**
  * useAudioElement — handlers del elemento <audio> físico.
  *
- * Extraído de App.jsx SIN cambio de comportamiento: devuelve exactamente los
- * mismos callbacks que estaban inline en el JSX, con el mismo cuerpo. El árbol
- * de render no cambia (mismo <audio>, mismas props).
+ * Agrupa los callbacks del <audio> físico. Conserva la posición al renovar una
+ * URL firmada durante una pista; el árbol de render sigue usando el mismo audio.
  *
  * Camino de adaptación al DOM: el ÚNICO adapter sigue siendo runAudioEffects,
  * registrado por usePlaybackController vía setPolicyEffectCtx (effectCtxRef).
@@ -30,7 +29,7 @@ const QUALITY_MAP = { high: 'high', medium: 'medium', low: 'low', HQ: 'high', St
 export function useAudioElement({
   audioRef, effectCtxRef,
   systemPausedRef, selfPauseRef, playingRef, pendingFadeRef, trackRef,
-  playErrorRef, consecutiveFailsRef, sustainedPlayRef, bgLastProgressRef,
+  consecutiveFailsRef, sustainedPlayRef, bgLastProgressRef,
   mediaInterrupted, loadingAudio, playing, vol, quality,
   setTime, setDur, setTrack, setLoadingAudio, setPlaying,
   getMachine, dispatchAudio, applySessionResume, restoreInterruptPosition,
@@ -67,8 +66,13 @@ export function useAudioElement({
               // Solo actualizar si la pista no cambió durante la re-firma.
               if (!a || trackRef.current?.id !== tk?.id || !playingRef.current) return;
               if (freshUrl && freshUrl !== currentSrc) {
+                const resumeAt = Number(a.currentTime);
+                const duration = Number(a.duration);
+                const canResume = Number.isFinite(resumeAt) && resumeAt >= 1.5
+                  && Number.isFinite(duration) && resumeAt < duration - 2;
                 setTrack((prev) => (prev && prev.id === tk?.id ? { ...prev, url: freshUrl } : prev));
                 dispatchAudio({ type: 'STREAM_READY', trackId: tk?.id, url: freshUrl });
+                if (canResume) dispatchAudio({ type: 'USER_SEEK', position: resumeAt });
               }
             }).catch(() => {}).finally(() => { if (a) a._resignInFlight = false; });
           }
@@ -129,7 +133,8 @@ export function useAudioElement({
       position: el?.currentTime || 0,
       trackId: getMachine().trackId || trackRef.current?.id || undefined,
     });
-    playErrorRef.current = { id: null, n: 0 };
+    // onPlaying puede volver a dispararse tras una fuente fresca que falla unos
+    // segundos después. Conservar el presupuesto de un reintento por pista.
     sustainedPlayRef.current = false;
     setTimeout(() => {
       if (audioRef.current && !audioRef.current.paused && audioRef.current.currentTime > 3) {

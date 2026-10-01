@@ -268,6 +268,7 @@ export default function App() {
   const [preloadEpoch, setPreloadEpoch] = useState(0);
   // Reintento por pista ante error de reproducción (URL de audio expirada, etc.).
   const playErrorRef = useRef({ id: null, n: 0 });
+  const stallRecoveryRef = useRef(null);
   const consecutiveFailsRef = useRef(0);
   const sustainedPlayRef = useRef(false);
   const playingRef = useRef(false);
@@ -606,6 +607,7 @@ export default function App() {
     bgLastCtRef, bgLastProgressRef,
     preloadEpochRef, setPreloadEpoch,
     vol, getMachine, dispatchAudio,
+    onStallTimeout: (failure) => stallRecoveryRef.current?.(failure),
   });
 
   // ── Precargar la(s) siguiente(s) pista(s) al cambiar la actual o la cola ──
@@ -745,7 +747,7 @@ export default function App() {
   const audioHandlers = useAudioElement({
     audioRef, effectCtxRef,
     systemPausedRef, selfPauseRef, playingRef, pendingFadeRef, trackRef,
-    playErrorRef, consecutiveFailsRef, sustainedPlayRef, bgLastProgressRef,
+    consecutiveFailsRef, sustainedPlayRef, bgLastProgressRef,
     mediaInterrupted, loadingAudio, playing, vol, quality,
     setTime, setDur, setTrack, setLoadingAudio, setPlaying,
     getMachine, dispatchAudio, applySessionResume, restoreInterruptPosition,
@@ -753,8 +755,8 @@ export default function App() {
     onTrackEnded: onEnded,
   });
 
-  // Manejo resiliente de errores de reproducción (ladder de 6 reintentos con
-  // firma fresca + anti-cascada): extraído a useAudioErrorRecovery.
+  // Un reintento con fuente fresca para errores y congelaciones; si persiste,
+  // detener la carga y mostrar la causa observable.
   const { handleAudioError } = useAudioErrorRecovery({
     audioRef, effectCtxRef, selfPauseRef, playingRef, trackRef,
     playErrorRef, consecutiveFailsRef,
@@ -762,6 +764,7 @@ export default function App() {
     getMachine, dispatchAudio, setTrack, setLoadingAudio, setPlaying,
     showToast, next,
   });
+  stallRecoveryRef.current = handleAudioError;
 
   // ── Acciones de biblioteca (fav, playlist, albums, mixes): extraídas a useLibraryActions ──
   const {

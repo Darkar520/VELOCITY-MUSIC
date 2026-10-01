@@ -419,6 +419,37 @@ describe('useLibrarySync: identidad de caché estable y caché a prueba de vacia
     });
   });
 
+  it('repara trackIds cacheados que pertenecen a otro álbum', async () => {
+    localStorage.setItem('velocity.lib.a@example.com', JSON.stringify({
+      favs: [],
+      playlists: [],
+      savedAlbums: [{ albumId: 'album-real', name: 'Album Real', trackIds: ['bangarang', 'kyoto'] }],
+      savedPlaylists: [],
+      recent: [],
+      tracks: [],
+    }));
+    catalog.trackById.mockImplementation((id) => ({
+      id,
+      albumId: 'album-bangarang',
+      album: 'Bangarang EP',
+    }));
+    api.savedAlbums.mockResolvedValue([{ albumId: 'album-real', name: 'Album Real' }]);
+    api.album.mockResolvedValue({
+      albumId: 'album-real',
+      tracks: [
+        { id: 'zeet', title: 'ZEET NOISE', albumId: 'album-real' },
+        { id: 'booster', title: 'BOOSTER', albumId: 'album-real' },
+      ],
+    });
+
+    renderHook(() => useLibrarySync({ authed: true, email: 'a@example.com' }));
+
+    await waitFor(() => {
+      expect(useLibraryStore.getState().savedAlbums[0]?.trackIds).toEqual(['zeet', 'booster']);
+    });
+    expect(api.album).toHaveBeenCalledWith('album-real');
+  });
+
   it('las playlists propias se pintan conservando trackIds locales aunque playlistTracks no resuelva', async () => {
     localStorage.setItem('velocity.lib.a@example.com', JSON.stringify({
       favs: [],

@@ -3,10 +3,10 @@ import path from 'node:path';
 import { loadEnv } from './src/lib/loadEnv.js';
 import { createApp } from './src/app.js';
 import { StreamCache } from './src/services/streamCache.js';
-import { createLimiter, createInflight } from './src/lib/concurrency.js';
+import { createCancellableInflight } from './src/lib/concurrency.js';
 import { normalizeText } from './src/lib/normalize.js';
 import { resolveActiveMode, createModeWatchdog } from './src/services/resolutionMode.js';
-import { probeYtDlp, createYtDlpExtractor, createYtDlpCatalog, createSoundCloudCatalog, createSoundCloudExtractor, YT_DLP_BIN_DIR, resolveYtDlpBin } from './src/extractors/ytdlp.js';
+import { probeYtDlp, getYtDlpDiagnostics, getYtDlpLoad, createYtDlpExtractor, createYtDlpCatalog, createSoundCloudCatalog, createSoundCloudExtractor, YT_DLP_BIN_DIR, resolveYtDlpBin } from './src/extractors/ytdlp.js';
 import { startYtDlpAutoUpdate } from './src/services/ytdlpUpdater.js';
 import { createYTMusicCatalog, createYTMusicArtist, createYTMusicAlbum, createYTMusicLyrics, createYTMusicSearchAll, createYTMusicRadio, createYTMusicSong, readyPromise as ytMusicReadyPromise } from './src/extractors/ytmusic.js';
 import { installYtDlpByDownload } from './src/services/extractorSetup.js';
@@ -49,10 +49,6 @@ loadEnv(__dirname);
 
 const PORT = process.env.PORT || 3000;
 const USE_POSTGRES = process.env.USE_POSTGRES === '1';
-// Máximo de procesos yt-dlp simultáneos POR PROCESO. En cluster, el lanzador
-// reparte el total entre workers vía WORKER_RESOLVE_CONCURRENCY.
-const RESOLVE_CONCURRENCY = Number(process.env.WORKER_RESOLVE_CONCURRENCY || process.env.RESOLVE_CONCURRENCY) || 4;
-
 // Re-exportar para compatibilidad y pruebas.
 export { StreamCache } from './src/services/streamCache.js';
 export { isUsableUrl } from './src/lib/normalize.js';
@@ -150,14 +146,22 @@ export async function bootstrap() {
   // generaban 16 procesos yt-dlp concurrentes; Windows mataba algunos y el
   // worker quedaba permanentemente en degraded aunque yt-dlp estuviera disponible.
   let activeMode = 'degraded';
+  let extractorDiagnostics = null;
+  const updateExtractorDiagnostics = async () => {
+    const latest = await getYtDlpDiagnostics();
+    if (extractorDiagnostics) Object.assign(extractorDiagnostics, latest);
+    else extractorDiagnostics = latest;
+  };
   const refreshMode = async () => {
     const { mode } = await resolveActiveMode({ requested: 'full' }, probeYtDlp);
+    await updateExtractorDiagnostics();
     activeMode = mode;
     return activeMode;
   };
   // Una sola sonda; refreshMode la realiza internamente y actualiza activeMode.
   const { notice } = await resolveActiveMode({ requested: 'full' }, probeYtDlp);
   activeMode = notice ? 'degraded' : 'full';
+  await updateExtractorDiagnostics();
 
   // ── Watchdog de auto-recuperación del modo degradado ──
   // Si la sonda del arranque falló (yt-dlp en medio de un update, red caída,
@@ -169,7 +173,10 @@ export async function bootstrap() {
   const modeWatchdog = createModeWatchdog({
     probe: probeYtDlp,
     isDegraded: () => activeMode === 'degraded',
-    onRecover: () => {
+    onRecover: async () => {
+      // El objeto compartido con createApp se actualiza antes de publicar
+      // resolutionMode=full; /api/status y los errores de playback ven lo mismo.
+      await updateExtractorDiagnostics();
       activeMode = 'full';
       console.log('✅ Watchdog de modo: yt-dlp volvió a estar disponible — modo full restaurado sin reinicio.');
     },
@@ -178,12 +185,10 @@ export async function bootstrap() {
   modeWatchdog.start();
 
   // ── Resolución de audio escalable ──
-  // 1) Límite de concurrencia: como máximo RESOLVE_CONCURRENCY procesos yt-dlp
-  //    a la vez; el resto espera en cola (no colapsa el servidor).
-  // 2) Deduplicación en vuelo: si varias personas piden la MISMA pista a la vez,
-  //    se lanza un solo yt-dlp y todas comparten el resultado.
-  const resolveLimit = createLimiter(RESOLVE_CONCURRENCY);
-  const resolveInflight = createInflight();
+  // La cola acotada/cancelable vive junto al proceso yt-dlp. Se evita una
+  // segunda cola sin timeout aquí; las peticiones iguales comparten trabajo,
+  // pero el proceso se cancela cuando todos los callers abandonan.
+  const resolveInflight = createCancellableInflight();
   // SoundCloud como ÚLTIMO recurso de reproducción: cuando los 5 clientes de
   // YouTube fallan (throttling/bot-detection), buscamos la MISMA canción en
   // SoundCloud (scsearch) y resolvemos su URL de stream. Esto hace real el
@@ -191,24 +196,31 @@ export async function bootstrap() {
   // nunca recibía, así que no reproducía nada para pistas de YouTube Music).
   const scSearch = createSoundCloudCatalog();
   const scResolve = createSoundCloudExtractor();
-  const scSearchAndResolve = async ({ artist, title, quality }) => {
+  const scSearchAndResolve = async ({ artist, title, quality }, { timeoutMs, signal } = {}) => {
     if (!artist || !title) return null;
+    const deadline = Date.now() + Math.max(1, Number(timeoutMs) || 12000);
     try {
-      const hits = await scSearch(`${artist} ${title}`, 1);
+      const hits = await scSearch(`${artist} ${title}`, 1, { timeoutMs, signal });
       const streamUrl = hits && hits[0] && (hits[0].streamUrl || hits[0].stream);
       if (!streamUrl) return null;
-      return await scResolve({ stream: streamUrl, quality });
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0 || signal?.aborted) return null;
+      return await scResolve({ stream: streamUrl, quality }, { timeoutMs: remainingMs, signal });
     } catch {
       return null;
     }
   };
   const baseExtractor = createYtDlpExtractor({ scFallback: scSearchAndResolve });
-  const extractorImpl = (args = {}) => {
+  const extractorImpl = (args = {}, options = {}) => {
     const q = args.quality ? `#${args.quality}` : '';
     const key = args.videoId
       ? `yt:${args.videoId}${q}`
       : `${normalizeText(args.artist)}:${normalizeText(args.title)}${q}`;
-    return resolveInflight(key, () => resolveLimit(() => baseExtractor(args)));
+    return resolveInflight(
+      key,
+      (signal) => baseExtractor(args, { ...options, signal }),
+      options.signal,
+    );
   };
 
   const ytmCatalog = createYTMusicCatalog();
@@ -236,8 +248,10 @@ export async function bootstrap() {
     // Fallback a yt-dlp si ytmusic-api falla.
     catalogImpl: catalogWithFallback,
     catalogTimeoutMs: 20000,
-    resolveTimeoutMs: 95000, // 5 clientes YT(15s c/u) + backoff(7s) + SC(15s) + margen
+    resolveTimeoutMs: 12000,
     extractorImpl,
+    extractorDiagnostics,
+    getExtractorLoad: getYtDlpLoad,
     // YouTube Music/yt-dlp vuelve a ser el proveedor principal y único de
     // reproducción. Deezer queda deshabilitado en el wiring de producción.
     deezerConfig: {

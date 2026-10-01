@@ -2,14 +2,16 @@
  * Resolution_Mode y controles de cumplimiento (uso personal).
  *
  * - Sin configuración explícita → `full` (la plataforma es de uso personal).
- * - Full_Mode + yt-dlp detectado ≤ 10 s → `full`.
- * - Full_Mode + yt-dlp NO detectado ≤ 10 s → `degraded` + indicación de no
+ * - Full_Mode + yt-dlp detectado durante la sonda acotada → `full`.
+ * - Full_Mode + yt-dlp NO detectado durante la sonda → `degraded` + indicación de no
  *   activación.
  *
  * Requisitos: 14.1, 14.2, 14.3, 14.5, 14.6
  */
 
-export const EXTRACTOR_PROBE_TIMEOUT_MS = 10000;
+// Dos intentos de hasta 10 s, separados por 500 ms, más margen de cierre del
+// proceso en Windows. El timeout externo no debe vencer antes que la sonda.
+export const EXTRACTOR_PROBE_TIMEOUT_MS = 25000;
 
 /**
  * Determina el modo activo a partir de la configuración y una sonda del
@@ -63,7 +65,7 @@ export function isFullResolutionAllowed(activeMode) {
  * siga degradado y notifica en cuanto yt-dlp vuelve a estar disponible.
  *
  * @param {{ probe: () => Promise<boolean>, isDegraded: () => boolean,
- *           onRecover: () => void, intervalMs?: number }} opts
+ *           onRecover: () => void|Promise<void>, intervalMs?: number }} opts
  * @returns {{ start: () => void, stop: () => void }}
  */
 export function createModeWatchdog({
@@ -82,19 +84,23 @@ export function createModeWatchdog({
       return;
     }
     probing = true;
-    let ok = false;
     try {
-      ok = await probe();
+      let ok = false;
+      try {
+        ok = await probe();
+      } catch {
+        ok = false;
+      }
+      if (!ok) return; // sigue degradado; se reintentará en el próximo tick
+      if (typeof isDegraded === 'function' && !isDegraded()) return;
+      if (typeof onRecover === 'function') await onRecover();
+      // Si onRecover no deja de estar degradado, el siguiente tick reintenta.
+      if (!isDegraded || !isDegraded()) stop();
     } catch {
-      ok = false;
+      // Una recuperación fallida se vuelve a intentar en el próximo tick.
     } finally {
       probing = false;
     }
-    if (!ok) return; // sigue degradado; se reintentará en el próximo tick
-    if (typeof isDegraded === 'function' && !isDegraded()) return;
-    if (typeof onRecover === 'function') onRecover();
-    // Si onRecover no deja de estar degradado, el siguiente tick reintenta.
-    if (!isDegraded || !isDegraded()) stop();
   };
 
   const start = () => {

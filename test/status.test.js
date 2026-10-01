@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fc from 'fast-check';
 import { buildStatus, MAX_CACHE_ENTRIES_REPORTED } from '../src/services/status.js';
+import { APP_VERSION } from '../shared/version.js';
 
 const RUNS = { numRuns: 100 };
 
@@ -78,4 +79,5 @@ test('Unit: caché vacía reporta cacheEntries 0', () => {
   const r = buildStatus({ resolutionMode: 'full', cacheSize: 0, uptime: 10 });
   assert.equal(r.cacheEntries, 0);
   assert.equal(r.status, 'operational');
+  assert.equal(r.appVersion, APP_VERSION);
 });

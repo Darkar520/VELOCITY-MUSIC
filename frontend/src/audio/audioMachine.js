@@ -406,12 +406,21 @@ export function reduce(state, event) {
     case 'ENDED': {
       next = {
         ...state,
+        intent: 'pause',
+        focus: 'own',
         livePosition: 0,
         sessionPosition: null,
         yieldPosition: null,
         yieldTrackId: null,
       };
-      // next track lo decide App (cola); machine solo limpia anclas
+      // El evento ended detiene la intención del elemento actual. App decide
+      // enseguida si repite, avanza o se detiene; esas acciones vuelven a
+      // despachar USER_PLAY/TRACK_SET y no dependen de estado React residual.
+      push(effects, { type: 'mediaSession', state: 'paused' });
+      push(effects, {
+        type: 'syncReact',
+        patch: { playing: false, loadingAudio: false, time: 0 },
+      });
       break;
     }
 

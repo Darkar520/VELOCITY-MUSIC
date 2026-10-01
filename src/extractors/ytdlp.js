@@ -18,28 +18,21 @@ import { audioFormatSelector } from '../services/audioFormat.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const YT_DLP_BIN_DIR = path.join(__dirname, '..', '..', 'bin');
+const NODE_RUNTIME_MIN_MAJOR = 22;
+export const YTDLP_PROBE_TIMEOUT_MS = 10000;
+const NODE_RUNTIME_SUPPORTED = Number.parseInt(process.versions.node, 10) >= NODE_RUNTIME_MIN_MAJOR;
+const JS_RUNTIME_ARGS = process.execPath && NODE_RUNTIME_SUPPORTED
+  ? ['--js-runtimes', `node:${process.execPath}`]
+  : [];
 
-// Clientes de YouTube en orden de preferencia para máxima resiliencia.
-// Cada cliente tiene distintos límites, fingerprints y tokens:
-//   android : evita PO tokens, menos throttling que web. Cliente primario.
-//   ios     : fingerprint distinto, segunda línea ante rate-limit de android.
-//   tv      : cliente de Smart TV, sin PO tokens, alta disponibilidad.
-//   web     : cliente web estándar, amplio soporte pero requiere PO tokens.
-//   mweb    : cliente web móvil, último recurso con límites relajados.
-const EXTRACTOR_ARGS = ['--extractor-args', 'youtube:player_client=default'];
-
-// Clientes de YouTube en orden de preferencia, actualizados para el experimento
-// SABR de YouTube (mediados de 2026). Los clientes clásicos (android/ios/tv/web
-// "puros") empezaron a devolver formatos SIN URL ("SABR-only") o con DRM, o a
-// exigir un GVS PO Token, rompiendo la reproducción de pistas aleatorias.
-//   default    : conjunto mantenido por yt-dlp (incluye android_vr/web_safari);
-//                se auto-actualiza con cada release para esquivar los bloqueos.
+// Clientes de YouTube en orden de preferencia.
+//   default    : conjunto de clientes mantenido por yt-dlp; se intenta primero.
 //   android_vr : cliente de Meta Quest, resistente a SABR (sirve itag 140 AAC).
-//   web_safari : cliente Safari con soporte HLS, evita el gate de PO token.
+//   web_safari : puede ofrecer HLS; el selector HTTPS directo lo descarta.
 //   tv         : Smart TV; sigue funcionando para parte del catálogo.
 //   ios        : último recurso (puede requerir PO token en algunas sesiones).
 // Un array de args vacío ([]) significa "no forzar cliente" → yt-dlp usa su set
-// por defecto. Ese es intencionalmente el PRIMER intento (el más robusto).
+// por defecto, en vez de depender de perfiles alternativos frágiles.
 const YT_CLIENTS = [
   { name: 'default', args: [] },
   { name: 'android_vr', args: ['--extractor-args', 'youtube:player_client=android_vr'] },
@@ -47,17 +40,6 @@ const YT_CLIENTS = [
   { name: 'tv', args: ['--extractor-args', 'youtube:player_client=tv'] },
   { name: 'ios', args: ['--extractor-args', 'youtube:player_client=ios'] },
 ];
-
-// User-Agents reales por cliente para rotar fingerprint y evitar bloqueos.
-// yt-dlp usa el UA interno de cada cliente por defecto, pero añadimos
-// --user-agent como override para los clientes web/mweb donde el UA importa.
-const CLIENT_UA = {
-  android: 'com.google.android.youtube/19.09.37 (Linux; U; Android 14; SM-S918B)',
-  ios: 'com.google.ios.youtube/19.09.3 (iPhone15,3; U; CPU iOS 17_5_1 like Mac OS X)',
-  tv: 'Mozilla/5.0 (PlayStation; PlayStation 4/12.0) AppleWebKit/605.1.15',
-  web: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-  mweb: 'Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36',
-};
 
 // Backoff exponencial entre clientes: 0ms, 500ms, 1000ms, 2000ms, 4000ms.
 // El primer intento es inmediato; cada cliente siguiente espera más para
@@ -85,104 +67,270 @@ export function resolveYtDlpBin() {
 /**
  * Sonda de disponibilidad: `yt-dlp --version`. Resuelve true/false.
  *
- * En modo cluster, 8 workers arrancan simultáneamente y cada uno dispara esta
- * sonda. En Windows eso son 8–16 procesos yt-dlp concurrentes en el arranque;
- * el SO puede matar algunos, dejando workers permanentemente en modo degraded.
- * Para evitarlo, la sonda reintenta hasta `retries` veces con backoff antes de
- * declarar que yt-dlp no está disponible.
+ * En modo cluster, varios workers pueden pedirla simultáneamente: comparten la
+ * sonda en cada proceso, hacen como máximo dos intentos y nunca exceden el
+ * timeout por intento.
  *
- * @param {{ retries?: number, delayMs?: number }} opts
+ * @param {{ retries?: number, delayMs?: number, timeoutMs?: number,
+ *           probeOnce?: (timeoutMs:number)=>Promise<object> }} opts
  */
-export async function probeYtDlp({ retries = 3, delayMs = 1000 } = {}) {
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    if (attempt > 0) {
-      await new Promise((r) => setTimeout(r, delayMs * attempt));
+let probeInFlight = null;
+let lastProbeResult = null;
+
+export function probeYtDlp({ retries = 1, delayMs = 500, timeoutMs = YTDLP_PROBE_TIMEOUT_MS, probeOnce = _probeOnce } = {}) {
+  if (probeInFlight) return probeInFlight;
+  const attemptCount = Math.min(2, Math.max(1, Math.trunc(Number(retries) || 0) + 1));
+  const boundedTimeoutMs = Math.min(12000, Math.max(1, Number(timeoutMs) || YTDLP_PROBE_TIMEOUT_MS));
+  const boundedDelayMs = Math.min(1000, Math.max(0, Number(delayMs) || 0));
+  const task = (async () => {
+    for (let attempt = 0; attempt < attemptCount; attempt++) {
+      if (attempt > 0) {
+        await new Promise((r) => setTimeout(r, boundedDelayMs * attempt));
+      }
+      const result = await probeOnce(boundedTimeoutMs);
+      lastProbeResult = { ...result, checkedAtMs: Date.now() };
+      if (result.ok) return true;
     }
-    const ok = await _probeOnce();
-    if (ok) return true;
-  }
-  return false;
+    return false;
+  })();
+  probeInFlight = task.finally(() => { probeInFlight = null; });
+  return probeInFlight;
 }
 
 /** Ejecuta `yt-dlp --version` una vez. Resuelve true si el proceso sale con 0. */
-function _probeOnce() {
+async function _probeOnce(timeoutMs = YTDLP_PROBE_TIMEOUT_MS) {
+  return runYtDlpProbe([...JS_RUNTIME_ARGS, '--version'], timeoutMs);
+}
+
+/**
+ * Diagnóstico seguro del runtime que se usará en esta misma instancia.
+ * `runtimeConfigured` significa que yt-dlp acepta el flag y el Node del
+ * proceso está disponible; no equivale a una prueba real de una pista.
+ */
+export async function getYtDlpDiagnostics({ timeoutMs = YTDLP_PROBE_TIMEOUT_MS, refresh = false } = {}) {
+  const nodeAvailable = Boolean(process.execPath && existsSync(process.execPath));
+  let runtime = !refresh && lastProbeResult && Date.now() - lastProbeResult.checkedAtMs < 30000
+    ? lastProbeResult
+    : null;
+  if (!runtime) {
+    const args = nodeAvailable && NODE_RUNTIME_SUPPORTED ? [...JS_RUNTIME_ARGS, '--version'] : ['--version'];
+    runtime = await runYtDlpProbe(args, timeoutMs);
+    lastProbeResult = { ...runtime, checkedAtMs: Date.now() };
+  }
+  const probeStatus = runtime.timedOut ? 'timeout' : runtime.ok ? 'ok' : 'unavailable';
+  const configured = runtime.timedOut
+    ? null
+    : nodeAvailable && NODE_RUNTIME_SUPPORTED && runtime.ok;
+  return {
+    available: runtime.timedOut ? null : runtime.ok,
+    version: runtime.version,
+    javascriptRuntime: {
+      name: 'node',
+      version: nodeAvailable ? process.versions.node : null,
+      available: nodeAvailable,
+      minimumSupportedMajor: NODE_RUNTIME_MIN_MAJOR,
+      supported: nodeAvailable && NODE_RUNTIME_SUPPORTED,
+      configured,
+    },
+    ready: runtime.timedOut ? null : runtime.ok && nodeAvailable && NODE_RUNTIME_SUPPORTED,
+    probeStatus,
+    processLimits: {
+      maxConcurrent: maxConcurrentProcesses(),
+      maxQueued: maxConcurrentProcesses() * 8,
+    },
+    playbackProbe: 'not_run',
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+/** Snapshot liviano de presión del semáforo; no ejecuta procesos externos. */
+export function getYtDlpLoad() {
+  const maxConcurrent = maxConcurrentProcesses();
+  return {
+    activeProcesses: _active,
+    queuedRequests: _waiters.length,
+    maxConcurrent,
+    maxQueued: maxConcurrent * 8,
+  };
+}
+
+function runYtDlpProbe(args, timeoutMs) {
   return new Promise((resolve) => {
     let settled = false;
-    const done = (v) => {
-      if (!settled) {
-        settled = true;
-        resolve(v);
-      }
+    let stdout = '';
+    let proc = null;
+    let timer = null;
+    const done = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { if (proc && !proc.killed) proc.kill('SIGKILL'); } catch { /* ignore */ }
+      resolve(result);
     };
     try {
-      const proc = spawn(resolveYtDlpBin(), ['--version']);
-      proc.on('close', (code) => done(code === 0));
-      proc.on('error', () => done(false));
+      proc = spawn(resolveYtDlpBin(), args, { windowsHide: true });
+      timer = setTimeout(() => done({ ok: false, version: null, timedOut: true }), timeoutMs);
+      proc.stdout.on('data', (data) => { stdout += data.toString(); });
+      proc.on('close', (code) => done({
+        ok: code === 0,
+        version: code === 0 ? stdout.trim().split(/\s+/)[0] || null : null,
+      }));
+      proc.on('error', () => done({ ok: false, version: null }));
     } catch {
-      done(false);
+      done({ ok: false, version: null });
     }
   });
 }
 
+export class YtDlpError extends Error {
+  constructor(details, extra = {}) {
+    super(details.message);
+    this.name = 'YtDlpError';
+    this.code = details.code;
+    this.retryable = details.retryable;
+    this.client = extra.client || null;
+    this.exitCode = Number.isInteger(extra.exitCode) ? extra.exitCode : null;
+  }
+}
+
+/** Convierte la salida no confiable del extractor en una causa estable y segura. */
+export function classifyYtDlpFailure({ output = '', timedOut = false, cancelled = false, stage = 'extract', spawnError } = {}) {
+  const text = `${output}\n${spawnError?.message || ''}`.toLowerCase();
+  if (cancelled) {
+    return failure('YT_RESOLUTION_CANCELLED', 'La solicitud de reproducción se canceló.', true);
+  }
+  if (timedOut) return failure('YT_EXTRACTOR_TIMEOUT', 'La búsqueda de audio superó el límite de espera.', true);
+  if (/only available to youtube music premium members|unlock this song by getting music premium|music premium members/.test(text)) {
+    return failure('YT_PREMIUM_REQUIRED', 'YouTube indica que esta pista está limitada a miembros de Music Premium.', false);
+  }
+  if (/members.only|sign in to confirm|login required|log in to|confirm your age|age.restricted|authentication required/.test(text)) {
+    return failure('YT_AUTH_REQUIRED', 'YouTube requiere iniciar sesión o verificar el acceso a esta pista.', false);
+  }
+  if (/not available in your country|geo.?restrict|country.?restrict|region.?restrict/.test(text)) {
+    return failure('YT_GEO_RESTRICTED', 'YouTube no ofrece esta pista en la región del servidor.', false);
+  }
+  if (/video unavailable|private video|has been removed|video has been removed|no longer available/.test(text)) {
+    return failure('YT_VIDEO_UNAVAILABLE', 'YouTube indica que el video está eliminado, privado o no disponible.', false);
+  }
+  if (/http error 429|too many requests|rate.?limit|temporarily blocked/.test(text)) {
+    return failure('YT_RATE_LIMITED', 'YouTube limitó temporalmente las solicitudes; vuelve a intentarlo más tarde.', true);
+  }
+  if (/no supported javascript runtime|javascript runtime.*(not found|missing|not available)|yt-dlp-ejs|remote component.*(failed|unavailable)|(?:no such option|unknown option|unrecognized argument).*js-runtimes/.test(text)) {
+    return failure('YT_RUNTIME_UNAVAILABLE', 'El runtime JavaScript requerido por yt-dlp no está disponible o no pudo iniciarse.', false);
+  }
+  if (/requested format is not available|no video formats found|no formats found|sabr|po token|nsig|signature extraction|challenge solving/.test(text)) {
+    return failure('YT_FORMAT_UNAVAILABLE', 'YouTube no entregó un formato de audio directo compatible.', true);
+  }
+  if (/enotfound|eai_again|econnreset|econnrefused|network is unreachable|connection timed out|timed out|socket timeout/.test(text)) {
+    return failure('YT_NETWORK_ERROR', 'El servidor no pudo completar la conexión con YouTube.', true);
+  }
+  if (/http error 403|forbidden/.test(text)) {
+    return failure('YT_UPSTREAM_FORBIDDEN', 'YouTube rechazó la solicitud (403); el motivo específico no se pudo determinar.', true);
+  }
+  if (/enoent|not recognized as an internal|spawn .* failed/.test(text)) {
+    return failure('YT_DLP_UNAVAILABLE', 'El servidor no pudo ejecutar el binario yt-dlp.', false);
+  }
+  return stage === 'queue'
+    ? failure('YT_EXTRACTOR_BUSY', 'El extractor está ocupado y no liberó capacidad antes del límite.', true)
+    : failure('YT_EXTRACTOR_UNKNOWN', 'YouTube no devolvió audio y el extractor no indicó una causa reconocible.', true);
+}
+
+function failure(code, message, retryable) {
+  return { code, message, retryable };
+}
+
 /**
- * Resuelve una URL directa de stream con cascada de clientes + backoff:
- *   1. YouTube android   — primario, evita PO tokens
- *   2. YouTube ios       — fingerprint distinto (backoff 500ms)
- *   3. YouTube tv        — cliente Smart TV (backoff 1s)
- *   4. YouTube web       — cliente web estándar (backoff 2s)
- *   5. YouTube mweb      — cliente móvil (backoff 4s)
- *   6. SoundCloud        — último recurso si todos los YT fallaron
- *
- * Entre cada cliente se aplica backoff exponencial para dar tiempo a que
- * el rate-limit del cliente anterior se recupere. Cada cliente usa su
- * User-Agent correspondiente para rotar el fingerprint.
- *
- * @returns {Promise<string|null>} URL directa, o null si todo falla.
+ * Resuelve una URL directa dentro de un presupuesto total compartido por todos
+ * los clientes, la cola de procesos y el fallback. Los rechazos de acceso no
+ * se reintentan con otros clientes.
  */
-export function createYtDlpExtractor({ scFallback } = {}) {
-  return async function extractorImpl({ artist, title, videoId, quality }) {
+export function createYtDlpExtractor({ scFallback, logger = console } = {}) {
+  return async function extractorImpl({ artist, title, videoId, quality }, { timeoutMs = 12000, signal } = {}) {
+    const startedAt = Date.now();
+    const budgetMs = Math.max(1, Math.min(12000, Number(timeoutMs) || 12000));
+    const deadline = startedAt + budgetMs;
     const ytTarget = videoId
       ? `https://www.youtube.com/watch?v=${videoId}`
       : `ytsearch1:${artist} - ${title} (Official Audio)`;
-    // --force-ipv4: YouTube aplica bot-detection más agresiva sobre rangos IPv6
-    // de datacenter; forzar IPv4 reduce los 403/429 intermitentes que hacen que
-    // "la misma canción a veces reproduzca y a veces no".
-    const baseArgs = ['-f', audioFormatSelector(quality), '-g', '--no-playlist',
-      '--force-ipv4', '--extractor-retries', '3', '--socket-timeout', '15'];
+    const baseArgs = [
+      '-f', audioFormatSelector(quality), '-g', '--no-playlist',
+      '--force-ipv4', '--extractor-retries', '2', '--socket-timeout', '5',
+    ];
+    let lastError = null;
+    let attempts = 0;
 
     for (let i = 0; i < YT_CLIENTS.length; i++) {
+      if (signal?.aborted) {
+        lastError = new YtDlpError(classifyYtDlpFailure({ cancelled: true }));
+        break;
+      }
+      const delay = backoffMs(i);
+      if (i > 0 && deadline - Date.now() <= delay) break;
+      if (delay > 0) await sleep(delay, signal);
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) break;
+
       const { name: clientName, args: clientArgs } = YT_CLIENTS[i];
-
-      // Backoff exponencial antes de cada cliente (excepto el primero).
-      if (i > 0) await sleep(backoffMs(i));
-
-      // Añadir User-Agent correspondiente al cliente (solo web/mweb para no romper firmas internas).
-      const ua = (clientName === 'web' || clientName === 'mweb') ? CLIENT_UA[clientName] : null;
-      const uaArgs = ua ? ['--user-agent', ua] : [];
-
-      const url = await runForUrl([...baseArgs, ...clientArgs, ...uaArgs, ytTarget]);
-      if (url) return url;
-    }
-
-    // Último recurso: SoundCloud para la misma pista. Se intenta SIEMPRE que
-    // haya artista+título, incluso si la pista tenía videoId de YouTube: cuando
-    // YouTube rechaza los 5 clientes (throttling/bot-detection), buscar la misma
-    // canción en SoundCloud permite que se reproduzca en lugar de fallar. El
-    // fallback busca+resuelve por artista/título (lo inyecta server.js).
-    if (typeof scFallback === 'function' && artist && title) {
+      attempts += 1;
       try {
-        const scUrl = await scFallback({ artist, title, quality });
-        if (scUrl) return scUrl;
-      } catch {}
+        const url = await runForUrl(
+          [...JS_RUNTIME_ARGS, ...baseArgs, ...clientArgs, ytTarget],
+          Math.min(remainingMs, 5500),
+          { signal, client: clientName },
+        );
+        if (url) return url;
+      } catch (err) {
+        lastError = err instanceof YtDlpError
+          ? err
+          : new YtDlpError(classifyYtDlpFailure({ output: err?.message || '' }), { client: clientName });
+        if (!lastError.retryable || lastError.code === 'YT_EXTRACTOR_BUSY') break;
+      }
     }
 
-    return null;
+    // El proveedor secundario solo se intenta ante un error técnico temporal,
+    // nunca para eludir una restricción de acceso explícita del video.
+    const remainingMs = deadline - Date.now();
+    if (
+      remainingMs > 0 && lastError?.retryable && typeof scFallback === 'function' &&
+      artist && title && !signal?.aborted
+    ) {
+      try {
+        const scUrl = await withTimeout(
+          scFallback({ artist, title, quality }, { timeoutMs: remainingMs, signal }),
+          remainingMs,
+        );
+        if (scUrl) return scUrl;
+      } catch { /* se conserva la causa original de YouTube */ }
+    }
+
+    const finalError = lastError || new YtDlpError(classifyYtDlpFailure({ timedOut: Date.now() >= deadline }));
+    if (finalError.code !== 'YT_RESOLUTION_CANCELLED') {
+      try {
+        logger?.warn?.('[yt-dlp] resolución fallida', JSON.stringify({
+          code: finalError.code,
+          client: finalError.client,
+          attempts,
+          elapsedMs: Date.now() - startedAt,
+        }));
+      } catch { /* la telemetría no debe bloquear la reproducción */ }
+    }
+    throw finalError;
   };
 }
 
-/** Sleep helper para backoff entre clientes. */
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
+/** Sleep cancelable: abortar el request no deja la cascada esperando backoff. */
+function sleep(ms, signal) {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    let timer;
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    };
+    timer = setTimeout(done, ms);
+    signal?.addEventListener('abort', done, { once: true });
+  });
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -192,18 +340,49 @@ function sleep(ms) {
 // Semáforo: como máximo MAX_CONCURRENT procesos a la vez; el resto hace cola.
 // Además, cada proceso se MATA al expirar para no dejar procesos zombie.
 // ───────────────────────────────────────────────────────────────
-const MAX_CONCURRENT = Number(process.env.YTDLP_MAX_CONCURRENT || 4);
+function maxConcurrentProcesses() {
+  const configured = Number(
+    process.env.YTDLP_MAX_CONCURRENT || process.env.WORKER_RESOLVE_CONCURRENCY || process.env.RESOLVE_CONCURRENCY || 4,
+  );
+  return Number.isInteger(configured) && configured > 0 ? Math.min(configured, 16) : 4;
+}
 let _active = 0;
 const _waiters = [];
 
-function acquireSlot() {
-  if (_active < MAX_CONCURRENT) { _active++; return Promise.resolve(); }
-  return new Promise((res) => _waiters.push(res));
+function acquireSlot(timeoutMs, signal) {
+  if (signal?.aborted) return Promise.resolve(false);
+  if (_active < maxConcurrentProcesses()) { _active++; return Promise.resolve(true); }
+  if (_waiters.length >= maxConcurrentProcesses() * 8) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const waiter = { settled: false, timer: null, abortListener: null };
+    const settle = (granted) => {
+      if (waiter.settled) return false;
+      waiter.settled = true;
+      clearTimeout(waiter.timer);
+      if (waiter.abortListener) signal?.removeEventListener('abort', waiter.abortListener);
+      resolve(granted);
+      return true;
+    };
+    waiter.grant = () => settle(true);
+    const cancel = () => {
+      const index = _waiters.indexOf(waiter);
+      if (index >= 0) _waiters.splice(index, 1);
+      settle(false);
+    };
+    waiter.timer = setTimeout(cancel, Math.max(1, timeoutMs));
+    if (signal) {
+      waiter.abortListener = cancel;
+      signal.addEventListener('abort', cancel, { once: true });
+    }
+    _waiters.push(waiter);
+  });
 }
 function releaseSlot() {
-  const next = _waiters.shift();
-  if (next) next();       // el slot pasa directo al siguiente en cola
-  else _active--;
+  while (_waiters.length) {
+    const next = _waiters.shift();
+    if (next.grant()) return; // el slot se transfiere al siguiente request
+  }
+  _active = Math.max(0, _active - 1);
 }
 
 /**
@@ -211,46 +390,125 @@ function releaseSlot() {
  * @param {string[]} args
  * @param {{ mode?: 'url'|'lines', timeoutMs?: number }} opts
  */
-function runYtDlp(args, { mode = 'url', timeoutMs = 30000 } = {}) {
+function runYtDlp(args, { mode = 'url', timeoutMs = 30000, signal, client = null } = {}) {
   const empty = mode === 'lines' ? [] : null;
-  return new Promise((resolve) => {
-    acquireSlot().then(() => {
-      let out = '';
-      let settled = false;
-      let proc = null;
-      let timer = null;
-      const finish = (v) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        try { if (proc && !proc.killed) proc.kill('SIGKILL'); } catch {}
-        releaseSlot();
-        resolve(v);
-      };
+  const deadline = Date.now() + Math.max(1, Number(timeoutMs) || 30000);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let hasSlot = false;
+    let processClosed = false;
+    let releaseAfterClose = false;
+    let proc = null;
+    let timer = null;
+    let out = '';
+    let stderr = '';
+    const releaseSlotOnce = () => {
+      if (!hasSlot) return;
+      hasSlot = false;
+      releaseSlot();
+    };
+    const finish = (value, error = null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      if (error) {
+        try { if (proc && !proc.killed) proc.kill('SIGKILL'); } catch { /* ignore */ }
+      }
+      if (hasSlot && error && proc && proc.pid !== undefined && !processClosed) {
+        releaseAfterClose = true;
+      } else if (hasSlot) {
+        releaseSlotOnce();
+      }
+      if (error && mode === 'url') reject(error);
+      else resolve(value);
+    };
+    const onAbort = () => finish(empty, new YtDlpError(classifyYtDlpFailure({ cancelled: true }), { client }));
+    if (signal?.aborted) {
+      finish(empty, new YtDlpError(classifyYtDlpFailure({ cancelled: true }), { client }));
+      return;
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
+
+    acquireSlot(Math.max(1, deadline - Date.now()), signal).then((acquired) => {
+      if (settled) {
+        if (acquired) releaseSlot();
+        return;
+      }
+      if (!acquired) {
+        const details = signal?.aborted
+          ? classifyYtDlpFailure({ cancelled: true })
+          : classifyYtDlpFailure({ stage: 'queue' });
+        finish(empty, new YtDlpError(details, { client }));
+        return;
+      }
+      hasSlot = true;
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        finish(empty, new YtDlpError(classifyYtDlpFailure({ timedOut: true }), { client }));
+        return;
+      }
+
       try {
-        proc = spawn(resolveYtDlpBin(), args);
-        timer = setTimeout(() => finish(empty), timeoutMs);   // mata el proceso colgado
-        proc.stdout.on('data', (d) => { out += d.toString(); });
-        proc.on('close', () => {
+        proc = spawn(resolveYtDlpBin(), args, { windowsHide: true });
+        timer = setTimeout(
+          () => finish(empty, new YtDlpError(classifyYtDlpFailure({ timedOut: true }), { client })),
+          remainingMs,
+        );
+        proc.stdout.on('data', (data) => { out = appendLimited(out, data, 1_000_000); });
+        proc.stderr.on('data', (data) => { stderr = appendLimited(stderr, data, 8_000); });
+        proc.on('close', (code) => {
+          processClosed = true;
+          if (releaseAfterClose) {
+            releaseSlotOnce();
+            return;
+          }
           if (mode === 'lines') {
             finish(out.trim() ? out.trim().split('\n') : []);
-          } else {
-            const lines = out.trim() ? out.trim().split('\n') : [];
-            const url = lines.find((l) => l.startsWith('http://') || l.startsWith('https://'));
-            finish(url || null);
+            return;
           }
+          const lines = out.trim() ? out.trim().split('\n') : [];
+          const url = lines.find((line) => line.startsWith('http://') || line.startsWith('https://'));
+          if (url) {
+            finish(url);
+            return;
+          }
+          const details = classifyYtDlpFailure({ output: `${stderr}\n${out}` });
+          finish(empty, new YtDlpError(details, { client, exitCode: code }));
         });
-        proc.on('error', () => finish(empty));
-      } catch { finish(empty); }
+        proc.on('error', (error) => {
+          if (proc.pid === undefined) processClosed = true;
+          const details = classifyYtDlpFailure({ spawnError: error });
+          finish(empty, new YtDlpError(details, { client }));
+        });
+      } catch (error) {
+        const details = classifyYtDlpFailure({ spawnError: error });
+        finish(empty, new YtDlpError(details, { client }));
+      }
+    }).catch((error) => {
+      const details = classifyYtDlpFailure({ spawnError: error });
+      finish(empty, new YtDlpError(details, { client }));
     });
   });
 }
 
-function runForUrl(args) {
-  // 15s por cliente: con 5 clientes + backoff, el total máximo es
-  // ~75s de ejecución + ~7s de backoff = ~82s. El audioResolver
-  // tiene resolveTimeoutMs=95s para cubrir todo el encadenamiento.
-  return runYtDlp(args, { mode: 'url', timeoutMs: 15000 });
+function appendLimited(current, chunk, maxLength) {
+  if (current.length >= maxLength) return current;
+  return current + chunk.toString().slice(0, maxLength - current.length);
+}
+
+function runForUrl(args, timeoutMs = 15000, options = {}) {
+  return runYtDlp(args, { mode: 'url', timeoutMs, ...options });
+}
+
+function withTimeout(promise, timeoutMs) {
+  let timer;
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('extractor timeout')), timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
 }
 
 /**
@@ -264,7 +522,7 @@ export function createYtDlpCatalog() {
       '--dump-json',
       '--flat-playlist',
       '--no-warnings',
-      ...EXTRACTOR_ARGS,
+      ...JS_RUNTIME_ARGS,
     ];
     const lines = await runForLines(args);
     return lines
@@ -320,8 +578,8 @@ function cleanArtist(artist) {
   return artist.replace(/\s*-\s*topic$/i, '').trim();
 }
 
-function runForLines(args) {
-  return runYtDlp(args, { mode: 'lines', timeoutMs: 15000 });
+function runForLines(args, { timeoutMs = 15000, signal } = {}) {
+  return runYtDlp(args, { mode: 'lines', timeoutMs, signal });
 }
 
 function safeParse(line) {
@@ -345,12 +603,12 @@ function pickThumb(thumbnails) {
  * no como fallback del extractor de YouTube.
  */
 export function createSoundCloudCatalog() {
-  return async function soundCloudCatalog(query, limit = 10) {
+  return async function soundCloudCatalog(query, limit = 10, options = {}) {
     const args = [
       `scsearch${limit}:${query}`,
       '--dump-json', '--flat-playlist', '--no-warnings',
     ];
-    const lines = await runForLines(args);
+    const lines = await runForLines(args, options);
     return lines
       .map((line) => safeParse(line))
       .filter(Boolean)
@@ -391,10 +649,10 @@ export function createSoundCloudCatalog() {
  * Se usa cuando el usuario reproduce una pista encontrada desde SoundCloud.
  */
 export function createSoundCloudExtractor() {
-  return async function scExtractor({ stream, quality }) {
+  return async function scExtractor({ stream, quality }, { timeoutMs = 12000, signal } = {}) {
     if (!stream) return null;
     const baseArgs = ['-f', audioFormatSelector(quality), '-g', '--no-playlist',
-      '--extractor-retries', '1', '--socket-timeout', '20'];
-    return runForUrl([...baseArgs, stream]);
+      '--extractor-retries', '1', '--socket-timeout', '5'];
+    return runForUrl([...JS_RUNTIME_ARGS, ...baseArgs, stream], timeoutMs, { signal });
   };
 }

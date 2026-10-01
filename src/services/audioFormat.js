@@ -2,32 +2,36 @@
  * Audio_Format_Preference — selección de formato para yt-dlp.
  *
  * Preferencia: Opus (webm) ~160 kbps primario → AAC (m4a) ~256 kbps respaldo →
- * mejor audio disponible. Nunca formatos sin pérdida (flac/alac/wav) y sin
- * recodificar (yt-dlp con `-g`, sin `--extract-audio`).
+ * mejor audio disponible. Solo URLs HTTPS directas: el reproductor usa un
+ * `<audio>` nativo, sin parser HLS/DASH para manifiestos segmentados.
+ * Nunca formatos sin pérdida (flac/alac/wav) ni recodificar.
  *
  * Requisitos: 2.5, 2.6, 2.7
  */
 
 export const TARGET_OPUS_KBPS = 160;
 export const TARGET_AAC_KBPS = 256;
+const DIRECT_HTTPS = '[protocol=https]';
 
 const LOSSLESS_CODECS = new Set(['flac', 'alac', 'wav', 'pcm', 'tta', 'ape']);
 
 /**
  * Cadena de selección de formato para `yt-dlp -f <selector> -g`.
- * Prioriza Opus/webm, luego AAC/m4a, luego mejor audio disponible.
+ * Prioriza Opus/webm, luego AAC/m4a, luego mejor audio disponible. El filtro
+ * de protocolo excluye `m3u8`/`m3u8_native` y DASH segmentado.
  */
 export function audioFormatSelector(quality = 'high') {
+  const direct = (formats) => formats.map((format) => `${format}${DIRECT_HTTPS}`).join('/');
   if (quality === 'low') {
     // Menor consumo de datos.
-    return ['bestaudio[ext=m4a][abr<=96]', 'worstaudio[ext=m4a]', 'bestaudio', 'best'].join('/');
+    return direct(['bestaudio[ext=m4a][abr<=96]', 'worstaudio[ext=m4a]', 'bestaudio', 'best']);
   }
   if (quality === 'medium') {
     // AAC ~128 kbps, buena compatibilidad y peso moderado.
-    return ['bestaudio[ext=m4a][abr<=140]', 'bestaudio[ext=m4a]', 'bestaudio', 'best'].join('/');
+    return direct(['bestaudio[ext=m4a][abr<=140]', 'bestaudio[ext=m4a]', 'bestaudio', 'best']);
   }
   // 'high' (por defecto): Opus ~160 kbps → AAC m4a → mejor disponible.
-  return ['bestaudio[acodec=opus]', 'bestaudio[ext=m4a]', 'bestaudio', 'best'].join('/');
+  return direct(['bestaudio[acodec=opus]', 'bestaudio[ext=m4a]', 'bestaudio', 'best']);
 }
 
 function isLossless(acodec) {

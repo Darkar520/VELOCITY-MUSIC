@@ -5,9 +5,15 @@ import {
   resolveActiveMode,
   isFullResolutionAllowed,
   createModeWatchdog,
+  EXTRACTOR_PROBE_TIMEOUT_MS,
 } from '../src/services/resolutionMode.js';
+import { YTDLP_PROBE_TIMEOUT_MS } from '../src/extractors/ytdlp.js';
 
 const RUNS = { numRuns: 100 };
+
+test('presupuesto externo cubre dos sondas del extractor y su pausa', () => {
+  assert.ok(EXTRACTOR_PROBE_TIMEOUT_MS > YTDLP_PROBE_TIMEOUT_MS * 2 + 500);
+});
 
 // Feature: velocity-music-streaming, Property 46: Resolución del modo activo
 // (tabla de decisión). Sin config → full; full+detectado → full;
@@ -124,6 +130,35 @@ test('watchdog: sonda que lanza excepción no rompe la recuperación posterior',
   } finally {
     wd.stop();
   }
+});
+
+test('watchdog espera el diagnóstico asíncrono antes de publicar modo full', async () => {
+  let releaseRecovery;
+  let notifyRecovery;
+  const recoveryEntered = new Promise((resolve) => { notifyRecovery = resolve; });
+  const recoveryGate = new Promise((resolve) => { releaseRecovery = resolve; });
+  let probes = 0;
+  const snapshot = { probeStatus: 'timeout', available: null };
+  const mode = { value: 'degraded' };
+  const wd = createModeWatchdog({
+    probe: async () => { probes += 1; return true; },
+    isDegraded: () => mode.value === 'degraded',
+    onRecover: async () => {
+      notifyRecovery();
+      await recoveryGate;
+      Object.assign(snapshot, { probeStatus: 'ok', available: true });
+      mode.value = 'full';
+    },
+  });
+  const tick = wd.tick();
+  await recoveryEntered;
+  assert.equal(mode.value, 'degraded');
+  await wd.tick();
+  assert.equal(probes, 1, 'no solapa otra sonda durante la recuperación');
+  releaseRecovery();
+  await tick;
+  assert.equal(mode.value, 'full');
+  assert.equal(snapshot.probeStatus, 'ok');
 });
 
 test('watchdog: el intervalo periódico sondea hasta recuperar (timers reales)', async () => {

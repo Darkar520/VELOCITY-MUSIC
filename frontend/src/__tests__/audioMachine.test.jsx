@@ -183,12 +183,29 @@ describe('audioMachine reduce', () => {
   });
 
   describe('ENDED', () => {
-    it('limpia anclas', () => {
-      const s0 = { ...initialState(), trackId: 't1', intent: 'play', yieldPosition: 30, sessionPosition: 20 };
-      const { state } = reduce(s0, { type: 'ENDED' });
+    it('detiene la intención al terminar para permitir replay y limpia anclas', () => {
+      const s0 = {
+        ...initialState(),
+        trackId: 't1',
+        intent: 'play',
+        srcStatus: 'ready',
+        yieldPosition: 30,
+        sessionPosition: 20,
+      };
+      const { state, effects } = reduce(s0, { type: 'ENDED' });
+      expect(state.intent).toBe('pause');
       expect(state.livePosition).toBe(0);
       expect(state.yieldPosition).toBeNull();
       expect(state.sessionPosition).toBeNull();
+      expect(effects.find((effect) => effect.type === 'syncReact').patch).toMatchObject({
+        playing: false,
+        loadingAudio: false,
+        time: 0,
+      });
+
+      const replay = reduce(state, { type: 'USER_PLAY' });
+      expect(replay.state.intent).toBe('play');
+      expect(replay.effects.map((effect) => effect.type)).toContain('play');
     });
   });
 

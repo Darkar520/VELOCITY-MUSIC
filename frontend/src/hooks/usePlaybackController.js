@@ -10,7 +10,7 @@ import * as offline from '../offline.js';
 import { slimTrack } from '../helpers.js';
 import { mergeRadioTail } from '../radioNext.js';
 import { cacheTrack, trackById, saveMeta, bestCoverFor, normalizeTrack } from '../catalog.js';
-import { isDocumentVisible, shouldFadeIn, isStreamUrlFresh } from '../audioContinuity.js';
+import { isDocumentVisible, shouldFadeIn } from '../audioContinuity.js';
 import { runAudioEffects, bumpAudioEpoch } from '../audio/runAudioEffects.js';
 import { usePlayerStore } from '../store/playerStore.js';
 import { enrichCoverIfNeeded } from '../coverEnrich.js';
@@ -87,6 +87,7 @@ export function usePlaybackController(deps) {
 
   const effectCtxRef = useRef({});
   const ensureStreamFnRef = useRef(async () => {});
+  const resolveAbortRef = useRef(null);
   const playGenRef = useRef(0);
   const prefetchedRef = useRef(new Set());
   /** Fallos de firma por trackId — evita bucle PLAY_FAILED↔ensureStream y toasts falsos. */
@@ -151,6 +152,7 @@ export function usePlaybackController(deps) {
   usePlayerStore.getState().setPolicyEffectCtx(effectCtxRef.current);
 
   useEffect(() => () => {
+    resolveAbortRef.current?.abort();
     usePlayerStore.getState().setPolicyEffectCtx(null);
   }, []);
 
@@ -247,6 +249,9 @@ export function usePlaybackController(deps) {
     }
     const qParam = QUALITY_MAP[quality] || 'high';
     const sp = streamParamsFor(t, qParam);
+    resolveAbortRef.current?.abort();
+    const resolveController = new AbortController();
+    resolveAbortRef.current = resolveController;
     try {
       if (downloaded.has(trackId)) {
         const b = await offline.getBlob(trackId);
@@ -263,36 +268,37 @@ export function usePlaybackController(deps) {
       // la firma en caché, peek evita otra petición; si no, ensureStreamUrl es
       // la única resolución del camino crítico.
       let url = api.peekStreamUrl(sp, 30);
-      if (!url) url = await api.ensureStreamUrl(sp);
+      if (!url) url = await api.ensureStreamUrl(sp, { signal: resolveController.signal });
       if (getMachine().trackId !== trackId || getMachine().intent !== 'play') return;
       setTrack((prev) => (prev && prev.id === trackId ? { ...prev, url } : { ...t, url }));
       signFailRef.current = { id: null, n: 0 };
       dispatchAudio({ type: 'STREAM_READY', trackId, url });
     } catch (err) {
+      if (err?.name === 'AbortError') return;
       if (getMachine().trackId !== trackId || getMachine().intent !== 'play') return;
-      const n = signFailRef.current.id === trackId ? signFailRef.current.n + 1 : 1;
-      signFailRef.current = { id: trackId, n };
-      if (n <= 2) {
-        api._streamSignCache?.delete?.(api._streamSignKey?.(sp));
-        await new Promise((r) => setTimeout(r, 350 * n));
-        if (getMachine().trackId === trackId && getMachine().intent === 'play') {
-          return ensureStreamFnRef.current(trackId);
-        }
-        return;
-      }
+      signFailRef.current = { id: null, n: 0 };
+      setLoadingAudio?.(false);
       if (err?.status === 401) {
         showToast?.('Sesión caducada. Vuelve a iniciar sesión.');
         dispatchAudio({ type: 'USER_PAUSE' });
       } else {
-        // Retries agotados y sin src en el elemento: handleAudioError no
-        // disparará porque currentSrc está vacío (TRACK_SET hizo clearSrc).
-        // Despachar USER_PAUSE para sacar la máquina del estado
-        // { intent:'play', srcStatus:'none' } que deja la UI bloqueada en
-        // "playing" sin audio y sin posibilidad de recuperarse (stuck 0:00).
-        showToast?.('No se pudo obtener el audio. Toca play para reintentar.');
+        // El preflight devuelve la causa antes de montar <audio>. No repetimos
+        // automáticamente una búsqueda de hasta 12 s que oculte el diagnóstico.
+        const detail = typeof err?.message === 'string' && err.message.trim()
+          ? err.message
+          : 'El servidor no pudo preparar esta pista.';
+        showToast?.(err?.retryable === false
+          ? detail
+          : `${detail} Puedes volver a intentarlo.`);
         dispatchAudio({ type: 'USER_PAUSE' });
-        setLoadingAudio?.(false);
+        api.reportPlaybackError({
+          trackId,
+          errorCode: err?.code || `http_${err?.status || 'network'}`,
+          errorMessage: detail,
+        }).catch(() => {});
       }
+    } finally {
+      if (resolveAbortRef.current === resolveController) resolveAbortRef.current = null;
     }
   };
 
@@ -310,7 +316,6 @@ export function usePlaybackController(deps) {
     prefetchedRef.current.add(key);
     const sp = streamParamsFor(nt, qParam);
     api.warmStreamUrl(sp);
-    api.prefetchStream({ artist: nt.artist, title: nt.title, id: nt.id, quality: qParam });
     if (prefetchedRef.current.size > 40) {
       prefetchedRef.current = new Set([...prefetchedRef.current].slice(-20));
     }
@@ -348,26 +353,38 @@ export function usePlaybackController(deps) {
     }
   }, [radioSeedRef, radioRequestRef, setQueue]);
 
-  const applyOnlineSrc = useCallback((t, sp, gen, fallbackTrack) => {
+  const applyOnlineSrc = useCallback((t, sp, gen) => {
     const peeked = api.peekStreamUrl(sp, 90);
     if (peeked) {
       setTrack({ ...t, url: peeked });
       dispatchAudio({ type: 'STREAM_READY', trackId: t.id, url: peeked });
       return;
     }
-    api.ensureStreamUrl(sp).then((signedUrl) => {
+    resolveAbortRef.current?.abort();
+    const resolveController = new AbortController();
+    resolveAbortRef.current = resolveController;
+    api.ensureStreamUrl(sp, { signal: resolveController.signal }).then((signedUrl) => {
       if (playGenRef.current !== gen || getMachine().trackId !== t.id) return;
       setTrack({ ...t, url: signedUrl });
       dispatchAudio({ type: 'STREAM_READY', trackId: t.id, url: signedUrl });
-    }).catch(() => {
+    }).catch((err) => {
+      if (err?.name === 'AbortError') return;
       if (playGenRef.current !== gen) return;
-      if (fallbackTrack?.url && isStreamUrlFresh(fallbackTrack.url)) {
-        dispatchAudio({ type: 'STREAM_READY', trackId: t.id, url: fallbackTrack.url });
-      } else {
-        dispatchAudio({ type: 'PLAY_FAILED', reason: 'sign' });
-      }
+      setLoadingAudio?.(false);
+      dispatchAudio({ type: 'USER_PAUSE' });
+      const detail = typeof err?.message === 'string' && err.message.trim()
+        ? err.message
+        : 'El servidor no pudo preparar esta pista.';
+      showToast?.(err?.retryable === false ? detail : `${detail} Puedes volver a intentarlo.`);
+      api.reportPlaybackError({
+        trackId: t.id,
+        errorCode: err?.code || `http_${err?.status || 'network'}`,
+        errorMessage: detail,
+      }).catch(() => {});
+    }).finally(() => {
+      if (resolveAbortRef.current === resolveController) resolveAbortRef.current = null;
     });
-  }, [dispatchAudio, getMachine, setTrack]);
+  }, [dispatchAudio, getMachine, setLoadingAudio, setTrack, showToast]);
 
   const afterPlaySideEffects = useCallback((t, trackWithQuality, initialQueue, qParam, opts) => {
     setRecent((r) => [t.id, ...r.filter((x) => x !== t.id)].slice(0, 30));
@@ -410,6 +427,8 @@ export function usePlaybackController(deps) {
 
   const play = useCallback((t, list, opts = {}) => {
     if (!t) return;
+    resolveAbortRef.current?.abort();
+    resolveAbortRef.current = null;
     if (opts.from !== undefined) setPlayingFrom?.(opts.from);
     const best = bestCoverFor(t.id, t.cover || t.artworkUrl || '');
     if (best && best !== t.cover) t = { ...t, cover: best };
@@ -483,9 +502,9 @@ export function usePlaybackController(deps) {
           const u = URL.createObjectURL(b);
           objUrlRef.current = u;
           dispatchAudio({ type: 'STREAM_READY', trackId: t.id, url: u });
-        } else applyOnlineSrc(t, sp, gen, trackWithQuality);
+        } else applyOnlineSrc(t, sp, gen);
       }).catch(() => {
-        if (playGenRef.current === gen) applyOnlineSrc(t, sp, gen, { ...t, url: api.streamUrl(sp) });
+        if (playGenRef.current === gen) applyOnlineSrc(t, sp, gen);
       });
       afterPlaySideEffects(t, { ...t, url: api.streamUrl(sp) }, initialQueue, qParam, opts);
       return;
@@ -504,8 +523,7 @@ export function usePlaybackController(deps) {
     afterPlaySideEffects(t, trackWithQuality, initialQueue, qParam, opts);
 
     // UN solo camino de firma: TRACK_SET → ensureStream (arriba).
-    // Si una precarga de una pista siguiente dejó la firma en caché, peek la
-    // reutiliza sin añadir otra resolución al arranque de la pista actual.
+    // Reutilizar solo una firma cuyo preflight ya comprobó una fuente.
     const peeked = api.peekStreamUrl(sp, 45);
     if (peeked) {
       dispatchAudio({ type: 'STREAM_READY', trackId: t.id, url: peeked });
@@ -523,6 +541,8 @@ export function usePlaybackController(deps) {
   const togglePlay = useCallback(() => {
     if (!track) return;
     if (getMachine().intent === 'play' || playingRef.current || playing) {
+      resolveAbortRef.current?.abort();
+      resolveAbortRef.current = null;
       dispatchAudio({ type: 'USER_PAUSE' });
       api.updateNowPlaying({
         trackId: track.id, title: track.title, artist: track.artist, cover: track.cover,

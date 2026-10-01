@@ -2,12 +2,12 @@
 // Constantes globales: CSS, temas, semillas de descubrimiento.
 // ═══════════════════════════════════════════════════════════════
 
-// Versión de la aplicación — FUENTE ÚNICA DE VERDAD.
+// Versión de la aplicación — compartida con el estado del backend.
 // REGLA: se incrementa en CADA implementación/deploy a producción para dar
 // trazabilidad visible al usuario (se muestra en Perfil). Al subirla, subir
 // también CACHE en frontend/public/sw.js (velocity-vN) para forzar la
 // actualización del service worker en los clientes.
-export const APP_VERSION = '3.11';
+export { APP_VERSION } from '../../shared/version.js';
 
 export const CSS = `
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');

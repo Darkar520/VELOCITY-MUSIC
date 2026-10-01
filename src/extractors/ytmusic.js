@@ -14,6 +14,7 @@ import YTMusic from 'ytmusic-api';
 
 import { normalizeText } from '../lib/normalize.js';
 import { artistNameMatches } from '../lib/lyricsMatch.js';
+import { createLimiter } from '../lib/concurrency.js';
 import {
   RADIO_CONFIG,
   assembleRadio,
@@ -352,33 +353,80 @@ export async function getArtistData(artistId) {
 }
 
 /** Álbum completo: metadatos + lista de pistas. */
-export async function getAlbumData(albumId) {
-  return withClient(async (client) => {
-    const al = await client.getAlbum(albumId);
-    // Orden: ytmusic-api (getAlbum) devuelve las pistas en el orden del álbum y
-    // su esquema es "strict" — no expone trackNumber/index (se descartan al
-    // parsear), así que no hay campo fiable por el que reordenar. Se preserva el
-    // orden de la API, que es el del álbum.
-    const cover = pickBestThumb(al.thumbnails);
-    const tracks = (al.songs || []).map(s => {
-      const m = mapYTMusicSong(s);
-      // En un álbum la portada válida es la del álbum, no la miniatura por-pista
-      // (suele ser un thumb de video de i.ytimg.com). Ver resolveAlbumTrackArtwork.
-      m.artworkUrl = resolveAlbumTrackArtwork(m.artworkUrl, cover);
-      if (!m.album) m.album = al.name ?? null;
-      if (!m.albumId) m.albumId = albumId;
-      return m;
-    }).filter(s => s.id && s.title);
+const ALBUM_TRACK_LOOKUP_CONCURRENCY = 8;
+
+/**
+ * Algunas variantes de la respuesta de álbum conservan `videoId`, pero
+ * ytmusic-api no reconoce el título/artista y entrega `name: ""`. Resolver esos
+ * IDs exactos evita el antiguo fallback por texto, que podía llenar el álbum con
+ * éxitos del mismo artista que no pertenecían a él.
+ */
+async function hydrateIncompleteAlbumSongs(client, songs) {
+  const list = Array.isArray(songs) ? songs : [];
+  const incomplete = list.filter((song) => {
+    const id = song?.videoId ?? song?.id;
+    const title = cleanTitle(song?.name ?? song?.title ?? '');
+    return id && !title;
+  });
+  if (!incomplete.length || typeof client?.getSong !== 'function') return list;
+
+  const limit = createLimiter(ALBUM_TRACK_LOOKUP_CONCURRENCY);
+  const settled = await Promise.allSettled(incomplete.map((song) => limit(async () => {
+    const id = song.videoId ?? song.id;
+    const detail = await client.getSong(id);
+    return detail ? { id, detail } : null;
+  })));
+  const byId = new Map();
+  for (const result of settled) {
+    if (result.status === 'fulfilled' && result.value?.detail) {
+      byId.set(result.value.id, result.value.detail);
+    }
+  }
+
+  return list.map((song) => {
+    const id = song?.videoId ?? song?.id;
+    const detail = byId.get(id);
+    if (!detail) return song;
     return {
-      albumId,
-      name: al.name ?? null,
-      artist: al.artist?.name ?? null,
-      artistId: al.artist?.artistId ?? null,
-      year: al.year ?? null,
-      cover,
-      tracks,
+      ...song,
+      ...detail,
+      // El identificador de la fila del álbum es la membresía probada; un
+      // detalle secundario nunca puede sustituirlo por otro video.
+      videoId: id,
     };
   });
+}
+
+/** Variante inyectable para probar la recuperación de álbum sin red real. */
+export async function getAlbumDataWithClient(client, albumId) {
+  const al = await client.getAlbum(albumId);
+  const songs = await hydrateIncompleteAlbumSongs(client, al.songs);
+  // Orden: getAlbum devuelve las filas en el orden del álbum. La hidratación
+  // anterior solo completa cada fila por su videoId; nunca reordena ni agrega
+  // resultados de una búsqueda textual.
+  const cover = pickBestThumb(al.thumbnails);
+  const tracks = songs.map((s) => {
+    const m = mapYTMusicSong(s);
+    // En esta vista, la fuente de verdad para membresía y portada es el álbum
+    // solicitado, no un detalle secundario de la canción.
+    m.artworkUrl = resolveAlbumTrackArtwork(m.artworkUrl, cover);
+    m.album = al.name ?? null;
+    m.albumId = albumId;
+    return m;
+  }).filter(s => s.id && s.title);
+  return {
+    albumId,
+    name: al.name ?? null,
+    artist: al.artist?.name ?? null,
+    artistId: al.artist?.artistId ?? null,
+    year: al.year ?? null,
+    cover,
+    tracks,
+  };
+}
+
+export async function getAlbumData(albumId) {
+  return withClient((client) => getAlbumDataWithClient(client, albumId));
 }
 
 /** Letra nativa de YouTube Music por videoId (texto plano). */

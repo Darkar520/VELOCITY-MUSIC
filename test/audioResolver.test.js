@@ -194,6 +194,48 @@ test('Property 11: Full_Mode degrada ante fallo del extractor', async () => {
   );
 });
 
+test('Regresión: conserva la causa tipada y el estado de reintento del extractor', async () => {
+  const cache = new StreamCache();
+  const result = await resolve(
+    { artist: 'Artist', title: 'Restricted song' },
+    {
+      cache,
+      mode: 'full',
+      extractorImpl: async () => {
+        throw Object.assign(new Error('YouTube requiere verificar el acceso a esta pista.'), {
+          code: 'YT_AUTH_REQUIRED',
+          retryable: false,
+        });
+      },
+    },
+  );
+  assert.equal(result.status, 'degraded');
+  assert.equal(result.errorCode, 'YT_AUTH_REQUIRED');
+  assert.equal(result.retryable, false);
+  assert.match(result.message, /verificar el acceso/);
+  assert.equal(cache.size(), 0);
+});
+
+test('Regresión: un timeout aborta el extractor y queda clasificado', async () => {
+  let wasAborted = false;
+  const result = await resolve(
+    { artist: 'Artist', title: 'Slow song' },
+    {
+      mode: 'full',
+      timeoutMs: 15,
+      extractorImpl: (_params, { signal }) => new Promise((_, reject) => {
+        signal.addEventListener('abort', () => {
+          wasAborted = true;
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+        }, { once: true });
+      }),
+    },
+  );
+  assert.equal(wasAborted, true);
+  assert.equal(result.errorCode, 'YT_EXTRACTOR_TIMEOUT');
+  assert.equal(result.retryable, true);
+});
+
 // Feature: velocity-music-streaming, Property 12: La resolución se cachea y los
 // hits no vuelven a resolver.
 // Validates: Requirements 3.1, 3.2

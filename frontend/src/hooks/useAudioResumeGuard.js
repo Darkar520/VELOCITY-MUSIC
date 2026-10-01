@@ -2,8 +2,8 @@
  * useAudioResumeGuard — reanudación tras interrupción por vídeo y detección de
  * "zombie silencioso" (pipeline de audio muerto).
  *
- * Extraído de App.jsx sin cambio de comportamiento. Reglas de la matriz
- * A7–A14 que se conservan LITERALMENTE:
+ * Conserva las reglas de continuidad A7–A14 y vigila el avance real de una
+ * pista visible para recuperar cortes de red sin MediaError:
  *
  *  - Foreground: reacquire suave (PIPELINE_DEAD con hidden:false) cuando el
  *    reloj se queda clavado; la máquina/runner vuelve a afirmar la
@@ -16,7 +16,7 @@
  *  - Al cambiar de visibilidad se invalida la época de precarga, de modo que
  *    una precarga a medias no se dé por completada al volver (preloadEpoch).
  */
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import {
   isDocumentVisible,
   shouldResumeOnForeground,
@@ -31,8 +31,11 @@ export function useAudioResumeGuard({
   reacquireInFlight, lastTimeRef, stuckCheckRef,
   bgLastCtRef, bgLastProgressRef,
   preloadEpochRef, setPreloadEpoch,
-  vol, getMachine, dispatchAudio,
+  vol, getMachine, dispatchAudio, onStallTimeout,
 }) {
+  const stallCallbackRef = useRef(onStallTimeout);
+  stallCallbackRef.current = onStallTimeout;
+  const foregroundStallRef = useRef({ trackId: null, src: '', position: 0, since: 0, fired: false, reacquired: false });
   const forceReacquire = () => {
     if (!canForceReacquire(isDocumentVisible())) return;
     if (reacquireInFlight.current) return;
@@ -110,10 +113,16 @@ export function useAudioResumeGuard({
     // oculto tras yield (A7). La reanudación real ocurre vía DOC_VISIBLE.
     stuckCheckRef.current = setInterval(() => {
       const a = audioRef.current;
-      if (!a || !playingRef.current || a.ended) { lastTimeRef.current = 0; bgLastCtRef.current = 0; return; }
+      if (!a || !playingRef.current || a.ended) {
+        lastTimeRef.current = 0;
+        bgLastCtRef.current = 0;
+        foregroundStallRef.current = { trackId: null, src: '', position: 0, since: 0, fired: false, reacquired: false };
+        return;
+      }
       const ct = a.currentTime || 0;
 
       if (!isDocumentVisible()) {
+        foregroundStallRef.current = { trackId: null, src: '', position: 0, since: 0, fired: false, reacquired: false };
         // Si ya cedimos (yield), la recuperación es trabajo de DOC_VISIBLE.
         if (systemPausedRef.current) { bgLastCtRef.current = ct; return; }
         if (ct > (bgLastCtRef.current || 0) + 0.05) {
@@ -137,11 +146,31 @@ export function useAudioResumeGuard({
         return;
       }
 
+      // El navegador puede quedarse en waiting/stalled sin emitir MediaError.
+      // Medimos avance real del reloj para dar margen a un corte breve de red,
+      // pero no dejar el spinner indefinidamente si el stream se congela.
+      const machine = getMachine();
+      const src = a.getAttribute('src') || a.currentSrc || '';
+      const trackId = machine.trackId;
+      const stall = foregroundStallRef.current;
+      const now = Date.now();
+      if (!src || src.startsWith('blob:') || machine.intent !== 'play' || machine.focus === 'yielded' || selfPauseRef.current || systemPausedRef.current) {
+        foregroundStallRef.current = { trackId: null, src: '', position: 0, since: 0, fired: false, reacquired: false };
+      } else if (stall.trackId !== trackId || stall.src !== src || Math.abs(ct - stall.position) > 0.1) {
+        foregroundStallRef.current = { trackId, src, position: ct, since: now, fired: false, reacquired: false };
+      } else if (!stall.fired && now - stall.since >= 10000) {
+        stall.fired = true;
+        stallCallbackRef.current?.({ kind: 'stall', position: ct });
+      }
+
       if (a.paused || systemPausedRef.current) {
         tryResume();
       } else if (lastTimeRef.current > 0 && Math.abs(ct - lastTimeRef.current) < 0.05 && ct > 0.5) {
         if (a.volume < vol * 0.5) a.volume = vol;
-        forceReacquire();
+        if (!foregroundStallRef.current.reacquired) {
+          foregroundStallRef.current.reacquired = true;
+          forceReacquire();
+        }
       }
       lastTimeRef.current = ct;
     }, 1500);

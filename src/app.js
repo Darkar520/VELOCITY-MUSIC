@@ -93,6 +93,8 @@ export function createApp(deps = {}) {
     getActiveMode = () => 'degraded',
     setActiveMode = null,
     extractorProbe = null,
+    extractorDiagnostics = null,
+    getExtractorLoad = () => null,
     installExtractorImpl = null,
     // ── Integración Deezer opcional ──
     // Los overrides permiten probar el wiring sin crear clientes de red.
@@ -400,8 +402,9 @@ export function createApp(deps = {}) {
       extractorImpl,
       deezerExtractorImpl: activeDeezerExtractor,
       catalogImpl,
-      timeoutMs: resolveTimeoutMs,
+      timeoutMs: Number.isFinite(opts.timeoutMs) ? Math.max(1, opts.timeoutMs) : resolveTimeoutMs,
       forceRefresh: !!opts.forceRefresh,
+      signal: opts.signal,
     });
 
   // Caché de búsqueda en memoria (resultados, no audio). TTL 5 minutos, máx 200 entradas.
@@ -694,7 +697,12 @@ export function createApp(deps = {}) {
     if (cached) { res.setHeader('X-Cache', 'HIT'); return res.json(cached); }
     try {
       const data = await withTimeout(albumImpl(id), 12000);
-      detailCacheSet(cacheKey, data);
+      // Un álbum sin ninguna pista suele ser una respuesta incompleta del
+      // proveedor, no un resultado estable. No envenenar la caché durante
+      // 45 minutos: el siguiente intento debe poder recuperarse.
+      if (Array.isArray(data?.tracks) && data.tracks.length > 0) {
+        detailCacheSet(cacheKey, data);
+      }
       res.setHeader('X-Cache', 'MISS');
       return res.json(data);
     } catch {
@@ -776,12 +784,97 @@ export function createApp(deps = {}) {
       const { exp, sig } = signStreamParams(params, streamSecret);
       return res.json({ exp, sig });
     });
+
+    // Prepara reproducción: resuelve antes de arrancar <audio> y solo firma
+    // una pista con fuente real. A diferencia de /api/stream-sign, expone una
+    // causa tipada si yt-dlp no logra resolverla, evitando spinners sin fin.
+    app.get('/api/playback/prepare', requireAuth, streamSignLimiter, async (req, res) => {
+      const mode = getActiveMode();
+      const params = {
+        artist: String(req.query.artist || '').trim(),
+        title: String(req.query.title || '').trim(),
+        id: String(req.query.id || '').trim() || undefined,
+        quality: String(req.query.quality || '').trim() || undefined,
+        stream: String(req.query.stream || '').trim() || undefined,
+      };
+      if (!params.artist || !params.title) {
+        return res.status(400).json({
+          error: 'Se requieren artista y título para reproducir esta pista.',
+          code: 'INVALID_TRACK_METADATA',
+          retryable: false,
+        });
+      }
+      if (!isFullResolutionAllowed(mode) && !params.stream) {
+        const unavailableCode = extractorDiagnostics?.probeStatus === 'timeout'
+          ? 'YT_DIAGNOSTICS_TIMEOUT'
+          : extractorDiagnostics?.available === false
+            ? 'YT_DLP_UNAVAILABLE'
+          : extractorDiagnostics?.javascriptRuntime?.configured === false
+            ? 'YT_RUNTIME_UNAVAILABLE'
+            : 'RESOLUTION_MODE_DEGRADED';
+        const unavailableMessage = unavailableCode === 'YT_DIAGNOSTICS_TIMEOUT'
+          ? 'El servidor no pudo verificar yt-dlp dentro del plazo. Vuelve a intentarlo en un momento.'
+          : unavailableCode === 'YT_DLP_UNAVAILABLE'
+            ? 'El servidor no puede ejecutar yt-dlp ahora mismo.'
+          : unavailableCode === 'YT_RUNTIME_UNAVAILABLE'
+            ? 'El runtime JavaScript necesario para resolver audio no está disponible en el servidor.'
+            : 'El extractor de audio no está disponible en este servidor ahora mismo.';
+        return res.status(503).json({
+          error: unavailableMessage,
+          code: unavailableCode,
+          retryable: true,
+        });
+      }
+      // Un límite explícito para el camino crítico de reproducción, aunque un
+      // valor de config mayor mantenga los límites más amplios de /api/resolve.
+      const timeoutMs = Math.min(resolveTimeoutMs, 12000);
+      const abortController = new AbortController();
+      const abortOnDisconnect = () => abortController.abort();
+      const onResponseClose = () => {
+        if (!res.writableEnded) abortController.abort();
+      };
+      req.once('aborted', abortOnDisconnect);
+      res.once('close', onResponseClose);
+      try {
+        const result = await doResolve(params, {
+          timeoutMs,
+          forceRefresh: req.query.refresh === '1',
+          signal: abortController.signal,
+        });
+        if (res.destroyed) return;
+        if (result.status === 302) {
+          const { exp, sig } = signStreamParams(params, streamSecret);
+          return res.json({ exp, sig, provider: result.provider || 'youtube' });
+        }
+        return res.status(503).json({
+          error: result.message,
+          code: result.errorCode || 'NO_PLAYABLE_SOURCE',
+          retryable: result.retryable !== false,
+        });
+      } catch (err) {
+        if (res.destroyed) return;
+        if (err instanceof ResolveError) {
+          return res.status(err.status).json({
+            error: err.message,
+            code: err.code || (err.status === 404 ? 'NO_PLAYABLE_SOURCE' : 'RESOLUTION_FAILED'),
+            retryable: err.retryable !== false,
+          });
+        }
+        return res.status(502).json({
+          error: 'El servidor encontró un error al preparar esta pista.',
+          code: 'PLAYBACK_PREPARE_FAILED',
+          retryable: true,
+        });
+      } finally {
+        req.removeListener('aborted', abortOnDisconnect);
+        res.removeListener('close', onResponseClose);
+      }
+    });
   }
 
   // ---- Proxy de streaming (firma HMAC en query; NO rate-limit; NO gzip) ----
   const streamProxyHandler = createStreamProxyHandler({
     resolveUrl: (params, opts) => doResolve(params, opts),
-    timeoutMs: 85000,
   });
   app.get('/api/stream-proxy', (req, res, next) => {
     if (!verifyStreamParams(req.query, streamSecret)) {
@@ -798,6 +891,9 @@ export function createApp(deps = {}) {
         cacheSize: cache.size(),
         uptime: (Date.now() - startTime) / 1000,
       }),
+      extractor: extractorDiagnostics
+        ? { ...extractorDiagnostics, load: getExtractorLoad() }
+        : null,
       deezer: { ...app.locals.deezerStatus },
     });
   });

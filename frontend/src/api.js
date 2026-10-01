@@ -28,7 +28,7 @@ function authHeaders() {
 let _onUnauthorized = null;
 export function setOnUnauthorized(fn) { _onUnauthorized = fn; }
 
-async function jsonOrThrow(res) {
+async function jsonOrThrow(res, signal) {
   // Leer como texto y parsear manualmente: un 200 cuyo cuerpo NO es JSON
   // (p. ej. HTML de error del CDN/Worker cuando el túnel al backend está
   // caído) antes se convertía silenciosamente en {} y, de ahí, en colecciones
@@ -36,6 +36,7 @@ async function jsonOrThrow(res) {
   // Eso sobrescribía la biblioteca local con un estado degradado. Ahora se
   // propaga como error y los llamadores conservan lo que ya tenían.
   const text = await res.text().catch(() => '');
+  if (signal?.aborted) throw playbackPrepareAbortError();
   const trimmed = text.trim();
   let data = {};
   if (trimmed) {
@@ -47,9 +48,51 @@ async function jsonOrThrow(res) {
   }
   if (!res.ok) {
     if (res.status === 401) { setToken(null); if (_onUnauthorized) _onUnauthorized(); }
-    throw Object.assign(new Error((data && data.error) || res.statusText), { status: res.status, data });
+    throw Object.assign(new Error((data && data.error) || res.statusText), {
+      status: res.status,
+      data,
+      code: typeof data?.code === 'string' ? data.code : null,
+      retryable: typeof data?.retryable === 'boolean' ? data.retryable : null,
+      requestId: typeof data?.requestId === 'string' ? data.requestId : null,
+    });
   }
   return data;
+}
+
+const PLAYBACK_PREPARE_TIMEOUT_MS = 15000;
+
+function playbackPrepareTimeoutError() {
+  return Object.assign(
+    new Error('La preparación de esta pista tardó más de 15 segundos. Revisa la conexión e inténtalo de nuevo.'),
+    { code: 'PLAYBACK_PREPARE_NETWORK_TIMEOUT', retryable: true },
+  );
+}
+
+function playbackPrepareAbortError() {
+  return Object.assign(new Error('Se canceló la preparación de la pista.'), { name: 'AbortError' });
+}
+
+async function withPlaybackPrepareDeadline(work, externalSignal) {
+  if (externalSignal?.aborted) throw playbackPrepareAbortError();
+  const controller = new AbortController();
+  let rejectDeadline;
+  const deadline = new Promise((_, reject) => { rejectDeadline = reject; });
+  const onExternalAbort = () => {
+    rejectDeadline(playbackPrepareAbortError());
+    controller.abort();
+  };
+  externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
+  if (externalSignal?.aborted) onExternalAbort();
+  const timer = setTimeout(() => {
+    rejectDeadline(playbackPrepareTimeoutError());
+    controller.abort();
+  }, PLAYBACK_PREPARE_TIMEOUT_MS);
+  try {
+    return await Promise.race([work(controller.signal), deadline]);
+  } finally {
+    clearTimeout(timer);
+    externalSignal?.removeEventListener('abort', onExternalAbort);
+  }
 }
 
 export const api = {
@@ -152,26 +195,45 @@ export const api = {
   // Obtiene URL firmada lista para <audio src> o fetch de blob.
   // Requiere JWT (Bearer). Reutiliza firma en caché si queda >60s de vida.
   // Dedup inflight: varias llamadas concurrentes al mismo key = 1 fetch.
-  async ensureStreamUrl({ artist, title, id, quality, stream }) {
+  async ensureStreamUrl({ artist, title, id, quality, stream }, { forceRefresh = false, signal } = {}) {
+    if (signal?.aborted) throw playbackPrepareAbortError();
     const params = { artist, title, id, quality, stream };
     const key = this._streamSignKey(params);
     const now = Math.floor(Date.now() / 1000);
     const hit = this._streamSignCache.get(key);
-    if (hit && hit.exp - now > 60) return hit.url;
+    if (!forceRefresh && hit && hit.exp - now > 60) return hit.url;
 
-    const inflight = this._streamSignInflight.get(key);
+    const inflightKey = forceRefresh ? `${key}\0refresh` : key;
+    // Llamadas con AbortSignal no comparten una promesa local que pertenezca a
+    // otro dueño. El backend deduplica con conteo de suscriptores y cancela el
+    // proceso solo cuando todas las solicitudes hayan abandonado.
+    const inflight = signal ? null : this._streamSignInflight.get(inflightKey);
     if (inflight) return inflight;
 
-    const signOnce = async () => {
+    const signOnce = () => withPlaybackPrepareDeadline(async (prepareSignal) => {
       const q = new URLSearchParams();
       if (artist) q.set('artist', artist);
       if (title) q.set('title', title);
       if (id) q.set('id', id);
       if (quality) q.set('quality', quality);
       if (stream) q.set('stream', stream);
-      const data = await jsonOrThrow(
-        await fetch(`/api/stream-sign?${q.toString()}`, { headers: authHeaders() }),
-      );
+      if (forceRefresh) q.set('refresh', '1');
+      let response;
+      try {
+        response = await fetch(`/api/playback/prepare?${q.toString()}`, {
+          headers: authHeaders(),
+          signal: prepareSignal,
+        });
+      } catch (err) {
+        if (prepareSignal.aborted) throw playbackPrepareAbortError();
+        throw Object.assign(
+          new Error('No se pudo contactar con el servidor para preparar esta pista. Revisa la conexión e inténtalo de nuevo.'),
+          { code: 'PLAYBACK_NETWORK_ERROR', retryable: true },
+        );
+      }
+      const data = await jsonOrThrow(response, prepareSignal);
+      // Una respuesta tardía tras cancelación no debe poblar la caché de firmas.
+      if (prepareSignal.aborted) throw playbackPrepareAbortError();
       const url = this.buildSignedStreamUrl({
         artist, title, id, quality, stream,
         exp: data.exp,
@@ -183,24 +245,17 @@ export const api = {
         this._streamSignCache.delete(oldest);
       }
       return url;
-    };
+    }, signal);
 
-    // Un reintento ante fallo de red / 5xx (no ante 401 de sesión).
-    const p = (async () => {
-      try {
-        return await signOnce();
-      } catch (err) {
-        if (err?.status === 401 || err?.status === 400) throw err;
-        await new Promise((r) => setTimeout(r, 350));
-        return signOnce();
-      }
-    })();
+    // Cada preparación es una sola operación con plazo en backend. Reintentar
+    // aquí ocultaba la causa y podía duplicar hasta 12 s de espera por pista.
+    const p = signOnce();
 
-    this._streamSignInflight.set(key, p);
+    if (!signal) this._streamSignInflight.set(inflightKey, p);
     try {
       return await p;
     } finally {
-      this._streamSignInflight.delete(key);
+      if (!signal) this._streamSignInflight.delete(inflightKey);
     }
   },
   // Prefirma en background (errores silenciados). Usar en foreground al armar cola.

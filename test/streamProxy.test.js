@@ -205,14 +205,15 @@ test('Handler: bytes=0- del navegador se acota a un chunk y se responde 206', as
         ['content-range', `bytes 0-${RANGE_CHUNK_BYTES - 1}/3000000`],
         ['content-length', String(RANGE_CHUNK_BYTES)],
       ]),
-      body: null,
+      body: webBody(Buffer.alloc(RANGE_CHUNK_BYTES)),
     };
   };
   const handler = createStreamProxyHandler({ resolveUrl: async () => ({ url: 'https://cdn/audio' }), fetchImpl });
-  const res = makeRes();
+  const res = makeStreamingRes();
   await handler({ query: { artist: 'A', title: 'B' }, headers: { range: 'bytes=0-' } }, res);
   assert.equal(forwarded, `bytes=0-${RANGE_CHUNK_BYTES - 1}`);
   assert.equal(res.statusCode, 206);
+  assert.equal(Buffer.concat(res.chunks).length, RANGE_CHUNK_BYTES);
 });
 
 // ── Handler: seek del navegador (bytes=N-) → chunk acotado desde N ──
@@ -226,14 +227,131 @@ test('Handler: seek bytes=1500000- se acota a un chunk desde 1500000', async () 
         ['content-type', 'audio/webm'],
         ['content-range', `bytes 1500000-${1500000 + RANGE_CHUNK_BYTES - 1}/3000000`],
       ]),
-      body: null,
+      body: webBody(Buffer.alloc(RANGE_CHUNK_BYTES)),
     };
   };
   const handler = createStreamProxyHandler({ resolveUrl: async () => ({ url: 'https://cdn/audio' }), fetchImpl });
-  const res = makeRes();
+  const res = makeStreamingRes();
   await handler({ query: { artist: 'A', title: 'B' }, headers: { range: 'bytes=1500000-' } }, res);
   assert.equal(forwarded, `bytes=1500000-${1500000 + RANGE_CHUNK_BYTES - 1}`);
   assert.equal(res.statusCode, 206);
+  assert.equal(Buffer.concat(res.chunks).length, RANGE_CHUNK_BYTES);
+});
+
+test('Handler: un 206 que anuncia el resto del archivo se recorta a un rango honesto', async () => {
+  const total = 3646010;
+  let upstreamSignal;
+  const handler = createStreamProxyHandler({
+    resolveUrl: async () => ({ url: 'https://cdn/audio' }),
+    fetchImpl: async (_url, { headers, signal }) => {
+      upstreamSignal = signal;
+      assert.equal(headers.Range, `bytes=0-${RANGE_CHUNK_BYTES - 1}`);
+      // Reproduce la cabecera observada en producción. El body entrega el
+      // primer bloque y queda abierto, como la petición que congeló el audio.
+      const body = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array(RANGE_CHUNK_BYTES));
+          signal.addEventListener('abort', () => controller.error(new Error('upstream cancelled')), { once: true });
+        },
+      });
+      return {
+        status: 206,
+        headers: new Map([
+          ['content-type', 'audio/webm'],
+          ['content-range', `bytes 0-${total - 1}/${total}`],
+          ['content-length', String(total)],
+        ]),
+        body,
+      };
+    },
+    timeoutMs: 100,
+  });
+  const res = makeStreamingRes();
+  const started = Date.now();
+  await handler({ query: { artist: 'A', title: 'B' }, headers: { range: 'bytes=0-' } }, res);
+  assert.ok(Date.now() - started < 1000, 'no espera a que el upstream complete el archivo');
+  assert.equal(res.statusCode, 206);
+  assert.equal(res.headers['content-range'], `bytes 0-${RANGE_CHUNK_BYTES - 1}/${total}`);
+  assert.equal(res.headers['content-length'], String(RANGE_CHUNK_BYTES));
+  assert.equal(Buffer.concat(res.chunks).length, RANGE_CHUNK_BYTES);
+  assert.equal(res.writableEnded, true);
+  assert.equal(upstreamSignal.aborted, true, 'se cancela el resto del body upstream');
+});
+
+test('Handler: la reanudación desde byte 520192 también anuncia solo el bloque entregado', async () => {
+  const start = 520192;
+  const total = 3646010;
+  const handler = createStreamProxyHandler({
+    resolveUrl: async () => ({ url: 'https://cdn/audio' }),
+    fetchImpl: async (_url, { headers }) => {
+      assert.equal(headers.Range, `bytes=${start}-${start + RANGE_CHUNK_BYTES - 1}`);
+      return {
+        status: 206,
+        headers: new Map([
+          ['content-type', 'audio/webm'],
+          ['content-range', `bytes ${start}-${total - 1}/${total}`],
+          ['content-length', String(total - start)],
+        ]),
+        body: webBody(Buffer.alloc(RANGE_CHUNK_BYTES)),
+      };
+    },
+  });
+  const res = makeStreamingRes();
+  await handler({ query: { artist: 'A', title: 'B' }, headers: { range: `bytes=${start}-` } }, res);
+  assert.equal(res.statusCode, 206);
+  assert.equal(res.headers['content-range'], `bytes ${start}-${start + RANGE_CHUNK_BYTES - 1}/${total}`);
+  assert.equal(res.headers['content-length'], String(RANGE_CHUNK_BYTES));
+  assert.equal(Buffer.concat(res.chunks).length, RANGE_CHUNK_BYTES);
+  assert.equal(res.writableEnded, true);
+});
+
+test('Handler: un body más corto que el rango prometido destruye la respuesta y registra causa segura', async () => {
+  const total = 3646010;
+  const warnings = [];
+  const handler = createStreamProxyHandler({
+    resolveUrl: async () => ({ url: 'https://cdn/audio?secret=test' }),
+    fetchImpl: async () => ({
+      status: 206,
+      headers: new Map([
+        ['content-type', 'audio/webm'],
+        ['content-range', `bytes 0-${total - 1}/${total}`],
+        ['content-length', String(total)],
+      ]),
+      body: webBody(Buffer.alloc(520192)),
+    }),
+    logger: { warn: (...args) => warnings.push(args.join(' ')) },
+  });
+  const res = makeStreamingRes();
+  await handler({ query: { artist: 'A', title: 'B' }, headers: { range: 'bytes=0-' } }, res);
+  assert.equal(res.headers['content-length'], String(RANGE_CHUNK_BYTES));
+  assert.equal(Buffer.concat(res.chunks).length, 520192);
+  assert.equal(res.destroyed, true);
+  assert.equal(res.writableEnded, false);
+  assert.match(warnings.join(' '), /STREAM_UPSTREAM_SHORT_BODY/);
+  assert.doesNotMatch(warnings.join(' '), /secret=test/);
+});
+
+test('Handler: rechaza un Content-Range con inicio incorrecto antes de enviar cabeceras', async () => {
+  let calls = 0;
+  const warnings = [];
+  const handler = createStreamProxyHandler({
+    resolveUrl: async () => ({ url: 'https://cdn/audio' }),
+    fetchImpl: async () => {
+      calls += 1;
+      return {
+        status: 206,
+        headers: new Map([['content-range', 'bytes 1-524288/3646010']]),
+        body: webBody(Buffer.alloc(1)),
+      };
+    },
+    logger: { warn: (...args) => warnings.push(args.join(' ')) },
+  });
+  const res = makeRes();
+  await handler({ query: { artist: 'A', title: 'B' }, headers: { range: 'bytes=0-' } }, res);
+  assert.equal(calls, 2, 'una URL fresca recibe un intento de recuperación');
+  assert.equal(res.statusCode, 502);
+  assert.match(res.body.error, /rango solicitado/);
+  assert.match(warnings.join(' '), /STREAM_UPSTREAM_RANGE_MISMATCH/);
 });
 
 // ── Handler: sin Range (descargas/prebuffer) → encadena chunks y responde 200
@@ -266,7 +384,7 @@ test('Handler: sin Range encadena chunks acotados y entrega el cuerpo completo c
   const res = makeStreamingRes();
   await handler({ query: { artist: 'A', title: 'B' }, headers: {} }, res);
   assert.equal(res.statusCode, 200);
-  assert.equal(fetchedRanges.length, 3, '3 chunks para 2×512KiB + 1234B');
+  assert.equal(fetchedRanges.length, 3, '3 chunks para dos bloques más 1234B');
   assert.equal(fetchedRanges[0], `bytes=0-${chunk - 1}`);
   assert.equal(fetchedRanges[1], `bytes=${chunk}-${2 * chunk - 1}`);
   assert.equal(fetchedRanges[2], `bytes=${2 * chunk}-${3 * chunk - 1}`);
@@ -286,6 +404,86 @@ test('Handler: sin Range con upstream 200 se sirve tal cual (compatibilidad)', a
   await handler({ query: { artist: 'A', title: 'B' }, headers: {} }, res);
   assert.equal(res.statusCode, 200);
   assert.equal(fetchCount, 1, 'un solo fetch cuando el upstream responde 200');
+});
+
+test('Handler: sin Range con upstream 200 espera y entrega el body completo', async () => {
+  const expected = Buffer.from('audio completo');
+  const handler = createStreamProxyHandler({
+    resolveUrl: async () => ({ url: 'https://cdn/audio' }),
+    fetchImpl: async () => new Response(expected, {
+      status: 200,
+      headers: { 'content-type': 'audio/webm' },
+    }),
+  });
+  const res = makeStreamingRes();
+  await handler({ query: { artist: 'A', title: 'B' }, headers: {} }, res);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(Buffer.concat(res.chunks), expected);
+});
+
+test('Handler: deadline total de arranque incluye resolver, conexión y primer byte', async () => {
+  let resolves = 0;
+  let fetches = 0;
+  const handler = createStreamProxyHandler({
+    timeoutMs: 15,
+    resolveUrl: async (_params, options = {}) => {
+      resolves += 1;
+      assert.equal(options.timeoutMs, 15, 'el resolver recibe el presupuesto restante');
+      return { url: `https://cdn/audio-${resolves}` };
+    },
+    fetchImpl: async (_url, { signal }) => {
+      fetches += 1;
+      const body = new ReadableStream({
+        start(controller) {
+          signal.addEventListener('abort', () => controller.error(new Error('aborted')), { once: true });
+        },
+      });
+      return new Response(body, {
+        status: 206,
+        headers: {
+          'content-type': 'audio/webm',
+          'content-range': `bytes 0-${RANGE_CHUNK_BYTES - 1}/3000000`,
+        },
+      });
+    },
+  });
+  const res = makeRes();
+  await handler({ query: { artist: 'A', title: 'B' }, headers: { range: 'bytes=0-' } }, res);
+  assert.equal(resolves, 1, 'agotado el presupuesto no se inicia otra resolución');
+  assert.equal(fetches, 1, 'agotado el presupuesto no se inicia otro fetch');
+  assert.equal(res.statusCode, 504);
+  assert.equal(res.body.error, 'La fuente de audio no está disponible.');
+});
+
+test('Handler: la resolución del extractor también expira dentro del deadline del proxy', async () => {
+  let receivedTimeout = null;
+  const handler = createStreamProxyHandler({
+    timeoutMs: 20,
+    resolveUrl: async (_params, options = {}) => {
+      receivedTimeout = options.timeoutMs;
+      return new Promise(() => {});
+    },
+  });
+  const res = makeRes();
+  const started = Date.now();
+  await handler({ query: { artist: 'A', title: 'B' }, headers: { range: 'bytes=0-' } }, res);
+  assert.equal(res.statusCode, 504);
+  assert.ok(receivedTimeout > 0 && receivedTimeout <= 20);
+  assert.ok(Date.now() - started < 200, 'no deja la petición abierta 30 s durante resolución');
+});
+
+test('Handler: resolución degradada no se confunde con pista inexistente (404)', async () => {
+  const handler = createStreamProxyHandler({
+    resolveUrl: async () => ({
+      status: 'degraded',
+      mode: 'degraded',
+      message: 'El proveedor no entregó una URL reproducible.',
+    }),
+  });
+  const res = makeRes();
+  await handler({ query: { artist: 'A', title: 'B' }, headers: { range: 'bytes=0-' } }, res);
+  assert.equal(res.statusCode, 503);
+  assert.equal(res.body.error, 'No se pudo resolver la pista.');
 });
 
 // ── Handler: 403 en el primer chunk sin Range → reintento forceRefresh ──

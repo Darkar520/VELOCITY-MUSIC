@@ -8,7 +8,7 @@ import { isAllowedStreamUrl } from '../lib/streamUrlPolicy.js';
  * Orden de resolución (Requisitos 2.1–2.11, 3.1, 3.2, 3.7):
  *   1. Stream_Cache (clave normalizada). Hit → devuelve URL.
  *   2. URL `stream` explícita en la allowlist de hosts → usar sin invocar yt-dlp.
- *   3. Full_Mode + yt-dlp resuelve pista completa ≤ 10 s → usar esa URL.
+ *   3. Full_Mode + yt-dlp resuelve dentro de un plazo acotado → usar esa URL.
  *   4. Si YouTube Music falla, el extractor Deezer opcional puede resolverla.
  *   5. Fallo de extractores → degradar; sin fuente reproducible → 404.
  *
@@ -37,7 +37,7 @@ export class ResolveError extends Error {
  *  { status: 302, url, fromCache, mode }                         éxito YT/URL explícita
  *  { status: 302, url, provider: 'deezer', fromCache, mode }     éxito Deezer
  *  lanza ResolveError(400) parámetros inválidos
- *  { status: 'degraded', mode: 'degraded', message }             fallo de extractores en full
+ *  { status: 'degraded', mode: 'degraded', message, errorCode, retryable }
  *  lanza ResolveError(404) sin fuente reproducible
  */
 export async function resolve(params = {}, ctx = {}) {
@@ -50,7 +50,10 @@ export async function resolve(params = {}, ctx = {}) {
     catalogImpl,
     timeoutMs = EXTRACTOR_TIMEOUT_MS,
     forceRefresh = false,
+    signal,
   } = ctx;
+  const resolutionDeadline = Date.now() + Math.max(1, Number(timeoutMs) || EXTRACTOR_TIMEOUT_MS);
+  const remainingTimeoutMs = () => Math.max(0, resolutionDeadline - Date.now());
 
   const artist = String(rawArtist ?? '').trim();
   const title = String(rawTitle ?? '').trim();
@@ -98,12 +101,21 @@ export async function resolve(params = {}, ctx = {}) {
   // 3) Full_Mode + YouTube Music (2.3, 2.5–2.7, 2.11). Solo un fallo
   // resoluble (null, excepción o timeout) permite avanzar a Deezer.
   let youtubeAttempted = false;
+  let resolutionFailure = null;
   if (mode === 'full' && typeof extractorImpl === 'function') {
     youtubeAttempted = true;
     let url = null;
     try {
-      url = await withTimeout(extractorImpl({ artist, title, videoId: params.videoId, quality }), timeoutMs);
-    } catch {
+      url = await runExtractorWithDeadline(
+        (extractorSignal) => extractorImpl(
+          { artist, title, videoId: params.videoId, quality },
+          { timeoutMs: remainingTimeoutMs(), signal: extractorSignal },
+        ),
+        remainingTimeoutMs(),
+        signal,
+      );
+    } catch (err) {
+      resolutionFailure = normalizeFailure(err, 'YT_EXTRACTOR_UNKNOWN');
       url = null;
     }
     if (isUsableUrl(url)) {
@@ -115,7 +127,7 @@ export async function resolve(params = {}, ctx = {}) {
   // 4) Fallback opt-in a Deezer. La clave separada evita que una URL Deezer
   // sustituya una entrada YouTube existente y permite conservar el proveedor
   // en el resultado sin cambiar el formato string del StreamCache actual.
-  if (mode === 'full' && typeof deezerExtractorImpl === 'function') {
+  if (mode === 'full' && typeof deezerExtractorImpl === 'function' && remainingTimeoutMs() > 0) {
     if (cache && !forceRefresh) {
       const cachedDeezer = cache.get(deezerKey);
       if (isUsableUrl(cachedDeezer)) {
@@ -134,11 +146,16 @@ export async function resolve(params = {}, ctx = {}) {
       // El adaptador recibe la misma forma de argumentos que el extractor YT;
       // el proveedor puede usar artist/title para buscar y quality para elegir
       // el formato, sin acoplar el resolver a endpoints o metadatos Deezer.
-      deezerUrl = await withTimeout(
-        deezerExtractorImpl({ artist, title, videoId: params.videoId, quality }),
-        timeoutMs,
+      deezerUrl = await runExtractorWithDeadline(
+        (extractorSignal) => deezerExtractorImpl(
+          { artist, title, videoId: params.videoId, quality },
+          { timeoutMs: remainingTimeoutMs(), signal: extractorSignal },
+        ),
+        remainingTimeoutMs(),
+        signal,
       );
-    } catch {
+    } catch (err) {
+      if (!resolutionFailure) resolutionFailure = normalizeFailure(err, 'DEEZER_RESOLVE_FAILED');
       deezerUrl = null;
     }
     if (isUsableUrl(deezerUrl)) {
@@ -156,11 +173,17 @@ export async function resolve(params = {}, ctx = {}) {
   // 5) Degradación ante fallo del extractor (2.8). Se conserva el resultado
   // histórico cuando YouTube fue intentado, incluso si Deezer también falla.
   if (youtubeAttempted) {
+    const failure = resolutionFailure || {
+      code: 'YT_NO_PLAYABLE_SOURCE',
+      message: 'El extractor no encontró una fuente de audio reproducible para esta pista.',
+      retryable: true,
+    };
     return {
       status: 'degraded',
       mode: 'degraded',
-      message:
-        'La resolución de pista completa no estuvo disponible para la pista solicitada.',
+      message: failure.message,
+      errorCode: failure.code,
+      retryable: failure.retryable,
     };
   }
 
@@ -200,18 +223,62 @@ export function matchYouTubeMusicCandidate(tracks, artist, title) {
   return contained ?? tracks[0] ?? null;
 }
 
-function withTimeout(promise, ms) {
-  return new Promise((resolve_, reject) => {
-    const timer = setTimeout(() => reject(new Error('timeout')), ms);
-    Promise.resolve(promise).then(
-      (v) => {
-        clearTimeout(timer);
-        resolve_(v);
-      },
-      (e) => {
-        clearTimeout(timer);
-        reject(e);
-      },
+function normalizeFailure(err, fallbackCode) {
+  if (err?.name === 'AbortError') {
+    return {
+      code: 'YT_RESOLUTION_CANCELLED',
+      message: 'La solicitud de reproducción se canceló antes de resolver la pista.',
+      retryable: true,
+    };
+  }
+  return {
+    code: typeof err?.code === 'string' ? err.code : fallbackCode,
+    message: typeof err?.message === 'string' && err.message.trim()
+      ? err.message
+      : 'El proveedor no pudo resolver esta pista.',
+    retryable: typeof err?.retryable === 'boolean' ? err.retryable : true,
+  };
+}
+
+/** El plazo aborta el proceso hijo además de resolver la promesa del caller. */
+function runExtractorWithDeadline(run, ms, parentSignal) {
+  const controller = new AbortController();
+  let timer;
+  let abortListener;
+  const cancelError = () => Object.assign(new Error('La solicitud de reproducción se canceló.'), {
+    name: 'AbortError',
+    code: 'YT_RESOLUTION_CANCELLED',
+    retryable: true,
+  });
+  return new Promise((resolve_, reject_) => {
+    let settled = false;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (abortListener) parentSignal?.removeEventListener('abort', abortListener);
+      fn(value);
+    };
+    if (parentSignal?.aborted) {
+      controller.abort();
+      finish(reject_, cancelError());
+      return;
+    }
+    abortListener = () => {
+      controller.abort();
+      finish(reject_, cancelError());
+    };
+    parentSignal?.addEventListener('abort', abortListener, { once: true });
+    timer = setTimeout(() => {
+      controller.abort();
+      finish(reject_, Object.assign(
+        new Error('La búsqueda de audio superó el límite de espera.'),
+        { code: 'YT_EXTRACTOR_TIMEOUT', retryable: true },
+      ));
+    }, Math.max(1, ms));
+    Promise.resolve().then(() => run(controller.signal)).then(
+      (value) => finish(resolve_, value),
+      (error) => finish(reject_, error),
     );
   });
 }

@@ -142,7 +142,7 @@ export function planUpstreamRange(clientRange) {
  * @param {typeof fetch} [deps.fetchImpl]
  * @param {number} [deps.timeoutMs]
  */
-export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeoutMs = PROXY_TIMEOUT_MS }) {
+export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeoutMs = PROXY_TIMEOUT_MS, logger = console }) {
   return async function streamProxyHandler(req, res) {
     const v = validateProxyParams(req.query.artist, req.query.title);
     if (!v.ok) {
@@ -156,6 +156,11 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
     const quality = String(req.query.quality || '').trim() || undefined;
 
     const plan = planUpstreamRange(req.headers.range);
+    // Un único presupuesto de arranque cubre resolución, conexión upstream y
+    // primer byte. Antes solo se acotaba el fetch, así que yt-dlp podía dejar
+    // la petición abierta durante resolveTimeoutMs (30 s en la app).
+    const startupDeadline = Date.now() + timeoutMs;
+    const remainingStartupMs = () => Math.max(0, startupDeadline - Date.now());
 
     // Fetch upstream con redirects manuales (misma política que antes: cada
     // salto se valida con redirectPolicy para evitar SSRF vía open-redirect).
@@ -180,12 +185,80 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
       return { kind: 'ok', upstream };
     };
 
-    // Relay 200/206 simple (modos passthrough/bounded).
-    const relayUpstream = (upstream) => {
+    // Espera datos reales antes de comprometer las cabeceras al cliente. Hay
+    // upstreams que devuelven 200/206 y luego dejan el body sin emitir bytes;
+    // sin este límite el navegador se queda esperando y nunca recibe `error`.
+    const primeBody = async (upstream, controller) => {
+      if (!upstream.body) return { reader: null, first: null, bytesRead: 0 };
+      const reader = upstream.body.getReader();
+      try {
+        const readTimeout = res.headersSent ? timeoutMs : remainingStartupMs();
+        if (readTimeout <= 0) throw new Error('startup timeout');
+        return { reader, first: await readWithTimeout(reader, readTimeout, controller), bytesRead: 0 };
+      } catch {
+        try { reader.cancel().catch(() => {}); } catch { /* ignore */ }
+        return null;
+      }
+    };
+
+    const bodyStream = (primed, controller, expectedBytes = null) => {
+      if (!primed?.reader) return null;
+      async function* chunks() {
+        let result = primed.first;
+        try {
+          while (result && !result.done) {
+            const chunk = Buffer.from(result.value);
+            const remaining = expectedBytes == null ? chunk.length : expectedBytes - primed.bytesRead;
+            const output = chunk.subarray(0, Math.max(0, remaining));
+            primed.bytesRead += output.length;
+            if (output.length) yield output;
+            if (expectedBytes != null && primed.bytesRead === expectedBytes) {
+              // El proveedor puede anunciar el archivo completo aunque se le
+              // pidió un rango acotado. No esperar el resto de ese cuerpo.
+              controller.abort();
+              return;
+            }
+            result = await readWithTimeout(primed.reader, timeoutMs, controller);
+          }
+          if (expectedBytes != null && primed.bytesRead < expectedBytes) {
+            throw Object.assign(new Error('upstream body shorter than advertised range'), {
+              code: 'STREAM_UPSTREAM_SHORT_BODY',
+            });
+          }
+        } finally {
+          try { primed.reader.releaseLock(); } catch { /* ignore */ }
+        }
+      }
+      return Readable.from(chunks());
+    };
+
+    // Relay 200/206 simple (modos passthrough/bounded). El límite se aplica
+    // también entre lecturas, no solo al establecimiento de la conexión.
+    const relayUpstream = async (upstream, primed, controller, boundedRange = null) => {
       const responseHeaders = buildResponseHeaders((name) => upstream.headers.get(name));
+      if (boundedRange) {
+        responseHeaders['content-range'] = `bytes ${boundedRange.start}-${boundedRange.end}/${boundedRange.total}`;
+        responseHeaders['content-length'] = String(boundedRange.end - boundedRange.start + 1);
+      }
       res.writeHead(upstream.status, responseHeaders);
-      if (!upstream.body) return res.end();
-      Readable.fromWeb(upstream.body).pipe(res);
+      const expectedBytes = boundedRange ? boundedRange.end - boundedRange.start + 1 : null;
+      const stream = bodyStream(primed, controller, expectedBytes);
+      if (!stream) return res.end();
+      try {
+        await pipeline(stream, res);
+      } catch (err) {
+        try {
+          logger?.warn?.('[stream-proxy] cuerpo de audio incompleto', JSON.stringify({
+            code: err?.code || 'STREAM_UPSTREAM_BODY_ERROR',
+            expectedBytes,
+            receivedBytes: primed.bytesRead,
+            upstreamStatus: upstream.status,
+          }));
+        } catch { /* la telemetría no debe bloquear el proxy */ }
+        // Las cabeceras ya salieron: cerrar el cuerpo incompleto permite que
+        // el elemento <audio> emita error y active la recuperación acotada.
+        if (!res.destroyed) res.destroy();
+      }
     };
 
     // Modo 'full' (cliente sin Range — descargas/prebuffer): encadena chunks
@@ -193,7 +266,7 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
     // Content-Length = tamaño total (streaming progresivo). El timeout del
     // intento cubre la resolución + el PRIMER chunk; después la transferencia
     // fluye libre, igual que el relay simple (4.7 no debe matar descargas lentas).
-    const streamFull = async (url, signal, clearDeadline) => {
+    const streamFull = async (url, controller, resetDeadline, clearDeadline) => {
       let start = 0;
       let first = true;
       let contentLength = null;
@@ -213,9 +286,12 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
         for (let i = 0; i < attempts; i++) {
           if (i > 0) await sleep(i === 1 ? 800 : i === 2 ? 1800 : 3200);
           try {
-            last = await fetchUpstream(url, range, signal);
+            resetDeadline();
+            last = await fetchUpstream(url, range, controller.signal);
           } catch {
             last = { kind: 'networkError' };
+          } finally {
+            clearDeadline();
           }
           if (
             last.kind === 'ok' &&
@@ -239,16 +315,23 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
 
         // CDN que ignora Range → cuerpo completo; servir tal cual y terminar.
         if (up.status === 200) {
+          const primed = await primeBody(up, controller);
+          if (!primed) {
+            if (res.headersSent) { res.end(); return { kind: 'ok', upstream: null }; }
+            return { kind: 'networkError' };
+          }
           if (first) {
             if (!res.headersSent) {
               const headers = buildResponseHeaders((name) => up.headers.get(name));
               res.writeHead(200, headers);
             }
-            if (typeof clearDeadline === 'function') clearDeadline();
             first = false;
           }
-          if (up.body) Readable.fromWeb(up.body).pipe(res);
-          res.end();
+          const stream = bodyStream(primed, controller);
+          if (stream) {
+            try { await pipeline(stream, res); }
+            catch { if (!res.destroyed) res.destroy(); }
+          } else res.end();
           return { kind: 'ok', upstream: null };
         }
 
@@ -272,6 +355,14 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
           return { kind: 'ok', upstream: null };
         }
 
+        // Si no hay body, la respuesta no está realmente lista para audio.
+        // Detectarlo antes de escribir headers habilita el refresh interno.
+        const primed = await primeBody(up, controller);
+        if (!primed) {
+          if (res.headersSent) { res.end(); return { kind: 'ok', upstream: null }; }
+          return { kind: 'networkError' };
+        }
+
         if (first) {
           if (!res.headersSent) {
             const cr0 = parseContentRange(up.headers.get('content-range'));
@@ -287,12 +378,12 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
             if (contentLength != null) fullHeaders['Content-Length'] = String(contentLength);
             res.writeHead(200, fullHeaders);
           }
-          if (typeof clearDeadline === 'function') clearDeadline();
           first = false;
         }
 
+        const stream = bodyStream(primed, controller);
         try {
-          if (up.body) await pipeline(Readable.fromWeb(up.body), res, { end: false });
+          if (stream) await pipeline(stream, res, { end: false });
         } catch {
           // Error de red a mitad del cuerpo: terminar sin estado adicional (4.8).
           if (!res.headersSent) return { kind: 'networkError' };
@@ -325,30 +416,103 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
     // reintentar limpiamente con forceRefresh.
     const attempt = async (forceRefresh) => {
       let targetUrl;
+      const resolveTimeout = remainingStartupMs();
+      if (resolveTimeout <= 0) return { kind: 'networkError' };
+      const resolveController = new AbortController();
+      const abortResolve = () => resolveController.abort();
+      const abortOnResponseClose = () => {
+        if (!res.writableEnded) resolveController.abort();
+      };
+      req.once?.('aborted', abortResolve);
+      res.once?.('close', abortOnResponseClose);
       try {
-        const resolved = await resolveUrl({ artist: v.artist, title: v.title, stream, videoId, quality }, { forceRefresh });
+        const resolved = await raceWithTimeout(
+          resolveUrl(
+            { artist: v.artist, title: v.title, stream, videoId, quality },
+            { forceRefresh, timeoutMs: resolveTimeout, signal: resolveController.signal },
+          ),
+          resolveTimeout,
+          abortResolve,
+        );
+        // `audioResolver` uses `degraded` when the provider could not produce
+        // a playable URL (including provider timeouts). That is not evidence
+        // that the track does not exist, so do not misreport it as HTTP 404.
+        if (resolved?.status === 'degraded' || resolved?.mode === 'degraded') {
+          return { kind: 'resolveError', status: 503 };
+        }
         targetUrl = resolved && resolved.url;
       } catch (err) {
         return { kind: 'resolveError', status: err && err.status ? err.status : 502 };
+      } finally {
+        req.removeListener?.('aborted', abortResolve);
+        res.removeListener?.('close', abortOnResponseClose);
       }
       if (!targetUrl) return { kind: 'notFound' };
+      if (remainingStartupMs() <= 0) return { kind: 'networkError' };
 
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-      const clearDeadline = () => clearTimeout(timer);
+      let timer = null;
+      const resetDeadline = () => {
+        clearTimeout(timer);
+        const remaining = res.headersSent ? timeoutMs : remainingStartupMs();
+        if (remaining <= 0) {
+          controller.abort();
+          return;
+        }
+        timer = setTimeout(() => controller.abort(), remaining);
+      };
+      const clearDeadline = () => {
+        clearTimeout(timer);
+        timer = null;
+      };
 
       if (plan.kind === 'full') {
-        return streamFull(targetUrl, controller.signal, clearDeadline);
+        return streamFull(targetUrl, controller, resetDeadline, clearDeadline);
       }
 
       try {
         const rangeHeader = plan.range || undefined;
+        resetDeadline();
         const r = await fetchUpstream(targetUrl, rangeHeader, controller.signal);
         clearDeadline();
         if (r.kind !== 'ok') return r;
         const cls = classifyUpstreamStatus(r.upstream.status);
         if (!cls.pass) return { kind: 'upstreamBad', status: r.upstream.status };
-        return { kind: 'ok', upstream: r.upstream };
+        let boundedRange = null;
+        if (plan.kind === 'bounded' && r.upstream.status === 206) {
+          const requested = /^bytes=(\d+)-(\d+)$/.exec(rangeHeader);
+          const received = parseContentRange(r.upstream.headers.get('content-range'));
+          const start = Number(requested?.[1]);
+          const requestedEnd = Number(requested?.[2]);
+          if (
+            !requested || !received || !Number.isSafeInteger(start) ||
+            !Number.isSafeInteger(requestedEnd) || !Number.isSafeInteger(received.start) ||
+            !Number.isSafeInteger(received.end) || !Number.isSafeInteger(received.total) ||
+            received.start !== start || received.end < start || received.total <= start ||
+            received.end >= received.total
+          ) {
+            try {
+              logger?.warn?.('[stream-proxy] rango upstream inválido', JSON.stringify({
+                code: 'STREAM_UPSTREAM_RANGE_MISMATCH',
+                requestedStart: Number.isSafeInteger(start) ? start : null,
+                receivedStart: received?.start ?? null,
+                receivedEnd: received?.end ?? null,
+                receivedTotal: received?.total ?? null,
+              }));
+            } catch { /* la telemetría no debe bloquear el proxy */ }
+            controller.abort();
+            return { kind: 'upstreamRangeInvalid' };
+          }
+          boundedRange = {
+            start,
+            end: Math.min(requestedEnd, received.end, received.total - 1),
+            total: received.total,
+          };
+        }
+        const primed = await primeBody(r.upstream, controller);
+        if (!primed) return { kind: 'networkError' };
+        if (boundedRange && !primed.reader) return { kind: 'networkError' };
+        return { kind: 'ok', upstream: r.upstream, primed, controller, boundedRange };
       } catch {
         clearDeadline();
         return { kind: 'networkError' };
@@ -358,16 +522,18 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
     // 1er intento con caché. Si el upstream falla (URL de audio expirada/403) o
     // hay error de red, se reintenta UNA vez re-resolviendo con URL fresca.
     let r = await attempt(false);
-    if (r.kind === 'upstreamBad' || r.kind === 'networkError') {
+    if (r.kind === 'upstreamBad' || r.kind === 'networkError' || r.kind === 'upstreamRangeInvalid') {
       r = await attempt(true);
     }
+
+    if (res.destroyed) return;
 
     // Si ya se enviaron cabeceras (p.ej. fallo durante el pipe), solo terminar. (4.8)
     if (res.headersSent) return res.end();
 
     if (r.kind === 'ok' && r.upstream) {
       try {
-        relayUpstream(r.upstream);
+        await relayUpstream(r.upstream, r.primed, r.controller, r.boundedRange);
         return;
       } catch {
         if (!res.headersSent) return res.status(504).json({ error: 'La fuente de audio no está disponible.' });
@@ -382,7 +548,37 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
     if (r.kind === 'notFound') return res.status(404).json({ error: 'No se encontró una fuente de audio.' });
     if (r.kind === 'resolveError') return res.status(r.status).json({ error: 'No se pudo resolver la pista.' });
     if (r.kind === 'networkError') return res.status(504).json({ error: 'La fuente de audio no está disponible.' });
+    if (r.kind === 'upstreamRangeInvalid') return res.status(502).json({ error: 'La fuente de audio no respetó el rango solicitado.' });
     // upstreamBad tras reintento.
     return res.status(502).json({ error: 'La fuente de audio respondió ' + r.status + '.' });
   };
+}
+
+function readWithTimeout(reader, timeoutMs, controller) {
+  let timer;
+  return Promise.race([
+    reader.read(),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        controller?.abort();
+        reject(Object.assign(new Error('upstream idle timeout'), { code: 'STREAM_UPSTREAM_IDLE_TIMEOUT' }));
+      }, timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+function raceWithTimeout(promise, timeoutMs, onTimeout) {
+  let timer;
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((_, reject) => {
+      timer = setTimeout(
+        () => {
+          try { onTimeout?.(); } catch { /* best effort cancellation */ }
+          reject(Object.assign(new Error('resolve timeout'), { status: 504 }));
+        },
+        timeoutMs,
+      );
+    }),
+  ]).finally(() => clearTimeout(timer));
 }

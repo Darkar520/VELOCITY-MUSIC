@@ -14,7 +14,7 @@
  * Rutas cuyo query string NUNCA debe registrarse: llevan material sensible
  * (firma HMAC del stream, clave de admin). Se registra solo el path.
  */
-const SENSITIVE_QUERY_PATHS = /^\/api\/(stream-proxy|stream-sign|admin|setup)/;
+const SENSITIVE_QUERY_PATHS = /^\/api\/(stream-proxy|stream-sign|playback\/prepare|admin|setup)/;
 
 /**
  * Construye la línea de log de un error inesperado.

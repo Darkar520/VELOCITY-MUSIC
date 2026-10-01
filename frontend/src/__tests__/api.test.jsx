@@ -5,7 +5,7 @@ const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
 // Importar después de mockear fetch
-const { api } = await import('../api.js');
+const { api, setToken, getToken } = await import('../api.js');
 
 // localStorage mock para api.js (lee token al importar)
 const store = new Map();
@@ -70,6 +70,125 @@ describe('api.peekStreamUrl', () => {
     api._streamSignCache.set(key, { exp: pastExp, url: 'https://example.com/old' });
     expect(api.peekStreamUrl({ artist: 'expired', title: 'test' })).toBeNull();
     api._streamSignCache.delete(key);
+  });
+});
+
+describe('api.ensureStreamUrl playback preflight', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+    api._streamSignCache.clear();
+    api._streamSignInflight.clear();
+  });
+
+  it('prepara la fuente antes de construir la URL firmada', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: async () => JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600, sig: 'signed' }),
+    });
+    const params = { artist: 'Skrillex', title: 'Sad Noise', id: 'video123', quality: 'high' };
+    const url = await api.ensureStreamUrl(params);
+    expect(mockFetch.mock.calls[0][0]).toContain('/api/playback/prepare?');
+    expect(mockFetch.mock.calls[0][0]).toContain('title=Sad+Noise');
+    expect(url).toContain('/api/stream-proxy?');
+    expect(url).toContain('sig=signed');
+  });
+
+  it('propaga el código y la causa tipada del backend', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 503,
+      statusText: 'Service Unavailable',
+      text: async () => JSON.stringify({
+        error: 'YouTube requiere verificar el acceso a esta pista.',
+        code: 'YT_AUTH_REQUIRED',
+        retryable: false,
+      }),
+    });
+    await expect(api.ensureStreamUrl({ artist: 'A', title: 'B' })).rejects.toMatchObject({
+      code: 'YT_AUTH_REQUIRED',
+      retryable: false,
+      message: 'YouTube requiere verificar el acceso a esta pista.',
+    });
+  });
+
+  it('abandona una preparación colgada a los 15 s, cancela fetch y libera inflight', async () => {
+    vi.useFakeTimers();
+    try {
+      let requestSignal;
+      mockFetch.mockImplementationOnce((_, options) => {
+        requestSignal = options.signal;
+        return new Promise(() => {});
+      });
+      const params = { artist: 'Skrillex', title: 'Bangarang', id: 'stalled-video' };
+      const pending = api.ensureStreamUrl(params);
+      const rejected = expect(pending).rejects.toMatchObject({
+        code: 'PLAYBACK_PREPARE_NETWORK_TIMEOUT', retryable: true,
+      });
+
+      await vi.advanceTimersByTimeAsync(15001);
+      await rejected;
+      expect(requestSignal.aborted).toBe(true);
+      expect(api._streamSignInflight.size).toBe(0);
+      expect(api.peekStreamUrl(params)).toBeNull();
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: async () => JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600, sig: 'fresh' }),
+      });
+      await expect(api.ensureStreamUrl(params)).resolves.toContain('sig=fresh');
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('respeta la cancelación de una pista sustituida y no cachea la respuesta tardía', async () => {
+    let requestSignal;
+    let finishResponse;
+    mockFetch.mockImplementationOnce((_, options) => {
+      requestSignal = options.signal;
+      return new Promise((resolve) => { finishResponse = resolve; });
+    });
+    const controller = new AbortController();
+    const params = { artist: 'A', title: 'B', id: 'cancelled-video' };
+    const pending = api.ensureStreamUrl(params, { signal: controller.signal });
+    const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    controller.abort();
+    await rejected;
+    expect(requestSignal.aborted).toBe(true);
+
+    finishResponse({
+      ok: true,
+      text: async () => JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600, sig: 'late' }),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(api.peekStreamUrl(params)).toBeNull();
+  });
+
+  it('una respuesta 401 tardía de una preparación cancelada no cierra la sesión', async () => {
+    setToken('test-session');
+    try {
+      let finishResponse;
+      mockFetch.mockImplementationOnce(() => new Promise((resolve) => { finishResponse = resolve; }));
+      const controller = new AbortController();
+      const pending = api.ensureStreamUrl({ artist: 'A', title: 'Old track' }, { signal: controller.signal });
+      const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+      controller.abort();
+      await rejected;
+
+      finishResponse({
+        ok: false,
+        status: 401,
+        statusText: 'Unauthorized',
+        text: async () => JSON.stringify({ error: 'Respuesta tardía' }),
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(getToken()).toBe('test-session');
+    } finally {
+      setToken(null);
+    }
   });
 });
 

@@ -169,7 +169,14 @@ async function hydrateSavedAlbums(albums) {
   const result = (Array.isArray(albums) ? albums : []).map((album) => ({ ...album }));
   const queue = result
     .map((album, index) => ({ album, index }))
-    .filter(({ album }) => album?.albumId && (!Array.isArray(album.trackIds) || !album.trackIds.length || album.trackIds.some((id) => !trackById(id))));
+    .filter(({ album }) => album?.albumId && (
+      !Array.isArray(album.trackIds)
+      || !album.trackIds.length
+      || album.trackIds.some((id) => {
+        const track = trackById(id);
+        return !track || (track.albumId && track.albumId !== album.albumId);
+      })
+    ));
 
   const worker = async () => {
     while (queue.length) {

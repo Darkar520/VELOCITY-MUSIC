@@ -5,6 +5,8 @@
  * Requisitos: 5.1, 5.3, 5.4, 14.4
  */
 
+import { APP_VERSION } from '../../shared/version.js';
+
 export const MAX_CACHE_ENTRIES_REPORTED = 1000000;
 
 /**
@@ -45,6 +47,7 @@ export function buildStatus({ resolutionMode, cacheSize, uptime } = {}) {
 
   const response = {
     status,
+    appVersion: APP_VERSION,
     resolutionMode: mode,
     cacheEntries,
     uptimeSeconds,

@@ -182,8 +182,28 @@ describe('App shell — flujos críticos', () => {
     expect(mainAudio(container).getAttribute('src')).not.toContain('unsigned=1');
   });
 
-  // ── FLUJO 2: ladder de reintentos + anti-cascada ──────────────────────────
-  it('flujo error: el primer fallo reintenta con firma fresca tras ~400ms', async () => {
+  it('flujo play: una causa no recuperable se muestra y detiene el estado de carga', async () => {
+    const { a } = seedTracks();
+    apiMock.ensureStreamUrl.mockRejectedValueOnce(Object.assign(
+      new Error('YouTube requiere verificar el acceso a esta pista.'),
+      { code: 'YT_AUTH_REQUIRED', retryable: false },
+    ));
+    render(<App />);
+    await act(async () => {
+      usePlayerStore.getState().dispatchPolicy({ type: 'TRACK_SET', trackId: a.id, intent: 'play' });
+    });
+
+    expect(await screen.findByText('YouTube requiere verificar el acceso a esta pista.')).toBeTruthy();
+    expect(usePlayerStore.getState().loadingAudio).toBe(false);
+    expect(usePlayerStore.getState().playing).toBe(false);
+    expect(apiMock.reportPlaybackError).toHaveBeenCalledWith(expect.objectContaining({
+      trackId: a.id,
+      errorCode: 'YT_AUTH_REQUIRED',
+    }));
+  });
+
+  // ── FLUJO 2: re-resolución única + anti-cascada ───────────────────────────
+  it('flujo error: intenta una sola re-resolución fresca tras ~450ms', async () => {
     vi.useFakeTimers();
     const { a } = seedTracks();
     const { container } = render(<App />);
@@ -198,15 +218,139 @@ describe('App shell — flujos críticos', () => {
     const callsBefore = apiMock.ensureStreamUrl.mock.calls.length;
 
     await act(async () => { fireEvent.error(audio); });
-    // Antes del primer delay (400ms) no debe haber re-firma.
-    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    // Antes del plazo no debe haber otra resolución.
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
     expect(apiMock.ensureStreamUrl.mock.calls.length).toBe(callsBefore);
-    // Pasado el primer escalón sí.
-    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    // Pasados los 450 ms se pide una sola URL fresca.
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
     expect(apiMock.ensureStreamUrl.mock.calls.length).toBeGreaterThan(callsBefore);
   }, 20000);
 
-  it('flujo error: agotados los 6 reintentos salta a la siguiente pista de la cola', async () => {
+  it('flujo stall: si el audio se congela a mitad sin MediaError, renueva una vez y conserva posición', async () => {
+    vi.useFakeTimers();
+    const { a } = seedTracks();
+    const { container } = render(<App />);
+    await act(async () => {
+      usePlayerStore.getState().dispatchPolicy({ type: 'TRACK_SET', trackId: a.id, intent: 'play' });
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    const audio = mainAudio(container);
+    expect(audio.getAttribute('src')).toBeTruthy();
+    let position = 26.95;
+    Object.defineProperties(audio, {
+      paused: { value: false, configurable: true },
+      ended: { value: false, configurable: true },
+      readyState: { value: 2, configurable: true },
+      networkState: { value: 2, configurable: true },
+      duration: { value: 200, configurable: true },
+      currentTime: { get: () => position, set: (value) => { position = value; }, configurable: true },
+    });
+    await act(async () => { fireEvent.playing(audio); fireEvent.timeUpdate(audio); fireEvent.waiting(audio); });
+    expect(position).toBeCloseTo(26.95, 2);
+    const initialSrc = audio.getAttribute('src');
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(13000); });
+
+    const freshCalls = apiMock.ensureStreamUrl.mock.calls.filter(([, opts]) => opts?.forceRefresh === true);
+    expect(freshCalls).toHaveLength(1);
+    expect(audio.getAttribute('src')).not.toBe(initialSrc);
+    expect(position).toBeCloseTo(26.95, 2);
+  }, 20000);
+
+  it('flujo stall: una segunda congelación detiene la carga y explica el timeout de transporte', async () => {
+    vi.useFakeTimers();
+    const { a, b } = seedTracks();
+    const { container } = render(<App />);
+    await act(async () => {
+      usePlayerStore.setState({ queue: [a.id, b.id] });
+      usePlayerStore.getState().dispatchPolicy({ type: 'TRACK_SET', trackId: a.id, intent: 'play' });
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    const audio = mainAudio(container);
+    let position = 26.95;
+    Object.defineProperties(audio, {
+      paused: { value: false, configurable: true },
+      ended: { value: false, configurable: true },
+      readyState: { value: 2, configurable: true },
+      duration: { value: 200, configurable: true },
+      currentTime: { get: () => position, set: (value) => { position = value; }, configurable: true },
+    });
+    await act(async () => { fireEvent.playing(audio); fireEvent.waiting(audio); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(13000); });
+    // El navegador pudo emitir playing con la fuente nueva y aun así atascarse.
+    await act(async () => { fireEvent.playing(audio); fireEvent.waiting(audio); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(11000); });
+
+    expect(apiMock.ensureStreamUrl.mock.calls.filter(([, opts]) => opts?.forceRefresh === true)).toHaveLength(1);
+    expect(usePlayerStore.getState().track?.id).toBe(a.id);
+    expect(usePlayerStore.getState().playing).toBe(false);
+    expect(usePlayerStore.getState().loadingAudio).toBe(false);
+    expect(apiMock.reportPlaybackError).toHaveBeenCalledWith(expect.objectContaining({
+      trackId: a.id,
+      errorCode: 'AUDIO_STALL_TIMEOUT',
+    }));
+    expect(screen.getByText(/El navegador no informa la causa exacta/)).toBeTruthy();
+  }, 20000);
+
+  it('re-firma proactiva a mitad de pista y conserva el segundo reproducido', async () => {
+    vi.useFakeTimers();
+    const { a } = seedTracks();
+    const nearExpiry = SIGNED.replace('exp=9999999999', `exp=${Math.floor(Date.now() / 1000) + 100}`);
+    const renewed = SIGNED.replace('sig=SIG', 'sig=RENEWED');
+    apiMock.ensureStreamUrl.mockResolvedValueOnce(nearExpiry).mockResolvedValueOnce(renewed);
+    const { container } = render(<App />);
+    await act(async () => {
+      usePlayerStore.getState().dispatchPolicy({ type: 'TRACK_SET', trackId: a.id, intent: 'play' });
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    const audio = mainAudio(container);
+    expect(audio.getAttribute('src')).toContain(nearExpiry);
+    let position = 45;
+    Object.defineProperties(audio, {
+      duration: { value: 200, configurable: true },
+      readyState: { value: 2, configurable: true },
+      currentTime: { get: () => position, set: (value) => { position = value; }, configurable: true },
+    });
+
+    await act(async () => { fireEvent.timeUpdate(audio); await Promise.resolve(); });
+
+    expect(audio.getAttribute('src')).toContain('sig=RENEWED');
+    expect(position).toBe(45);
+  }, 20000);
+
+  it('un reintento tardío de la pista anterior no apaga el indicador de carga de la nueva', async () => {
+    vi.useFakeTimers();
+    const { a, b } = seedTracks();
+    const { container } = render(<App />);
+    await act(async () => {
+      usePlayerStore.getState().dispatchPolicy({ type: 'TRACK_SET', trackId: a.id, intent: 'play' });
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    const audio = mainAudio(container);
+    Object.defineProperties(audio, {
+      paused: { value: false, configurable: true },
+      ended: { value: false, configurable: true },
+      readyState: { value: 2, configurable: true },
+      currentTime: { value: 26.95, configurable: true },
+    });
+    let finishOldRefresh;
+    apiMock.ensureStreamUrl.mockImplementationOnce(() => new Promise((resolve) => { finishOldRefresh = resolve; }));
+    await act(async () => { fireEvent.playing(audio); fireEvent.waiting(audio); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(13000); });
+    expect(finishOldRefresh).toBeTypeOf('function');
+
+    apiMock.ensureStreamUrl.mockImplementationOnce(() => new Promise(() => {}));
+    await act(async () => {
+      usePlayerStore.setState({ track: b });
+      usePlayerStore.getState().dispatchPolicy({ type: 'TRACK_SET', trackId: b.id, intent: 'play' });
+    });
+    expect(usePlayerStore.getState().loadingAudio).toBe(true);
+    await act(async () => { finishOldRefresh(SIGNED); await Promise.resolve(); });
+    expect(usePlayerStore.getState().track?.id).toBe(b.id);
+    expect(usePlayerStore.getState().loadingAudio).toBe(true);
+  }, 20000);
+
+  it('flujo error: después de una re-resolución fallida salta a la siguiente pista de la cola', async () => {
     vi.useFakeTimers();
     const { a, b } = seedTracks();
     const { container } = render(<App />);
@@ -218,15 +362,11 @@ describe('App shell — flujos críticos', () => {
     const audio = mainAudio(container);
     expect(audio.getAttribute('src')).toBeTruthy();
 
-    // 6 escalones del ladder: 400, 900, 1800, 3500, 7000, 12000.
-    const DELAYS = [400, 900, 1800, 3500, 7000, 12000];
-    for (const d of DELAYS) {
-      await act(async () => { fireEvent.error(audio); });
-      await act(async () => { await vi.advanceTimersByTimeAsync(d + 50); });
-    }
-    // 7º error: se agota el ladder → salto (tras 1s) a la siguiente pista.
     await act(async () => { fireEvent.error(audio); });
-    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    // Segundo error tras la nueva URL: detención y salto acotado.
+    await act(async () => { fireEvent.error(audio); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(700); });
 
     // Aserción síncrona: bajo fake timers waitFor no avanza el reloj.
     expect(usePlayerStore.getState().track?.id).toBe(b.id);

@@ -32,6 +32,56 @@ export function buildTrackShareUrl(id, origin = (typeof window !== 'undefined' ?
   }
 }
 
+function catalogIdentity(value) {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function albumArtistMatches(actual, expected) {
+  const expectedKey = catalogIdentity(expected);
+  if (!expectedKey) return true;
+  const actualText = String(actual || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  if (catalogIdentity(actualText) === expectedKey) return true;
+  return actualText
+    .split(/\s*(?:,|&|\bx\b|\bfeat(?:uring)?\.?\b)\s*/i)
+    .map(catalogIdentity)
+    .filter(Boolean)
+    .includes(expectedKey);
+}
+
+/**
+ * Acepta pistas de respaldo solo cuando existe evidencia de pertenencia al
+ * álbum: albumId exacto, o nombre+artista exactos si todavía no hay ID.
+ */
+export function filterVerifiedAlbumTracks(tracks, { albumId, name, artist } = {}) {
+  const list = Array.isArray(tracks) ? tracks : [];
+  if (albumId) return list.filter((track) => track?.albumId === albumId);
+  const nameKey = catalogIdentity(name);
+  if (!nameKey) return [];
+  return list.filter((track) => (
+    catalogIdentity(track?.album) === nameKey
+    && albumArtistMatches(track?.artist, artist)
+  ));
+}
+
+export function findVerifiedAlbumCandidate(albums, { name, artist } = {}) {
+  const nameKey = catalogIdentity(name);
+  if (!nameKey) return null;
+  return (Array.isArray(albums) ? albums : []).find((album) => (
+    album?.albumId
+    && catalogIdentity(album.name) === nameKey
+    && albumArtistMatches(album.artist, artist)
+  )) || null;
+}
+
 export function useCatalogNavigation({
   setExpanded, setView, setOpenPlaylist, setTab,
   setDetailData, setDetailLoading, setCatVer,
@@ -183,49 +233,40 @@ export function useCatalogNavigation({
     const offlineFallback = async (aid, aName, aArtist, aCover) => {
       try {
         const metas = await offline.listMetas();
-        const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-        const tracks = metas
-          .filter((m) => m && (
-            (aid && m.albumId === aid)
-            || (aName && norm(m.album) === norm(aName))
-          ))
-          .map(normalizeTrack);
+        const tracks = filterVerifiedAlbumTracks(metas, {
+          albumId: aid,
+          name: aName,
+          artist: aArtist,
+        }).map(normalizeTrack);
         if (!tracks.length) return false;
         return applyTracks({ name: aName, artist: aArtist, cover: aCover, albumId: aid }, tracks, { offline: true });
       } catch { return false; }
     };
 
     // Canciones ya en catálogo local (guardadas al ver el álbum antes).
-    const catalogFallback = (aid, aName) => {
-      const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-      const all = allCached();
-      const tracks = all.filter((t) => (
-        (aid && t.albumId === aid)
-        || (aName && norm(t.album) === norm(aName) && (!artist || norm(t.artist).includes(norm(artist))))
-      ));
-      if (tracks.length < 2) return false;
-      return applyTracks({ albumId: aid, name: aName, artist, cover }, tracks);
+    const catalogFallback = (aid, aName, aArtist) => {
+      const tracks = filterVerifiedAlbumTracks(allCached(), {
+        albumId: aid,
+        name: aName,
+        artist: aArtist,
+      });
+      if (!tracks.length) return false;
+      return applyTracks({ albumId: aid, name: aName, artist: aArtist, cover }, tracks);
     };
 
-    const searchFallback = async (aName, aArtist) => {
+    const searchFallback = async (aid, aName, aArtist) => {
       const q = `${aName || ''} ${aArtist || ''}`.trim();
       if (!q) return false;
       const r = await api.searchAll(q).catch(() => null);
       let songs = (r?.songs || []).map(normalizeTrack);
-      if (!songs.length) {
+      let tracks = filterVerifiedAlbumTracks(songs, { albumId: aid, name: aName, artist: aArtist });
+      if (!tracks.length) {
         const raw = await api.search(q).catch(() => []);
         songs = raw.map(normalizeTrack);
+        tracks = filterVerifiedAlbumTracks(songs, { albumId: aid, name: aName, artist: aArtist });
       }
-      const norm = (s) => (s || '').toLowerCase();
-      // Preferir pistas del mismo álbum/artista
-      let tracks = songs.filter((t) => (
-        (aName && norm(t.album) === norm(aName))
-        || (aArtist && norm(t.artist).includes(norm(aArtist)) && aName && norm(t.title + t.album).includes(norm(aName).slice(0, 12)))
-      ));
-      if (tracks.length < 3) tracks = songs.filter((t) => aArtist && norm(t.artist).includes(norm(aArtist)));
-      if (tracks.length < 2) tracks = songs.slice(0, 20);
       if (!tracks.length) return false;
-      const albId = tracks.find((t) => t.albumId)?.albumId || albumId;
+      const albId = aid || tracks.find((t) => t.albumId)?.albumId || null;
       return applyTracks({
         albumId: albId,
         name: aName,
@@ -259,12 +300,14 @@ export function useCatalogNavigation({
         let aid = albumId;
         if (!aid) {
           const r = await api.searchAll(`${name} ${artist || ''}`.trim()).catch(() => null);
-          aid = r?.albums?.[0]?.albumId
-            || (r?.songs || []).map(normalizeTrack).find((t) => t.albumId)?.albumId
-            || null;
+          const albumCandidate = findVerifiedAlbumCandidate(r?.albums, { name, artist });
+          const songCandidate = filterVerifiedAlbumTracks(r?.songs, { name, artist })
+            .find((track) => track?.albumId);
+          aid = albumCandidate?.albumId || songCandidate?.albumId || null;
           if (!aid) {
             const raw = await api.search(`${songTitle || name} ${artist || ''}`.trim()).catch(() => []);
-            aid = raw.map(normalizeTrack).find((t) => t.albumId)?.albumId || null;
+            aid = filterVerifiedAlbumTracks(raw, { name, artist })
+              .find((track) => track?.albumId)?.albumId || null;
           }
         }
         let ok = false;
@@ -272,13 +315,13 @@ export function useCatalogNavigation({
           try { ok = await loadAlbumApi(aid); } catch { ok = false; }
         }
         // API vacía/502 → catálogo → búsqueda → offline (antes: 0 canciones)
-        if (!ok) ok = catalogFallback(aid || albumId, name);
-        if (!ok) ok = await searchFallback(name, artist);
+        if (!ok) ok = catalogFallback(aid || albumId, name, artist);
+        if (!ok) ok = await searchFallback(aid || albumId, name, artist);
         if (!ok) ok = await offlineFallback(aid || albumId, name, artist, cover);
         if (!ok) setDetailData({ type: 'album', name, artist, cover, tracks: [], none: true });
       } catch {
-        let ok = catalogFallback(albumId, name);
-        if (!ok) ok = await searchFallback(name, artist);
+        let ok = catalogFallback(albumId, name, artist);
+        if (!ok) ok = await searchFallback(albumId, name, artist);
         if (!ok) ok = await offlineFallback(albumId, name, artist, cover);
         if (!ok) setDetailData({ type: 'album', name, artist, cover, tracks: [], none: true });
       } finally {
