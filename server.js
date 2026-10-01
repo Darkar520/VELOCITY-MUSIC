@@ -248,7 +248,9 @@ export async function bootstrap() {
     // Fallback a yt-dlp si ytmusic-api falla.
     catalogImpl: catalogWithFallback,
     catalogTimeoutMs: 20000,
-    resolveTimeoutMs: 12000,
+    // 18 s cubre: intento directo + búsqueda alternativa + extracción de la
+    // subida pública verificada, siempre con deadline y AbortSignal.
+    resolveTimeoutMs: 18000,
     extractorImpl,
     extractorDiagnostics,
     getExtractorLoad: getYtDlpLoad,

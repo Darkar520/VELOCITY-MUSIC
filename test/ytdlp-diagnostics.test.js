@@ -5,6 +5,7 @@ import {
   getYtDlpLoad,
   getYtDlpDiagnostics,
   probeYtDlp,
+  selectAlternateVideoCandidates,
   YTDLP_PROBE_TIMEOUT_MS,
 } from '../src/extractors/ytdlp.js';
 
@@ -57,6 +58,23 @@ test('yt-dlp failure classifier distinguishes access, transient, runtime, and ti
     assert.ok(result.message.length > 10);
   }
   assert.equal(classifyYtDlpFailure({ timedOut: true }).code, 'YT_EXTRACTOR_TIMEOUT');
+});
+
+test('alternate video candidates require exact title and matching artist credits', () => {
+  const candidates = selectAlternateVideoCandidates({
+    artist: 'Skrillex, Boys Noize, & Dylan Brady',
+    title: 'ZEET NOISE',
+    videoId: 'premium-id',
+    candidates: [
+      { id: 'public-a', title: 'Skrillex, Boys Noize & Dylan Brady - ZEET NOISE', uploader: 'No Paradise Records' },
+      { id: 'remix', title: 'Skrillex, Boys Noize & Dylan Brady - ZEET NOISE (LZN EDIT)', uploader: 'LZN' },
+      { id: 'wrong-artist', title: 'Skrillex - ZEET NOISE', uploader: 'Random Upload' },
+      { id: 'premium-id', title: 'Skrillex, Boys Noize & Dylan Brady - ZEET NOISE', uploader: 'YouTube Music' },
+      { id: 'other-song', title: 'Skrillex, Boys Noize & Dylan Brady - Supersonic', uploader: 'Skrillex' },
+    ],
+  });
+
+  assert.deepEqual(candidates.map((candidate) => candidate.id), ['public-a']);
 });
 
 test('yt-dlp load snapshot exposes bounded process and queue capacity', () => {

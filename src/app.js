@@ -797,6 +797,11 @@ export function createApp(deps = {}) {
         quality: String(req.query.quality || '').trim() || undefined,
         stream: String(req.query.stream || '').trim() || undefined,
       };
+      // El catálogo/frontend llaman al identificador `id`, pero el resolver
+      // distingue explícitamente `videoId` para evitar una búsqueda textual
+      // ambigua. Pasar el ID real permite detectar Premium y buscar una subida
+      // alternativa de la misma canción con metadata verificada.
+      params.videoId = params.id;
       if (!params.artist || !params.title) {
         return res.status(400).json({
           error: 'Se requieren artista y título para reproducir esta pista.',
@@ -827,7 +832,9 @@ export function createApp(deps = {}) {
       }
       // Un límite explícito para el camino crítico de reproducción, aunque un
       // valor de config mayor mantenga los límites más amplios de /api/resolve.
-      const timeoutMs = Math.min(resolveTimeoutMs, 12000);
+      // Incluye un fallback de subida pública para videos Premium, pero nunca
+      // deja la interfaz esperando indefinidamente.
+      const timeoutMs = Math.min(resolveTimeoutMs, 18000);
       const abortController = new AbortController();
       const abortOnDisconnect = () => abortController.abort();
       const onResponseClose = () => {

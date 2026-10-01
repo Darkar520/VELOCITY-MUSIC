@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { audioFormatSelector } from '../services/audioFormat.js';
+import { normalizeText } from '../lib/normalize.js';
 
 /**
  * Adaptador de yt-dlp como External_Extractor primario contra YouTube Music.
@@ -45,8 +46,90 @@ const YT_CLIENTS = [
 // El primer intento es inmediato; cada cliente siguiente espera más para
 // dar tiempo a que el rate-limit del anterior se recupere.
 const BACKOFF_BASE_MS = 500;
+const ALTERNATE_SEARCH_LIMIT = 8;
+const ALTERNATE_SEARCH_TIMEOUT_MS = 5000;
+const ALTERNATE_FAILURE_CODES = new Set([
+  'YT_PREMIUM_REQUIRED',
+  'YT_AUTH_REQUIRED',
+  'YT_VIDEO_UNAVAILABLE',
+]);
+const ARTIST_STOP_WORDS = new Set(['and', 'the', 'feat', 'featuring', 'ft', 'with']);
+
 function backoffMs(index) {
   return index === 0 ? 0 : BACKOFF_BASE_MS * Math.pow(2, index - 1);
+}
+
+function comparableText(value) {
+  return normalizeText(value).replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function artistGroups(value) {
+  return String(value || '')
+    .split(/\s*(?:,|&|\/|\bx\b|feat\.?|ft\.?|featuring|with)\s*/i)
+    .map((part) => comparableText(part).split(' ').filter((token) => token && !ARTIST_STOP_WORDS.has(token)))
+    .filter((group) => group.length);
+}
+
+function candidateShape(raw) {
+  const id = String(raw?.id ?? raw?.videoId ?? '').trim();
+  const rawTitle = String(raw?.title ?? raw?.name ?? '').trim();
+  let title = rawTitle;
+  let artist = String(raw?.artist ?? '').trim();
+  if (!artist) artist = String(raw?.uploader ?? raw?.channel ?? '').trim();
+
+  // `--flat-playlist` often puts the real artist in the title while `uploader`
+  // is only the channel name. Split that presentation before matching.
+  const separator = rawTitle.indexOf(' - ');
+  if (separator > 0) {
+    const parsedArtist = rawTitle.slice(0, separator).trim();
+    const parsedTitle = rawTitle.slice(separator + 3).trim();
+    if (parsedArtist && parsedTitle) {
+      artist = parsedArtist;
+      title = parsedTitle;
+    }
+  }
+
+  return { id, title: cleanTitle(title, artist), artist };
+}
+
+/**
+ * Filtra candidatos alternativos sin aceptar un remix, mashup o canción de
+ * otro artista por el mero hecho de compartir una palabra del título.
+ *
+ * La comparación es deliberadamente conservadora: el título limpio debe ser
+ * exacto y, si hay varios artistas, al menos dos créditos del artista buscado
+ * deben aparecer completos en la metadata del resultado.
+ */
+export function selectAlternateVideoCandidates({ artist, title, videoId, candidates = [] } = {}) {
+  const wantedTitle = comparableText(cleanTitle(title, artist));
+  const wantedGroups = artistGroups(artist);
+  if (!wantedTitle || !Array.isArray(candidates)) return [];
+  const minimumGroups = wantedGroups.length > 1 ? Math.min(2, wantedGroups.length) : wantedGroups.length;
+
+  return candidates
+    .map((raw, index) => ({ ...candidateShape(raw), index, raw }))
+    .filter((candidate) => {
+      if (!candidate.id || candidate.id === String(videoId || '')) return false;
+      if (comparableText(candidate.title) !== wantedTitle) return false;
+      if (!wantedGroups.length) return true;
+      const candidateText = comparableText(`${candidate.artist} ${candidate.raw?.title || ''} ${candidate.raw?.uploader || ''} ${candidate.raw?.channel || ''}`);
+      const candidateTokens = new Set(candidateText.split(' ').filter(Boolean));
+      const matchedGroups = wantedGroups.filter((group) => group.every((token) => candidateTokens.has(token))).length;
+      return matchedGroups >= minimumGroups;
+    })
+    .sort((a, b) => {
+      const score = (candidate) => {
+        const text = comparableText(`${candidate.artist} ${candidate.raw?.title || ''}`);
+        const tokens = new Set(text.split(' ').filter(Boolean));
+        return wantedGroups.filter((group) => group.every((token) => tokens.has(token))).length;
+      };
+      return score(b) - score(a) || a.index - b.index;
+    })
+    .map(({ id, title: candidateTitle, artist: candidateArtist }) => ({
+      id,
+      title: candidateTitle,
+      artist: candidateArtist,
+    }));
 }
 
 /**
@@ -247,7 +330,10 @@ function failure(code, message, retryable) {
 export function createYtDlpExtractor({ scFallback, logger = console } = {}) {
   return async function extractorImpl({ artist, title, videoId, quality }, { timeoutMs = 12000, signal } = {}) {
     const startedAt = Date.now();
-    const budgetMs = Math.max(1, Math.min(12000, Number(timeoutMs) || 12000));
+    // Una pista Premium puede requerir una búsqueda alternativa (≈5 s) y una
+    // extracción adicional (≈5 s) después del intento directo. Mantener un
+    // presupuesto acotado de 18 s permite ese fallback sin spinners infinitos.
+    const budgetMs = Math.max(1, Math.min(18000, Number(timeoutMs) || 12000));
     const deadline = startedAt + budgetMs;
     const ytTarget = videoId
       ? `https://www.youtube.com/watch?v=${videoId}`
@@ -284,6 +370,45 @@ export function createYtDlpExtractor({ scFallback, logger = console } = {}) {
           ? err
           : new YtDlpError(classifyYtDlpFailure({ output: err?.message || '' }), { client: clientName });
         if (!lastError.retryable || lastError.code === 'YT_EXTRACTOR_BUSY') break;
+      }
+    }
+
+    // Un video concreto puede estar restringido a Music Premium aunque existan
+    // otras subidas públicas de la misma canción. En ese caso se consulta un
+    // conjunto pequeño de resultados de YouTube y solo se prueban candidatos
+    // cuyo título y créditos coinciden; nunca se sustituye silenciosamente por
+    // un remix o un mashup que solo comparte una palabra.
+    if (
+      videoId && lastError && ALTERNATE_FAILURE_CODES.has(lastError.code) &&
+      !signal?.aborted && deadline - Date.now() > 0
+    ) {
+      const alternateBudget = Math.min(ALTERNATE_SEARCH_TIMEOUT_MS, deadline - Date.now());
+      let alternateCandidates = [];
+      try {
+        const lines = await runForLines([
+          `ytsearch${ALTERNATE_SEARCH_LIMIT}:${artist} ${title}`,
+          '--dump-json', '--flat-playlist', '--no-warnings',
+          ...JS_RUNTIME_ARGS,
+        ], { timeoutMs: alternateBudget, signal });
+        alternateCandidates = selectAlternateVideoCandidates({
+          artist,
+          title,
+          videoId,
+          candidates: lines.map(safeParse).filter(Boolean),
+        });
+      } catch { /* se conserva la causa original de YouTube */ }
+
+      for (const candidate of alternateCandidates) {
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0 || signal?.aborted) break;
+        try {
+          const alternateUrl = await runForUrl(
+            [...JS_RUNTIME_ARGS, ...baseArgs, `https://www.youtube.com/watch?v=${candidate.id}`],
+            Math.min(remainingMs, 5500),
+            { signal, client: 'alternate' },
+          );
+          if (alternateUrl) return alternateUrl;
+        } catch { /* probar el siguiente candidato verificado */ }
       }
     }
 

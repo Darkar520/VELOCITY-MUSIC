@@ -211,8 +211,10 @@ test('GET /api/stream-sign requiere JWT y devuelve exp+sig', async () => {
 
 test('GET /api/playback/prepare autentica, resuelve y firma antes de devolver la fuente', async () => {
   let receivedOptions;
+  let receivedParams;
   const app = buildTestApp({
-    extractorImpl: async (_params, options) => {
+    extractorImpl: async (params, options) => {
+      receivedParams = params;
       receivedOptions = options;
       return 'https://cdn.example.com/track.webm';
     },
@@ -235,8 +237,9 @@ test('GET /api/playback/prepare autentica, resuelve y firma antes de devolver la
     .query(params)
     .expect(200);
   assert.equal(typeof receivedOptions.timeoutMs, 'number');
-  assert.ok(receivedOptions.timeoutMs <= 12000);
+  assert.ok(receivedOptions.timeoutMs <= 18000);
   assert.ok(receivedOptions.signal instanceof AbortSignal);
+  assert.equal(receivedParams.videoId, 'v1');
   assert.equal(res.body.provider, 'youtube');
   assert.equal(verifyStreamParams({ ...params, ...res.body }, JWT_SECRET), true);
   assert.equal((await request(app).get('/api/status')).body.extractor.version, '2026.08.19');
