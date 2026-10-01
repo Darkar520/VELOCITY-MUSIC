@@ -111,7 +111,7 @@ describe('api.ensureStreamUrl playback preflight', () => {
     });
   });
 
-  it('abandona una preparación colgada a los 15 s, cancela fetch y libera inflight', async () => {
+  it('abandona una preparación colgada a los 20 s, cancela fetch y libera inflight', async () => {
     vi.useFakeTimers();
     try {
       let requestSignal;
@@ -125,7 +125,7 @@ describe('api.ensureStreamUrl playback preflight', () => {
         code: 'PLAYBACK_PREPARE_NETWORK_TIMEOUT', retryable: true,
       });
 
-      await vi.advanceTimersByTimeAsync(15001);
+      await vi.advanceTimersByTimeAsync(20001);
       await rejected;
       expect(requestSignal.aborted).toBe(true);
       expect(api._streamSignInflight.size).toBe(0);
