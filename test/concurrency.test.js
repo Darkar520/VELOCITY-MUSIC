@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createCancellableInflight } from '../src/lib/concurrency.js';
+import { createCancellableInflight, withAbortableTimeout } from '../src/lib/concurrency.js';
 
 test('deduplicated work survives one caller aborting while another still waits', async () => {
   const dedupe = createCancellableInflight();
@@ -38,4 +38,29 @@ test('deduplicated work is aborted after every caller has left', async () => {
   await assert.rejects(p1, { name: 'AbortError' });
   await assert.rejects(p2, { name: 'AbortError' });
   assert.equal(workSignal.aborted, true);
+});
+
+test('abortable timeout cancels slow best-effort work and returns its fallback', async () => {
+  let workSignal;
+  let observedAbort = false;
+  const result = await withAbortableTimeout((signal) => {
+    workSignal = signal;
+    signal.addEventListener('abort', () => { observedAbort = true; }, { once: true });
+    return new Promise(() => {});
+  }, 10, []);
+
+  assert.deepEqual(result, []);
+  assert.equal(workSignal.aborted, true);
+  assert.equal(observedAbort, true);
+});
+
+test('abortable timeout clears its timer after successful work', async () => {
+  let observedAbort = false;
+  const result = await withAbortableTimeout(async (signal) => {
+    signal.addEventListener('abort', () => { observedAbort = true; }, { once: true });
+    return ['ok'];
+  }, 50, []);
+
+  assert.deepEqual(result, ['ok']);
+  assert.equal(observedAbort, false);
 });

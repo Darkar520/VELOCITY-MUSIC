@@ -3,7 +3,7 @@ import path from 'node:path';
 import { loadEnv } from './src/lib/loadEnv.js';
 import { createApp } from './src/app.js';
 import { StreamCache } from './src/services/streamCache.js';
-import { createCancellableInflight } from './src/lib/concurrency.js';
+import { createCancellableInflight, withAbortableTimeout } from './src/lib/concurrency.js';
 import { normalizeText } from './src/lib/normalize.js';
 import { resolveActiveMode, createModeWatchdog } from './src/services/resolutionMode.js';
 import { probeYtDlp, getYtDlpDiagnostics, getYtDlpLoad, createYtDlpExtractor, createYtDlpCatalog, createSoundCloudCatalog, createSoundCloudExtractor, YT_DLP_BIN_DIR, resolveYtDlpBin } from './src/extractors/ytdlp.js';
@@ -272,13 +272,16 @@ export async function bootstrap() {
       // SoundCloud (scsearch vía yt-dlp subproceso) tarda ~5-6 s y arrastraba
       // toda la búsqueda combinada, mientras que YouTube Music responde en <1 s.
       // Se le pone un tope duro (SC_SEARCH_CAP_MS): si SoundCloud no responde a
-      // tiempo, la búsqueda devuelve solo YouTube Music sin bloquearse. Esto
-      // elimina el "No se pudo buscar" intermitente causado por latencia.
+      // tiempo, la búsqueda devuelve solo YouTube Music sin bloquearse. El
+      // timeout debe ABORTAR scCatalog; un Promise.race simple dejaba vivo el
+      // yt-dlp hasta 15 s, ocupando los cupos compartidos y bloqueando la
+      // reproducción con YT_EXTRACTOR_BUSY.
       const SC_SEARCH_CAP_MS = Number(process.env.SC_SEARCH_CAP_MS || 1200);
-      const scCapped = (query, lim) => Promise.race([
-        scCatalog(query, lim),
-        new Promise((resolve) => setTimeout(() => resolve([]), SC_SEARCH_CAP_MS)),
-      ]);
+      const scCapped = (query, lim) => withAbortableTimeout(
+        (signal) => scCatalog(query, lim, { signal }),
+        SC_SEARCH_CAP_MS,
+        [],
+      );
       return async (q, limit) => {
         const [ytData, scTracks] = await Promise.allSettled([
           ytSearchAll(q, limit),

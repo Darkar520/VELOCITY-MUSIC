@@ -109,3 +109,43 @@ export function createCancellableInflight() {
     });
   };
 }
+
+/**
+ * Ejecuta trabajo de mejor esfuerzo con un presupuesto explícito.
+ *
+ * A diferencia de `Promise.race`, el timeout también aborta el trabajo
+ * subyacente. Esto es importante para tareas que mantienen recursos externos
+ * (por ejemplo, un proceso yt-dlp y un cupo del semáforo) después de que el
+ * caller ya recibió el fallback.
+ *
+ * @param {(signal: AbortSignal) => Promise<any> | any} task
+ * @param {number} timeoutMs
+ * @param {any} fallback
+ * @returns {Promise<any>}
+ */
+export function withAbortableTimeout(task, timeoutMs, fallback) {
+  const controller = new AbortController();
+  const budget = Math.max(1, Number(timeoutMs) || 1);
+  let timer = null;
+  let settled = false;
+
+  return new Promise((resolve) => {
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(value);
+    };
+
+    timer = setTimeout(() => {
+      // Abort before resolving the fallback so resource-owning tasks start
+      // releasing their process/slot immediately.
+      controller.abort();
+      finish(fallback);
+    }, budget);
+
+    Promise.resolve()
+      .then(() => task(controller.signal))
+      .then(finish, () => finish(fallback));
+  });
+}
