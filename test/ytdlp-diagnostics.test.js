@@ -2,10 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   classifyYtDlpFailure,
+  createYtDlpExtractor,
   getYtDlpLoad,
   getYtDlpDiagnostics,
   probeYtDlp,
   selectAlternateVideoCandidates,
+  YtDlpError,
   YTDLP_PROBE_TIMEOUT_MS,
 } from '../src/extractors/ytdlp.js';
 
@@ -75,6 +77,44 @@ test('alternate video candidates require exact title and matching artist credits
   });
 
   assert.deepEqual(candidates.map((candidate) => candidate.id), ['public-a']);
+});
+
+test('el fallback reintenta la búsqueda con términos invertidos si la primera no devuelve candidatos', async () => {
+  const searchQueries = [];
+  const extract = createYtDlpExtractor({
+    logger: { warn() {} },
+    runLines: async (args) => {
+      searchQueries.push(args[0]);
+      if (searchQueries.length === 1) return [];
+      return [JSON.stringify({
+        id: 'public-a',
+        title: 'Skrillex, Boys Noize & Dylan Brady - ZEET NOISE',
+        uploader: 'No Paradise Records',
+      })];
+    },
+    runUrl: async (args) => {
+      if (args.some((arg) => String(arg).includes('ywdvEkWMdEA'))) {
+        throw new YtDlpError({
+          code: 'YT_PREMIUM_REQUIRED',
+          message: 'Premium',
+          retryable: false,
+        }, { client: 'default' });
+      }
+      return 'https://cdn.example.test/zeet-noise.webm';
+    },
+  });
+
+  const url = await extract({
+    artist: 'Skrillex, Boys Noize, & Dylan Brady',
+    title: 'ZEET NOISE',
+    videoId: 'ywdvEkWMdEA',
+    quality: 'high',
+  }, { timeoutMs: 18000 });
+
+  assert.equal(url, 'https://cdn.example.test/zeet-noise.webm');
+  assert.equal(searchQueries.length, 2);
+  assert.match(searchQueries[0], /Skrillex.*ZEET NOISE/);
+  assert.match(searchQueries[1], /ZEET NOISE.*Skrillex/);
 });
 
 test('yt-dlp load snapshot exposes bounded process and queue capacity', () => {

@@ -42,6 +42,7 @@ import * as nowPlayingModule from './src/services/nowPlayingService.js';
 import { createTokenRevocationService } from './src/services/tokenRevocationService.js';
 import { initSchema } from './src/db/init.js';
 import { getPool } from './src/db/pool.js';
+import { attachFatalListenHandler } from './src/lib/serverStartup.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Cargar .env antes de leer PORT/USE_POSTGRES (no pisa vars del SO/guardian).
@@ -341,7 +342,7 @@ export async function bootstrap() {
     console.warn(`⚠️  Cliente YouTube Music no listo al arrancar (${e.message}). Se reintentará en la primera búsqueda.`);
   }
 
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     console.log('=======================================================');
     console.log(`🎵 Velocity Music (MuStreamer) backend en: http://localhost:${PORT}`);
     console.log(`🔊 Modo de resolución activo: ${activeMode}`);
@@ -349,6 +350,11 @@ export async function bootstrap() {
     console.log(`🗄️  Almacén: ${USE_POSTGRES ? 'PostgreSQL' : 'archivo JSON (persistente)'}`);
     console.log('=======================================================');
   });
+  // EADDRINUSE no es un error recuperable dentro de esta instancia: si se
+  // absorbe con el handler global, el proceso sigue vivo pero no atiende HTTP.
+  // Terminar aquí permite que el guardian/restart detecte el fallo real.
+  attachFatalListenHandler(server, { port: PORT });
+  return server;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

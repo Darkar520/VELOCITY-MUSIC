@@ -327,7 +327,14 @@ function failure(code, message, retryable) {
  * los clientes, la cola de procesos y el fallback. Los rechazos de acceso no
  * se reintentan con otros clientes.
  */
-export function createYtDlpExtractor({ scFallback, logger = console } = {}) {
+export function createYtDlpExtractor({
+  scFallback,
+  logger = console,
+  // Inyección para pruebas deterministas. En producción se usan los runners
+  // acotados que matan el proceso hijo al vencer el presupuesto.
+  runUrl = runForUrl,
+  runLines = runForLines,
+} = {}) {
   return async function extractorImpl({ artist, title, videoId, quality }, { timeoutMs = 12000, signal } = {}) {
     const startedAt = Date.now();
     // Una pista Premium puede requerir una búsqueda alternativa (≈5 s) y una
@@ -359,7 +366,7 @@ export function createYtDlpExtractor({ scFallback, logger = console } = {}) {
       const { name: clientName, args: clientArgs } = YT_CLIENTS[i];
       attempts += 1;
       try {
-        const url = await runForUrl(
+        const url = await runUrl(
           [...JS_RUNTIME_ARGS, ...baseArgs, ...clientArgs, ytTarget],
           Math.min(remainingMs, 5500),
           { signal, client: clientName },
@@ -384,25 +391,37 @@ export function createYtDlpExtractor({ scFallback, logger = console } = {}) {
     ) {
       const alternateBudget = Math.min(ALTERNATE_SEARCH_TIMEOUT_MS, deadline - Date.now());
       let alternateCandidates = [];
-      try {
-        const lines = await runForLines([
-          `ytsearch${ALTERNATE_SEARCH_LIMIT}:${artist} ${title}`,
-          '--dump-json', '--flat-playlist', '--no-warnings',
-          ...JS_RUNTIME_ARGS,
-        ], { timeoutMs: alternateBudget, signal });
-        alternateCandidates = selectAlternateVideoCandidates({
-          artist,
-          title,
-          videoId,
-          candidates: lines.map(safeParse).filter(Boolean),
-        });
-      } catch { /* se conserva la causa original de YouTube */ }
+      // Una consulta de búsqueda puede devolver cero líneas aunque YouTube
+      // tenga subidas públicas válidas (fallo transitorio del endpoint de
+      // búsqueda, no ausencia de la pista). Repetimos una sola vez con el
+      // orden de términos invertido, dentro del mismo presupuesto global.
+      const alternateQueries = [
+        `${artist} ${title}`,
+        `${title} ${artist}`,
+      ];
+      for (const alternateQuery of alternateQueries) {
+        const searchRemaining = deadline - Date.now();
+        if (alternateCandidates.length || searchRemaining <= 0) break;
+        try {
+          const lines = await runLines([
+            `ytsearch${ALTERNATE_SEARCH_LIMIT}:${alternateQuery}`,
+            '--dump-json', '--flat-playlist', '--no-warnings',
+            ...JS_RUNTIME_ARGS,
+          ], { timeoutMs: Math.min(alternateBudget, searchRemaining), signal });
+          alternateCandidates = selectAlternateVideoCandidates({
+            artist,
+            title,
+            videoId,
+            candidates: lines.map(safeParse).filter(Boolean),
+          });
+        } catch { /* probar la consulta invertida si aún queda presupuesto */ }
+      }
 
       for (const candidate of alternateCandidates) {
         const remainingMs = deadline - Date.now();
         if (remainingMs <= 0 || signal?.aborted) break;
         try {
-          const alternateUrl = await runForUrl(
+          const alternateUrl = await runUrl(
             [...JS_RUNTIME_ARGS, ...baseArgs, `https://www.youtube.com/watch?v=${candidate.id}`],
             Math.min(remainingMs, 5500),
             { signal, client: 'alternate' },
