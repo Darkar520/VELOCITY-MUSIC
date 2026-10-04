@@ -50,6 +50,7 @@ test('yt-dlp failure classifier distinguishes access, transient, runtime, and ti
     ['Sign in to confirm you are not a bot', 'YT_AUTH_REQUIRED', false],
     ['This video is not available in your country', 'YT_GEO_RESTRICTED', false],
     ['HTTP Error 429: Too Many Requests', 'YT_RATE_LIMITED', true],
+    ['[PYI-11256:ERROR] Failed to extract Cryptodome\\Cipher\\_ARC4.pyd: decompression resulted in return code -1!', 'YT_DLP_BINARY_BROKEN', false],
     ['No supported JavaScript runtime could be found', 'YT_RUNTIME_UNAVAILABLE', false],
     ['Requested format is not available', 'YT_FORMAT_UNAVAILABLE', true],
   ];

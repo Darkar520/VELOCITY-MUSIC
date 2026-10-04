@@ -155,22 +155,25 @@ export function resolveYtDlpBin() {
  * timeout por intento.
  *
  * @param {{ retries?: number, delayMs?: number, timeoutMs?: number,
- *           probeOnce?: (timeoutMs:number)=>Promise<object> }} opts
+ *           bin?: string, probeOnce?: (timeoutMs:number)=>Promise<object> }} opts
  */
 let probeInFlight = null;
 let lastProbeResult = null;
 
-export function probeYtDlp({ retries = 1, delayMs = 500, timeoutMs = YTDLP_PROBE_TIMEOUT_MS, probeOnce = _probeOnce } = {}) {
+export function probeYtDlp({ retries = 1, delayMs = 500, timeoutMs = YTDLP_PROBE_TIMEOUT_MS, probeOnce, bin = resolveYtDlpBin() } = {}) {
   if (probeInFlight) return probeInFlight;
   const attemptCount = Math.min(2, Math.max(1, Math.trunc(Number(retries) || 0) + 1));
   const boundedTimeoutMs = Math.min(12000, Math.max(1, Number(timeoutMs) || YTDLP_PROBE_TIMEOUT_MS));
   const boundedDelayMs = Math.min(1000, Math.max(0, Number(delayMs) || 0));
+  const runProbe = typeof probeOnce === 'function'
+    ? probeOnce
+    : (probeTimeoutMs) => _probeOnce(probeTimeoutMs, bin);
   const task = (async () => {
     for (let attempt = 0; attempt < attemptCount; attempt++) {
       if (attempt > 0) {
         await new Promise((r) => setTimeout(r, boundedDelayMs * attempt));
       }
-      const result = await probeOnce(boundedTimeoutMs);
+      const result = await runProbe(boundedTimeoutMs);
       lastProbeResult = { ...result, checkedAtMs: Date.now() };
       if (result.ok) return true;
     }
@@ -181,8 +184,8 @@ export function probeYtDlp({ retries = 1, delayMs = 500, timeoutMs = YTDLP_PROBE
 }
 
 /** Ejecuta `yt-dlp --version` una vez. Resuelve true si el proceso sale con 0. */
-async function _probeOnce(timeoutMs = YTDLP_PROBE_TIMEOUT_MS) {
-  return runYtDlpProbe([...JS_RUNTIME_ARGS, '--version'], timeoutMs);
+async function _probeOnce(timeoutMs = YTDLP_PROBE_TIMEOUT_MS, bin = resolveYtDlpBin()) {
+  return runYtDlpProbe([...JS_RUNTIME_ARGS, '--version'], timeoutMs, bin);
 }
 
 /**
@@ -190,14 +193,14 @@ async function _probeOnce(timeoutMs = YTDLP_PROBE_TIMEOUT_MS) {
  * `runtimeConfigured` significa que yt-dlp acepta el flag y el Node del
  * proceso está disponible; no equivale a una prueba real de una pista.
  */
-export async function getYtDlpDiagnostics({ timeoutMs = YTDLP_PROBE_TIMEOUT_MS, refresh = false } = {}) {
+export async function getYtDlpDiagnostics({ timeoutMs = YTDLP_PROBE_TIMEOUT_MS, refresh = false, bin = resolveYtDlpBin() } = {}) {
   const nodeAvailable = Boolean(process.execPath && existsSync(process.execPath));
   let runtime = !refresh && lastProbeResult && Date.now() - lastProbeResult.checkedAtMs < 30000
     ? lastProbeResult
     : null;
   if (!runtime) {
     const args = nodeAvailable && NODE_RUNTIME_SUPPORTED ? [...JS_RUNTIME_ARGS, '--version'] : ['--version'];
-    runtime = await runYtDlpProbe(args, timeoutMs);
+    runtime = await runYtDlpProbe(args, timeoutMs, bin);
     lastProbeResult = { ...runtime, checkedAtMs: Date.now() };
   }
   const probeStatus = runtime.timedOut ? 'timeout' : runtime.ok ? 'ok' : 'unavailable';
@@ -222,6 +225,8 @@ export async function getYtDlpDiagnostics({ timeoutMs = YTDLP_PROBE_TIMEOUT_MS, 
       maxQueued: maxConcurrentProcesses() * 8,
     },
     playbackProbe: 'not_run',
+    failureCode: runtime.code || null,
+    failureMessage: runtime.message || null,
     checkedAt: new Date().toISOString(),
   };
 }
@@ -237,10 +242,11 @@ export function getYtDlpLoad() {
   };
 }
 
-function runYtDlpProbe(args, timeoutMs) {
+function runYtDlpProbe(args, timeoutMs, bin = resolveYtDlpBin()) {
   return new Promise((resolve) => {
     let settled = false;
     let stdout = '';
+    let stderr = '';
     let proc = null;
     let timer = null;
     const done = (result) => {
@@ -251,16 +257,31 @@ function runYtDlpProbe(args, timeoutMs) {
       resolve(result);
     };
     try {
-      proc = spawn(resolveYtDlpBin(), args, { windowsHide: true });
-      timer = setTimeout(() => done({ ok: false, version: null, timedOut: true }), timeoutMs);
+      proc = spawn(bin, args, { windowsHide: true });
+      timer = setTimeout(() => done({
+        ok: false,
+        version: null,
+        timedOut: true,
+        code: 'YT_EXTRACTOR_TIMEOUT',
+        message: 'La sonda de yt-dlp superó el límite de espera.',
+      }), timeoutMs);
       proc.stdout.on('data', (data) => { stdout += data.toString(); });
-      proc.on('close', (code) => done({
-        ok: code === 0,
-        version: code === 0 ? stdout.trim().split(/\s+/)[0] || null : null,
-      }));
-      proc.on('error', () => done({ ok: false, version: null }));
-    } catch {
-      done({ ok: false, version: null });
+      proc.stderr.on('data', (data) => { stderr += data.toString(); });
+      proc.on('close', (code) => {
+        if (code === 0) {
+          done({ ok: true, version: stdout.trim().split(/\s+/)[0] || null });
+          return;
+        }
+        const details = classifyYtDlpFailure({ output: `${stderr}\n${stdout}` });
+        done({ ok: false, version: null, code: details.code, message: details.message });
+      });
+      proc.on('error', (error) => {
+        const details = classifyYtDlpFailure({ spawnError: error });
+        done({ ok: false, version: null, code: details.code, message: details.message });
+      });
+    } catch (error) {
+      const details = classifyYtDlpFailure({ spawnError: error });
+      done({ ok: false, version: null, code: details.code, message: details.message });
     }
   });
 }
@@ -283,6 +304,18 @@ export function classifyYtDlpFailure({ output = '', timedOut = false, cancelled 
     return failure('YT_RESOLUTION_CANCELLED', 'La solicitud de reproducción se canceló.', true);
   }
   if (timedOut) return failure('YT_EXTRACTOR_TIMEOUT', 'La búsqueda de audio superó el límite de espera.', true);
+  // Los binarios one-file de PyInstaller desempaquetan módulos nativos en
+  // %TEMP% antes de ejecutar yt-dlp. Si el disco está lleno o el payload quedó
+  // truncado, yt-dlp nunca alcanza YouTube y el mensaje no debe presentarse
+  // como un fallo ambiguo del proveedor. Este código permite al backend
+  // activar la reparación del binario y al cliente mostrar una causa útil.
+  if (/failed to extract(?: entry|\s+cryptodome|.*\.pyd)|decompression resulted in return code|pyi-\d+.*error|no space left on device|not enough space|disk full|espacio insuficiente/.test(text)) {
+    return failure(
+      'YT_DLP_BINARY_BROKEN',
+      'El extractor no pudo iniciar: el binario yt-dlp está incompleto o no hay espacio temporal suficiente en el servidor. Libera espacio y vuelve a intentarlo.',
+      false,
+    );
+  }
   if (/only available to youtube music premium members|unlock this song by getting music premium|music premium members/.test(text)) {
     return failure('YT_PREMIUM_REQUIRED', 'YouTube indica que esta pista está limitada a miembros de Music Premium.', false);
   }

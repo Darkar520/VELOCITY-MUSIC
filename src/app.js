@@ -810,7 +810,9 @@ export function createApp(deps = {}) {
         });
       }
       if (!isFullResolutionAllowed(mode) && !params.stream) {
-        const unavailableCode = extractorDiagnostics?.probeStatus === 'timeout'
+        const unavailableCode = extractorDiagnostics?.failureCode === 'YT_DLP_BINARY_BROKEN'
+          ? 'YT_DLP_BINARY_BROKEN'
+          : extractorDiagnostics?.probeStatus === 'timeout'
           ? 'YT_DIAGNOSTICS_TIMEOUT'
           : extractorDiagnostics?.available === false
             ? 'YT_DLP_UNAVAILABLE'
@@ -819,6 +821,8 @@ export function createApp(deps = {}) {
             : 'RESOLUTION_MODE_DEGRADED';
         const unavailableMessage = unavailableCode === 'YT_DIAGNOSTICS_TIMEOUT'
           ? 'El servidor no pudo verificar yt-dlp dentro del plazo. Vuelve a intentarlo en un momento.'
+          : unavailableCode === 'YT_DLP_BINARY_BROKEN'
+            ? (extractorDiagnostics?.failureMessage || 'El extractor no pudo iniciar: el binario yt-dlp está incompleto o no hay espacio temporal suficiente en el servidor.')
           : unavailableCode === 'YT_DLP_UNAVAILABLE'
             ? 'El servidor no puede ejecutar yt-dlp ahora mismo.'
           : unavailableCode === 'YT_RUNTIME_UNAVAILABLE'
@@ -852,6 +856,12 @@ export function createApp(deps = {}) {
         if (result.status === 302) {
           const { exp, sig } = signStreamParams(params, streamSecret);
           return res.json({ exp, sig, provider: result.provider || 'youtube' });
+        }
+        if (result.errorCode === 'YT_DLP_BINARY_BROKEN' && typeof setActiveMode === 'function') {
+          // No mantener /api/status en `full` si el binario dejó de iniciar
+          // después del arranque. El refresco se hace en background para que
+          // el usuario reciba la causa tipada sin añadir otra espera.
+          void Promise.resolve(setActiveMode()).catch(() => {});
         }
         return res.status(503).json({
           error: result.message,

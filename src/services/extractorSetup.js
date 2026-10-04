@@ -7,7 +7,7 @@
  * local. Como respaldo se ofrecen comandos de gestor de paquetes.
  */
 
-import { mkdir, writeFile, chmod } from 'node:fs/promises';
+import { mkdir, writeFile, chmod, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
 
 /** Comando de instalación sugerido según la plataforma. */
@@ -75,11 +75,47 @@ export async function downloadYtDlp({ binDir, platform = process.platform, fetch
   const res = await fetchImpl(url, { redirect: 'follow' });
   if (!res.ok) throw new Error(`La descarga de yt-dlp falló (HTTP ${res.status}).`);
   const buf = Buffer.from(await res.arrayBuffer());
+  if (buf.length === 0) throw new Error('La descarga de yt-dlp devolvió un archivo vacío.');
   await mkdir(binDir, { recursive: true });
   const dest = path.join(binDir, ytDlpBinName(platform));
-  await writeFile(dest, buf);
-  if (platform !== 'win32') await chmod(dest, 0o755);
-  return dest;
+  // Nunca escribir directamente sobre el ejecutable en uso: un corte de red,
+  // falta de espacio o un antivirus que interrumpa la escritura no debe dejar
+  // a todos los workers con un binario truncado. El reemplazo se hace en el
+  // mismo directorio y conserva una ruta de rollback mientras se completa.
+  const temp = path.join(binDir, `.${ytDlpBinName(platform)}.${process.pid}.${Date.now()}.download`);
+  let tempPresent = false;
+  try {
+    await writeFile(temp, buf, { flag: 'wx' });
+    tempPresent = true;
+    if (platform !== 'win32') await chmod(temp, 0o755);
+    await replaceDownloadedBinary(temp, dest);
+    tempPresent = false;
+    return dest;
+  } finally {
+    if (tempPresent) await unlink(temp).catch(() => {});
+  }
+}
+
+async function replaceDownloadedBinary(temp, dest) {
+  try {
+    await rename(temp, dest);
+    return;
+  } catch (error) {
+    // En Windows rename puede rechazar el destino existente. Moverlo primero
+    // permite restaurarlo si el segundo rename falla; si está bloqueado por un
+    // worker en ejecución no se toca y la descarga se aborta limpiamente.
+    if (!['EEXIST', 'EPERM', 'EACCES'].includes(error?.code)) throw error;
+  }
+
+  const backup = `${dest}.previous-${process.pid}-${Date.now()}`;
+  await rename(dest, backup);
+  try {
+    await rename(temp, dest);
+  } catch (error) {
+    await rename(backup, dest).catch(() => {});
+    throw error;
+  }
+  await unlink(backup).catch(() => {});
 }
 
 /**

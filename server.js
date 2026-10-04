@@ -240,7 +240,18 @@ export async function bootstrap() {
   // Auto-actualización de yt-dlp — solo worker 0 (o proceso único) para no
   // lanzar N self-updates simultáneos que se pisen el binario en cluster.
   if (process.env.WORKER_ID === '0' || !process.env.WORKER_ID) {
-    startYtDlpAutoUpdate({ resolveBin: resolveYtDlpBin });
+    startYtDlpAutoUpdate({
+      resolveBin: resolveYtDlpBin,
+      // La sonda se repite justo antes de cada actualización: /api/status no
+      // debe quedar en `full` si el proceso one-file dejó de iniciar después
+      // del arranque. Si el ejecutable está roto, la reparación descarga el
+      // asset oficial de forma atómica y lo valida antes de declararlo listo.
+      probe: (bin) => probeYtDlp({ bin, retries: 0 }),
+      repair: () => installYtDlpByDownload({
+        binDir: YT_DLP_BIN_DIR,
+        probe: () => probeYtDlp({ bin: resolveYtDlpBin(), retries: 0 }),
+      }),
+    });
   }
 
   const app = createApp({
