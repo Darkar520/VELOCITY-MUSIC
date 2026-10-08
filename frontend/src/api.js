@@ -156,6 +156,7 @@ export const api = {
   // stream: URL directa (opcional, para SoundCloud/fuentes sin resolución).
   streamUrl({ artist, title, id, quality, stream }) {
     const params = new URLSearchParams();
+    params.set('transport', '2'); // Evita reutilizar audio truncado de cachés previas.
     if (artist) params.set('artist', artist);
     if (title) params.set('title', title);
     if (id) params.set('id', id);
@@ -166,6 +167,7 @@ export const api = {
   // Ensambla URL firmada a partir de exp/sig del backend (puro, sin red).
   buildSignedStreamUrl({ artist, title, id, quality, stream, exp, sig }) {
     const params = new URLSearchParams();
+    params.set('transport', '2');
     if (artist) params.set('artist', artist);
     if (title) params.set('title', title);
     if (id) params.set('id', id);

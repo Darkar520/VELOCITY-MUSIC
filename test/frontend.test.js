@@ -379,6 +379,7 @@ test('Frontend api: streamUrl genera URL correcta para pistas de YouTube', () =>
   assert.ok(url.includes('title=Strobe'), 'debe incluir título');
   assert.ok(url.includes('id=abc123'), 'debe incluir id del video');
   assert.ok(url.includes('quality=high'), 'debe incluir calidad');
+  assert.equal(new URL(url, 'https://example.test').searchParams.get('transport'), '2');
   assert.ok(!url.includes('stream='), 'YouTube no debe tener param stream');
 });
 
@@ -391,6 +392,7 @@ test('Frontend api: buildSignedStreamUrl incluye exp y sig', () => {
   assert.ok(url.includes('exp=1700000000'));
   assert.ok(url.includes('sig=abcSIG'));
   assert.ok(url.includes('artist=A'));
+  assert.equal(new URL(url, 'https://example.test').searchParams.get('transport'), '2');
 });
 
 test('Frontend api: peekStreamUrl es síncrono y respeta margen de TTL', () => {

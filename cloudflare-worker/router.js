@@ -34,6 +34,7 @@ export default {
       BACKEND_EXACT.includes(path);
 
     if (isBackend) {
+      const isAudio = path === '/api/stream-proxy';
       // Reenviar al tunnel preservando method, headers y body.
       // Se construye un nuevo Request explícitamente para garantizar
       // que el body de POST/DELETE se reenvíe correctamente (en algunos
@@ -46,7 +47,19 @@ export default {
       if (!['GET', 'HEAD'].includes(request.method)) {
         init.body = request.body;
       }
-      return fetch(new Request(request.url, init));
+      // Un audio firmado no es un asset estático. El caché de Cloudflare puede
+      // convertir Range en una transferencia completa y conservar cuerpos
+      // incompletos; además debe volver al origen para validar la caducidad.
+      if (isAudio) init.cache = 'no-store';
+      const response = await fetch(new Request(request.url, init), isAudio
+        ? { cf: { cacheEverything: false, cacheTtl: 0 } }
+        : undefined);
+      if (!isAudio) return response;
+      const headers = new Headers(response.headers);
+      headers.set('Cache-Control', 'private, no-store, no-transform');
+      headers.set('CDN-Cache-Control', 'no-store');
+      headers.set('Cloudflare-CDN-Cache-Control', 'no-store');
+      return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
     }
 
     // ── Frontend (Pages) ─────────────────────────────────────

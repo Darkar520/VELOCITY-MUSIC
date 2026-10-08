@@ -41,6 +41,11 @@ export const PROXY_TIMEOUT_MS = 10000;
  * cuando lo necesita).
  */
 export const RANGE_CHUNK_BYTES = 512 * 1024;
+const AUDIO_CACHE_HEADERS = {
+  'Cache-Control': 'private, no-store, no-transform',
+  'CDN-Cache-Control': 'no-store',
+  'Cloudflare-CDN-Cache-Control': 'no-store',
+};
 
 /** Valida artist/title: no vacíos, cada uno [1, 256]. (4.5) */
 export function validateProxyParams(artist, title) {
@@ -59,7 +64,7 @@ export function buildResponseHeaders(getHeader) {
   const headers = {
     'Content-Type': getHeader('content-type') || 'audio/mp4',
     'Accept-Ranges': 'bytes',
-    'Cache-Control': 'public, max-age=14400',
+    ...AUDIO_CACHE_HEADERS,
   };
   for (const name of ['content-range', 'content-length']) {
     const value = getHeader(name);
@@ -92,6 +97,24 @@ export function parseContentRange(value) {
   const total = num(m[3]);
   if (start !== null && end !== null && end < start) return null;
   return { start, end, total };
+}
+
+// Algunos CDN anuncian el resto del archivo aun si solo entregan el bloque
+// solicitado. El cursor de transferencia debe seguir lo que se sirve, no ese
+// final sobredimensionado. La misma validación se usa para playback y descarga.
+function boundedContentRange(requestedRange, contentRange) {
+  const requested = /^bytes=(\d+)-(\d+)$/.exec(requestedRange || '');
+  const received = parseContentRange(contentRange);
+  const start = Number(requested?.[1]);
+  const requestedEnd = Number(requested?.[2]);
+  if (
+    !requested || !received || !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(requestedEnd) || !Number.isSafeInteger(received.start) ||
+    !Number.isSafeInteger(received.end) || !Number.isSafeInteger(received.total) ||
+    requestedEnd < start || received.start !== start || received.end < start ||
+    received.total <= start || received.end >= received.total
+  ) return null;
+  return { start, end: Math.min(requestedEnd, received.end, received.total - 1), total: received.total };
 }
 
 /**
@@ -201,7 +224,7 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
       }
     };
 
-    const bodyStream = (primed, controller, expectedBytes = null) => {
+    const bodyStream = (primed, controller, expectedBytes = null, abortAtLimit = true) => {
       if (!primed?.reader) return null;
       async function* chunks() {
         let result = primed.first;
@@ -215,7 +238,12 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
             if (expectedBytes != null && primed.bytesRead === expectedBytes) {
               // El proveedor puede anunciar el archivo completo aunque se le
               // pidió un rango acotado. No esperar el resto de ese cuerpo.
-              controller.abort();
+              if (abortAtLimit) controller.abort();
+              else {
+                // streamFull comparte el controller con los siguientes chunks.
+                // Cancelar solo el body actual, no toda la descarga.
+                try { await primed.reader.cancel(); } catch { /* ignore */ }
+              }
               return;
             }
             result = await readWithTimeout(primed.reader, timeoutMs, controller);
@@ -305,7 +333,8 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
         return last;
       };
       while (true) {
-        let r = await fetchChunk('bytes=' + start + '-' + (start + RANGE_CHUNK_BYTES - 1), !first);
+        const rangeHeader = 'bytes=' + start + '-' + (start + RANGE_CHUNK_BYTES - 1);
+        let r = await fetchChunk(rangeHeader, !first);
         if (r.kind !== 'ok') {
           if (res.headersSent) { res.end(); return { kind: 'ok', upstream: null }; }
           if (typeof clearDeadline === 'function') clearDeadline();
@@ -315,6 +344,18 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
 
         // CDN que ignora Range → cuerpo completo; servir tal cual y terminar.
         if (up.status === 200) {
+          if (!first) {
+            // Ya se entregó un prefijo: concatenar ahora el archivo completo
+            // duplicaría bytes y corrompería el audio/descarga.
+            controller.abort();
+            try {
+              logger?.warn?.('[stream-proxy] CDN dejó de respetar Range', JSON.stringify({
+                code: 'STREAM_UPSTREAM_RANGE_MISMATCH', requestedStart: start,
+              }));
+            } catch { /* la telemetría no debe bloquear el proxy */ }
+            if (!res.destroyed) res.destroy();
+            return { kind: 'ok', upstream: null };
+          }
           const primed = await primeBody(up, controller);
           if (!primed) {
             if (res.headersSent) { res.end(); return { kind: 'ok', upstream: null }; }
@@ -355,22 +396,34 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
           return { kind: 'ok', upstream: null };
         }
 
+        const boundedRange = boundedContentRange(rangeHeader, up.headers.get('content-range'));
+        if (!boundedRange || (contentLength != null && boundedRange.total !== contentLength)) {
+          try {
+            logger?.warn?.('[stream-proxy] rango de descarga inválido', JSON.stringify({
+              code: 'STREAM_UPSTREAM_RANGE_MISMATCH', requestedStart: start,
+            }));
+          } catch { /* la telemetría no debe bloquear el proxy */ }
+          controller.abort();
+          if (!res.headersSent) return { kind: 'upstreamRangeInvalid' };
+          if (!res.destroyed) res.destroy();
+          return { kind: 'ok', upstream: null };
+        }
+
         // Si no hay body, la respuesta no está realmente lista para audio.
         // Detectarlo antes de escribir headers habilita el refresh interno.
         const primed = await primeBody(up, controller);
-        if (!primed) {
+        if (!primed || !primed.reader) {
           if (res.headersSent) { res.end(); return { kind: 'ok', upstream: null }; }
           return { kind: 'networkError' };
         }
 
         if (first) {
           if (!res.headersSent) {
-            const cr0 = parseContentRange(up.headers.get('content-range'));
-            if (cr0 && cr0.total != null) contentLength = cr0.total;
+            contentLength = boundedRange.total;
             const fullHeaders = {
               'Content-Type': up.headers.get('content-type') || 'audio/mp4',
               'Accept-Ranges': 'bytes',
-              'Cache-Control': 'public, max-age=14400',
+              ...AUDIO_CACHE_HEADERS,
             };
             // Content-Length honesto (total del archivo): si el stream muere a
             // mitad, el cliente detecta el cuerpo corto y reintenta la descarga
@@ -381,21 +434,25 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
           first = false;
         }
 
-        const stream = bodyStream(primed, controller);
+        const expectedBytes = boundedRange.end - boundedRange.start + 1;
+        const stream = bodyStream(primed, controller, expectedBytes, false);
         try {
           if (stream) await pipeline(stream, res, { end: false });
-        } catch {
+        } catch (err) {
+          try {
+            logger?.warn?.('[stream-proxy] bloque de descarga incompleto', JSON.stringify({
+              code: err?.code || 'STREAM_UPSTREAM_BODY_ERROR', expectedBytes,
+              receivedBytes: primed.bytesRead, requestedStart: start,
+            }));
+          } catch { /* la telemetría no debe bloquear el proxy */ }
           // Error de red a mitad del cuerpo: terminar sin estado adicional (4.8).
           if (!res.headersSent) return { kind: 'networkError' };
-          res.end();
+          if (!res.destroyed) res.destroy();
           return { kind: 'ok', upstream: null };
         }
 
-        const cr = parseContentRange(up.headers.get('content-range'));
-        if (!cr || cr.end == null || cr.total == null) break; // sin límites conocidos → terminamos
-        if (contentLength == null && cr.total != null) contentLength = cr.total;
-        if (cr.end >= cr.total - 1) break;
-        start = cr.end + 1;
+        if (boundedRange.end >= boundedRange.total - 1) break;
+        start = boundedRange.end + 1;
         // Pequeño respiro entre chunks: reduce la presión de ráfaga sobre el
         // rate-limit por IP de googlevideo (los chunks encadenados sin pausa
         // disparaban 403 en descargas completas).
@@ -480,17 +537,11 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
         if (!cls.pass) return { kind: 'upstreamBad', status: r.upstream.status };
         let boundedRange = null;
         if (plan.kind === 'bounded' && r.upstream.status === 206) {
-          const requested = /^bytes=(\d+)-(\d+)$/.exec(rangeHeader);
-          const received = parseContentRange(r.upstream.headers.get('content-range'));
-          const start = Number(requested?.[1]);
-          const requestedEnd = Number(requested?.[2]);
-          if (
-            !requested || !received || !Number.isSafeInteger(start) ||
-            !Number.isSafeInteger(requestedEnd) || !Number.isSafeInteger(received.start) ||
-            !Number.isSafeInteger(received.end) || !Number.isSafeInteger(received.total) ||
-            received.start !== start || received.end < start || received.total <= start ||
-            received.end >= received.total
-          ) {
+          boundedRange = boundedContentRange(rangeHeader, r.upstream.headers.get('content-range'));
+          if (!boundedRange) {
+            const requested = /^bytes=(\d+)-(\d+)$/.exec(rangeHeader);
+            const received = parseContentRange(r.upstream.headers.get('content-range'));
+            const start = Number(requested?.[1]);
             try {
               logger?.warn?.('[stream-proxy] rango upstream inválido', JSON.stringify({
                 code: 'STREAM_UPSTREAM_RANGE_MISMATCH',
@@ -503,11 +554,6 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
             controller.abort();
             return { kind: 'upstreamRangeInvalid' };
           }
-          boundedRange = {
-            start,
-            end: Math.min(requestedEnd, received.end, received.total - 1),
-            total: received.total,
-          };
         }
         const primed = await primeBody(r.upstream, controller);
         if (!primed) return { kind: 'networkError' };

@@ -165,20 +165,30 @@ test('watchdog: el intervalo periódico sondea hasta recuperar (timers reales)',
   let attempts = 0;
   const probe = async () => (++attempts >= 3);
   let recovered = 0;
+  let notifyRecovery;
+  const recovery = new Promise((resolve) => { notifyRecovery = resolve; });
   const mode = { value: 'degraded' };
   const wd = createModeWatchdog({
     probe,
     isDegraded: () => mode.value === 'degraded',
-    onRecover: () => { mode.value = 'full'; recovered += 1; },
+    onRecover: () => { mode.value = 'full'; recovered += 1; notifyRecovery(); },
     intervalMs: 10,
   });
   wd.start();
-  await new Promise((r) => setTimeout(r, 80));
-  wd.stop();
-  assert.equal(mode.value, 'full');
-  assert.equal(recovered, 1);
-  // No debe seguir disparándose tras recuperarse.
-  const probesAfter = attempts;
-  await new Promise((r) => setTimeout(r, 40));
-  assert.ok(attempts <= probesAfter + 1, 'el watchdog debe detenerse al recuperar');
+  let timeout;
+  try {
+    await Promise.race([
+      recovery,
+      new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('watchdog did not recover')), 2000); }),
+    ]);
+    assert.equal(mode.value, 'full');
+    assert.equal(recovered, 1);
+    // Observar varios intervalos sin detenerlo desde el test: debe auto-parar.
+    const probesAfter = attempts;
+    await new Promise((r) => setTimeout(r, 40));
+    assert.equal(attempts, probesAfter, 'el watchdog debe detenerse al recuperar');
+  } finally {
+    clearTimeout(timeout);
+    wd.stop();
+  }
 });

@@ -50,6 +50,12 @@ describe('api.buildSignedStreamUrl', () => {
     expect(url).toContain('exp=1234567890');
     expect(url).toContain('sig=abc123');
   });
+  it('usa una clave nueva de transporte en URLs firmadas y sin firma para excluir cachés anteriores', () => {
+    const params = { artist: 'A', title: 'T', exp: 1234567890, sig: 'abc123' };
+    for (const url of [api.streamUrl(params), api.buildSignedStreamUrl(params)]) {
+      expect(new URL(url, 'https://example.test').searchParams.get('transport')).toBe('2');
+    }
+  });
 });
 
 describe('api.peekStreamUrl', () => {

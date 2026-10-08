@@ -392,6 +392,128 @@ test('Handler: sin Range encadena chunks acotados y entrega el cuerpo completo c
   assert.equal(joined.length, total, 'el cuerpo entregado debe ser el archivo completo');
 });
 
+test('Handler: sin Range limita cada 206 sobredimensionado y continúa desde el byte realmente servido', async () => {
+  const total = 2 * RANGE_CHUNK_BYTES + 1234;
+  const expected = Buffer.alloc(total);
+  expected.fill(11, 0, RANGE_CHUNK_BYTES);
+  expected.fill(22, RANGE_CHUNK_BYTES, 2 * RANGE_CHUNK_BYTES);
+  expected.fill(33, 2 * RANGE_CHUNK_BYTES);
+  const fetchedRanges = [];
+  const cancelled = [];
+  const handler = createStreamProxyHandler({
+    resolveUrl: async () => ({ url: 'https://cdn/audio?secret=not-for-logs' }),
+    fetchImpl: async (_url, { headers, signal }) => {
+      assert.equal(signal.aborted, false, 'cerrar un chunk no cancela los siguientes');
+      fetchedRanges.push(headers.Range);
+      const [, startText, endText] = /^bytes=(\d+)-(\d+)$/.exec(headers.Range);
+      const start = Number(startText);
+      const end = Math.min(Number(endText), total - 1);
+      // El CDN anuncia TODO el resto, pero solo entrega el bloque pedido y
+      // deja la conexión abierta. Era el bloqueo reproducido en producción.
+      const body = new ReadableStream({
+        start(controller) {
+          controller.enqueue(expected.subarray(start, end + 1));
+          signal.addEventListener('abort', () => controller.error(new Error('aborted')), { once: true });
+        },
+        cancel() { cancelled.push(start); },
+      });
+      return new Response(body, { status: 206, headers: {
+        'content-type': 'audio/webm',
+        'content-range': `bytes ${start}-${total - 1}/${total}`,
+        'content-length': String(total - start),
+      } });
+    },
+    timeoutMs: 100,
+  });
+  const res = makeStreamingRes();
+  await handler({ query: { artist: 'A', title: 'B' }, headers: {} }, res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.headers['Content-Length'], String(total));
+  assert.equal(Buffer.concat(res.chunks).length, total, 'todos los bloques deben llegar');
+  assert.deepEqual(Buffer.concat(res.chunks), expected, 'sin huecos ni bytes duplicados');
+  assert.deepEqual(fetchedRanges, [
+    `bytes=0-${RANGE_CHUNK_BYTES - 1}`,
+    `bytes=${RANGE_CHUNK_BYTES}-${2 * RANGE_CHUNK_BYTES - 1}`,
+    `bytes=${2 * RANGE_CHUNK_BYTES}-${3 * RANGE_CHUNK_BYTES - 1}`,
+  ]);
+  assert.deepEqual(cancelled, [0, RANGE_CHUNK_BYTES, 2 * RANGE_CHUNK_BYTES]);
+});
+
+test('Handler: sin Range rechaza un bloque que empieza en otro byte y registra causa sin URL', async () => {
+  const warnings = [];
+  const total = RANGE_CHUNK_BYTES + 10;
+  const handler = createStreamProxyHandler({
+    resolveUrl: async () => ({ url: 'https://cdn/audio?secret=not-for-logs' }),
+    fetchImpl: async (_url, { headers }) => {
+      const start = Number(/^bytes=(\d+)-/.exec(headers.Range)[1]);
+      return new Response(Buffer.alloc(start === 0 ? RANGE_CHUNK_BYTES : 10), {
+        status: 206, headers: {
+          'content-range': `bytes ${start === 0 ? 0 : start + 1}-${start === 0 ? RANGE_CHUNK_BYTES - 1 : total - 1}/${total}`,
+        },
+      });
+    },
+    logger: { warn: (...args) => warnings.push(args.join(' ')) },
+  });
+  const res = makeStreamingRes();
+  await handler({ query: { artist: 'A', title: 'B' }, headers: {} }, res);
+  assert.equal(Buffer.concat(res.chunks).length, RANGE_CHUNK_BYTES);
+  assert.equal(res.destroyed, true, 'no anuncia una descarga terminada con bytes faltantes');
+  assert.match(warnings.join(' '), /STREAM_UPSTREAM_RANGE_MISMATCH/);
+  assert.doesNotMatch(warnings.join(' '), /secret=|https:/);
+});
+
+test('Handler: sin Range un chunk corto falla explícitamente en vez de aceptar una descarga truncada', async () => {
+  const warnings = [];
+  const handler = createStreamProxyHandler({
+    resolveUrl: async () => ({ url: 'https://cdn/audio' }),
+    fetchImpl: async () => new Response(Buffer.alloc(7), { status: 206, headers: {
+      'content-range': `bytes 0-${RANGE_CHUNK_BYTES - 1}/${RANGE_CHUNK_BYTES}`,
+    } }),
+    logger: { warn: (...args) => warnings.push(args.join(' ')) },
+  });
+  const res = makeStreamingRes();
+  await handler({ query: { artist: 'A', title: 'B' }, headers: {} }, res);
+  assert.equal(res.destroyed, true);
+  assert.equal(res.writableEnded, false);
+  assert.match(warnings.join(' '), /STREAM_UPSTREAM_SHORT_BODY/);
+});
+
+test('Handler: no concatena el archivo entero si el CDN deja de respetar Range a mitad de descarga', async () => {
+  const warnings = [];
+  const total = RANGE_CHUNK_BYTES + 10;
+  const handler = createStreamProxyHandler({
+    resolveUrl: async () => ({ url: 'https://cdn/audio' }),
+    fetchImpl: async (_url, { headers }) => headers.Range.startsWith('bytes=0-')
+      ? new Response(Buffer.alloc(RANGE_CHUNK_BYTES), { status: 206, headers: {
+        'content-range': `bytes 0-${RANGE_CHUNK_BYTES - 1}/${total}`,
+      } })
+      : new Response(Buffer.alloc(total), { status: 200 }),
+    logger: { warn: (...args) => warnings.push(args.join(' ')) },
+  });
+  const res = makeStreamingRes();
+  await handler({ query: { artist: 'A', title: 'B' }, headers: {} }, res);
+  assert.equal(Buffer.concat(res.chunks).length, RANGE_CHUNK_BYTES);
+  assert.equal(res.destroyed, true);
+  assert.match(warnings.join(' '), /STREAM_UPSTREAM_RANGE_MISMATCH/);
+});
+
+test('Handler: audio firmado no es cacheable ni transformable por el CDN', async () => {
+  const h = buildResponseHeaders(() => null);
+  assert.equal(h['Cache-Control'], 'private, no-store, no-transform');
+  assert.equal(h['Cloudflare-CDN-Cache-Control'], 'no-store');
+  assert.equal(h['CDN-Cache-Control'], 'no-store');
+  const handler = createStreamProxyHandler({
+    resolveUrl: async () => ({ url: 'https://cdn/audio' }),
+    fetchImpl: async () => new Response(Buffer.from('audio'), { status: 206, headers: {
+      'content-range': 'bytes 0-4/5',
+    } }),
+  });
+  const res = makeStreamingRes();
+  await handler({ query: { artist: 'A', title: 'B' }, headers: {} }, res);
+  assert.equal(res.headers['Cache-Control'], h['Cache-Control']);
+  assert.equal(res.headers['Cloudflare-CDN-Cache-Control'], 'no-store');
+});
+
 // ── Handler: sin Range y upstream que ignora Range (CDN normal) → 200 tal cual ──
 test('Handler: sin Range con upstream 200 se sirve tal cual (compatibilidad)', async () => {
   let fetchCount = 0;

@@ -6,6 +6,7 @@
 // llevar la petición del servidor a una dirección interna.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { Writable } from 'node:stream';
 
 import {
   MAX_REDIRECTS,
@@ -128,14 +129,21 @@ test('proxy: un redirect legítimo del CDN sí se sigue y sirve el audio', async
       if (url === 'https://cf-media.sndcdn.com/track') {
         return res(302, { location: 'https://rr1.googlevideo.com/videoplayback' });
       }
-      return res(206, { 'content-type': 'audio/webm', 'content-range': 'bytes 0-1/2' }, null);
+      return res(206, { 'content-type': 'audio/webm', 'content-range': 'bytes 0-1/2' }, new Response('ab').body);
     },
   });
-  const r = fakeRes();
+  const delivered = [];
+  const r = Object.assign(new Writable({
+    write(chunk, _encoding, callback) { delivered.push(Buffer.from(chunk)); callback(); },
+  }), {
+    headersSent: false,
+    writeHead(code) { this.statusCode = code; this.headersSent = true; return this; },
+  });
   await handler(REQ, r);
   // Sin Range del cliente el proxy agrega los chunks y responde 200 completo
   // (normalización de Range 2026-08; antes reenviaba el 206 tal cual).
   assert.equal(r.statusCode, 200);
+  assert.equal(Buffer.concat(delivered).toString(), 'ab');
   assert.deepEqual(visited, [
     'https://cf-media.sndcdn.com/track',
     'https://rr1.googlevideo.com/videoplayback',

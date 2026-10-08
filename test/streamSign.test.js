@@ -35,6 +35,15 @@ test('streamSign: cambiar un param invalida la firma', () => {
   );
 });
 
+test('streamSign: la revisión de transporte conserva la firma pero no evita expiración ni tampering', () => {
+  const params = { artist: 'A', title: 'B', id: 'x', quality: 'high' };
+  const nowMs = 1_700_000_000_000;
+  const signed = { ...params, ...signStreamParams(params, SECRET, { nowMs, ttlSeconds: 60 }), transport: '2' };
+  assert.equal(verifyStreamParams(signed, SECRET, { nowMs }), true);
+  assert.equal(verifyStreamParams({ ...signed, title: 'Different' }, SECRET, { nowMs }), false);
+  assert.equal(verifyStreamParams(signed, SECRET, { nowMs: nowMs + 120000 }), false);
+});
+
 test('streamSign: exp en el pasado → false', () => {
   const params = { artist: 'A', title: 'B' };
   const nowMs = 1_700_000_000_000;
