@@ -1,7 +1,9 @@
 name = "velocity-router"
 main = "router.js"
 compatibility_date = "2024-09-23"
-compatibility_flags = ["nodejs_compat"]
+# La fecha antigua no activa Request.cache ni permite que cf prevalezca sobre
+# Cache Rules. Opt-in solo a esas capacidades para no cambiar todo el runtime.
+compatibility_flags = ["nodejs_compat", "cache_option_enabled", "request_cf_overrides_cache_rules"]
 
 # El Worker se despliega en la zona de velocitymusic.uk
 # e intercepta TODO el tráfico del dominio raíz.

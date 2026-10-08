@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import router from '../cloudflare-worker/router.js';
+
+test('Cloudflare: la configuración activa las capacidades de caché usadas por el router', () => {
+  const config = readFileSync(new URL('../cloudflare-worker/wrangler.toml', import.meta.url), 'utf8');
+  assert.match(config, /compatibility_flags\s*=\s*\[[^\]]*"cache_option_enabled"/);
+  assert.match(config, /compatibility_flags\s*=\s*\[[^\]]*"request_cf_overrides_cache_rules"/);
+});
 
 test('Cloudflare: streaming conserva Range y evita caché del audio firmado', async (t) => {
   const calls = [];
