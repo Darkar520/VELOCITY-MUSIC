@@ -35,6 +35,8 @@ export function MiniPlayerBar({
   return (
     <div
       {...handlers}
+      role="region"
+      aria-label="Reproductor"
       onClick={() => !isSliding && setExpanded(true)}
       className="glass"
       style={{ background:`linear-gradient(135deg, ${hex2rgba(T.accent,.1)}, var(--surf-0))`, border:`1px solid ${hex2rgba(T.accent,.28)}`, borderRadius:20, padding:'10px 12px', display:'flex', alignItems:'center', gap:12, cursor:'pointer', boxShadow:`0 8px 28px ${hex2rgba(T.accent,.16)}, 0 2px 8px #0006`, position:'relative', overflow:'hidden', touchAction:'pan-y', userSelect:'none' }}

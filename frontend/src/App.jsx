@@ -971,7 +971,7 @@ export default function App() {
       <div style={{ position:'relative', height:'100dvh', width:'100%', overflow:'hidden', background:'radial-gradient(circle at 25% 0%, #0d1320, #04060a 55%)', display:'flex', flexDirection:'column', fontFamily:'Inter,-apple-system,sans-serif' }}>
         {audioEl}
         <div style={{ position:'absolute', top:-120, left:'40%', width:520, height:320, background:grad(T), filter:'blur(120px)', opacity:.12, pointerEvents:'none', zIndex:0 }} />
-        <div style={{ flex:1, display:'flex', overflow:'hidden', minWidth:0, position:'relative', zIndex:1 }}>
+        <div style={{ flex:1, display:'flex', overflow:'hidden', minWidth:0, minHeight:0, position:'relative', zIndex:1 }}>
           <Sidebar tab={tab} setTab={setTab} nav={NAV} T={T} playlists={playlists} setOpenPlaylist={setOpenPlaylist} setView={setView} />
           <main role="main" aria-label="Aplicación" style={{ flex:1, minWidth:0, overflowY:'auto', overflowX:'hidden' }}>
             <div style={{ maxWidth:1080, width:'100%', minWidth:0, margin:'0 auto', padding:'clamp(16px, 2vw + 8px, 30px) var(--pad-page) clamp(24px, 3vw + 8px, 40px)' }}>{Content}</div>
@@ -989,16 +989,16 @@ export default function App() {
     <div style={{ position:'relative', height:'100dvh', width:'100%', overflow:'hidden', overflowX:'hidden', background:'radial-gradient(circle at 30% 0%, #0d1320, #04060a 60%)', display:'flex', flexDirection:'column', fontFamily:'Inter,-apple-system,sans-serif' }}>
       {audioEl}
       <div style={{ position:'absolute', top:-60, left:'50%', transform:'translateX(-50%)', width:300, height:200, background:grad(T), filter:'blur(70px)', opacity:.16, pointerEvents:'none', zIndex:0 }} />
-      <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', minWidth:0, paddingTop:'calc(env(safe-area-inset-top, 12px) + 8px)', position:'relative', zIndex:1 }}>
-        <main role="main" aria-label="Aplicación" style={{ flex:1, overflowY:'auto', overflowX:'hidden', padding:'4px var(--pad-page) 0', width:'100%', minWidth:0, boxSizing:'border-box' }}>{Content}</main>
+      <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', minWidth:0, minHeight:0, paddingTop:'calc(env(safe-area-inset-top, 12px) + 8px)', position:'relative', zIndex:1 }}>
+        <main role="main" aria-label="Aplicación" style={{ flex:1, minHeight:0, overflowY:'auto', overflowX:'hidden', padding:'4px var(--pad-page) 0', width:'100%', minWidth:0, boxSizing:'border-box' }}>{Content}</main>
 
         {track && (
-          <div style={{ padding:'8px var(--pad-page) 6px' }}>
+          <div style={{ flexShrink:0, padding:'8px var(--pad-page) 6px' }}>
             <MiniPlayerBar track={track} playing={playing} togglePlay={togglePlay} loadingAudio={loadingAudio} T={T} setExpanded={setExpanded} setMenuTarget={setMenuTarget} next={next} prev={prev} />
           </div>
         )}
 
-        <div className="glass" style={{ display:'flex', justifyContent:'space-around', padding:'10px 0 calc(env(safe-area-inset-bottom, 14px) + 14px)', borderTop:'1px solid var(--line-soft)', background:'#06080faa', userSelect:'none' }}>
+        <div className="glass" style={{ flexShrink:0, display:'flex', justifyContent:'space-around', padding:'10px 0 calc(env(safe-area-inset-bottom, 14px) + 14px)', borderTop:'1px solid var(--line-soft)', background:'#06080faa', userSelect:'none' }}>
           {NAV.map(({ id, label, I }) => {
             const act = tab === id;
             return (

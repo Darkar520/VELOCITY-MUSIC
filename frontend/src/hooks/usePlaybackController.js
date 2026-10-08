@@ -427,6 +427,22 @@ export function usePlaybackController(deps) {
 
   const play = useCallback((t, list, opts = {}) => {
     if (!t) return;
+    const current = usePlayerStore.getState();
+    const machine = getMachine();
+    const audio = audioRef.current;
+    const hasCurrentPlayback = machine.intent === 'play'
+      || (audio?.readyState > 0 && !audio.error);
+    // Seleccionar la pista activa abre el player; no es un replay. Conservar
+    // también la resolución en curso, la cola y la posición de una pausa.
+    // Los avances automáticos y los replays explícitos sí cambian la fuente.
+    if (
+      t.id && current.track?.id === t.id && machine.trackId === t.id
+      && !opts.keepMix && !opts.restart && !audio?.ended && hasCurrentPlayback
+    ) {
+      current.setExpanded(true);
+      if (machine.intent !== 'play') dispatchAudio({ type: 'USER_PLAY' });
+      return;
+    }
     resolveAbortRef.current?.abort();
     resolveAbortRef.current = null;
     if (opts.from !== undefined) setPlayingFrom?.(opts.from);

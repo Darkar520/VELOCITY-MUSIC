@@ -225,7 +225,7 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
       </div>
     );
     return (
-      <div style={{ position:'fixed', inset:0, zIndex:90, opacity: open?1:0, pointerEvents: open?'auto':'none', transition:'opacity .38s ease', display:'flex', flexDirection:'column', background:`radial-gradient(120% 90% at 50% -10%, ${ambientRgba(.28 + glowF*.22)}, transparent 58%), var(--bg-0)`, fontFamily:'Inter,sans-serif' }}>
+      <div role="dialog" aria-label="Reproductor ampliado" aria-modal="true" aria-hidden={!open} style={{ position:'fixed', inset:0, zIndex:90, opacity: open?1:0, pointerEvents: open?'auto':'none', transition:'opacity .38s ease', display:'flex', flexDirection:'column', background:`radial-gradient(120% 90% at 50% -10%, ${ambientRgba(.28 + glowF*.22)}, transparent 58%), var(--bg-0)`, fontFamily:'Inter,sans-serif' }}>
         {/* Halo ambiental único, fuera del grid de portada/letra: nunca adquiere
             los límites rectangulares de una columna. Alfas y opacidad por encima
             del umbral de percepción también EN PAUSA (regresión: con .18*.3 el
@@ -321,7 +321,7 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
   return (
     <>
       {desktop && <div onClick={onClose} style={{ position:'fixed', inset:0, background:'#04060ad9', backdropFilter:'blur(10px)', WebkitBackdropFilter:'blur(10px)', opacity: open?1:0, pointerEvents: open?'auto':'none', transition:'opacity .3s ease', zIndex:89 }} />}
-      <div style={panelStyle} onTouchStart={!desktop ? onPanelTouchStart : undefined} onTouchEnd={!desktop ? onPanelTouchEnd : undefined}>
+      <div role="dialog" aria-label="Reproductor ampliado" aria-modal="true" aria-hidden={!open} style={panelStyle} onTouchStart={!desktop ? onPanelTouchStart : undefined} onTouchEnd={!desktop ? onPanelTouchEnd : undefined}>
         {!desktop && <div style={{ width:44, height:5, borderRadius:99, background:'var(--surf-2)', margin:'0 auto 12px', flexShrink:0 }} />}
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16, flexShrink:0 }}>
           <button aria-label="Cerrar" onClick={onClose} className="btn-tap glass" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:38, height:38, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}><Icon.ChevD c="var(--txt-1)" sz={18} /></button>
@@ -420,4 +420,3 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
 
 // ═══════════════════════════════════════════════════════════════
 // DETAIL VIEW — artista / álbum (metadatos reales de YouTube Music)
-
