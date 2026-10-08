@@ -51,9 +51,9 @@ export default {
       // convertir Range en una transferencia completa y conservar cuerpos
       // incompletos; además debe volver al origen para validar la caducidad.
       if (isAudio) init.cache = 'no-store';
-      const response = await fetch(new Request(request.url, init), isAudio
-        ? { cf: { cacheEverything: false, cacheTtl: 0 } }
-        : undefined);
+      // No combinar Request.cache='no-store' con cf.cacheTtl: workerd rechaza
+      // esa combinación, aunque las dos opciones funcionen por separado.
+      const response = await fetch(new Request(request.url, init));
       if (!isAudio) return response;
       const headers = new Headers(response.headers);
       headers.set('Cache-Control', 'private, no-store, no-transform');

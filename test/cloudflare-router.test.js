@@ -22,8 +22,7 @@ test('Cloudflare: streaming conserva Range y evita caché del audio firmado', as
   assert.equal(calls[0].request.headers.get('range'), 'bytes=50-');
   assert.equal(calls[0].request.headers.get('if-range'), 'etag');
   assert.equal(calls[0].request.cache, 'no-store');
-  assert.equal(calls[0].options.cf.cacheEverything, false);
-  assert.equal(calls[0].options.cf.cacheTtl, 0);
+  assert.equal(calls[0].options?.cf?.cacheTtl, undefined, 'no-store no admite cacheTtl: 0 en workerd');
   assert.equal(response.headers.get('cache-control'), 'private, no-store, no-transform');
   assert.equal(response.headers.get('cloudflare-cdn-cache-control'), 'no-store');
   assert.equal(response.headers.get('content-range'), 'bytes 50-54/100');
