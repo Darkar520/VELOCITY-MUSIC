@@ -1,4 +1,47 @@
-# Auditoría de descargas — en curso
+# Auditoría de descargas PWA — evidencia final
+
+## Estado final (sustituye los estados intermedios de abajo)
+
+El usuario eligió mantener la PWA: continuidad con Background Fetch donde el
+navegador realmente la permite y conservación/reanudación al volver en las
+demás plataformas. Versión 3.16, worker velocity-v87. No se promete ejecución
+universal después de que cualquier sistema operativo cierre el navegador.
+
+CI del commit c713a750e44fdbbc41387ce5554c2b16b9a2e40d confirmó 445 pruebas
+Node y 485 frontend en 40 archivos, cero fallos; build, lints, Quality Gate y
+CodeQL correctos. Run:
+https://github.com/Darkar520/VELOCITY-MUSIC/actions/runs/39067562958
+La auditoría de dependencias es advisory: su estado verde no equivale a cero CVEs.
+
+La repetición final en Brave con el protocolo v2 cerró la página antes del
+primer guardado. Se inspeccionó luego únicamente el manifest, sin ejecutar
+React: nueve canciones, 32.214.219 bytes, cola y gestor nativo vacíos; último
+guardado a 14.018 ms del inicio. Confirma que el monitor nuevo no obliga a
+mantener la página abierta. La fuente estaba caliente; no es una comparación
+causal con el primer ensayo en frío.
+
+También se recuperaron las nueve canciones del navegador integrado detenido:
+archivos completos, cola vacía y UI Descargado. Las regresiones incluyen la
+reconexión durante un intento activo y el render de mezclas sin label. Las
+capturas finales son background-completed.png y recovered-queue.png dentro de
+test-results/download-audit. Las propiedades temporales de visibilidad de
+staging se retiraron después de la prueba.
+
+Los modelos cubren 350 tareas; las pruebas reales utilizan nueve canciones.
+No se verificaron físicamente iPhone/Android bloqueados ni televisores. En
+plataformas que suspenden la PWA se conservan los archivos completos; la
+canción parcial de primer plano se reinicia desde cero al volver. Forzar el
+cierre del navegador puede detener incluso sus transferencias nativas. Los
+bloqueos externos de acceso al proveedor siguen siendo bloqueos externos.
+
+La comparación controlada observó 28,5 % menos tiempo medio con bytes idénticos
+en tres archivos; no estima una distribución ni garantiza ese porcentaje para
+una lista pública de 350 pistas. No se transcodifica ni se reduce la calidad.
+
+PR preparado para integración después del gate final:
+https://github.com/Darkar520/VELOCITY-MUSIC/pull/33
+
+## Registro cronológico de diagnóstico y verificación
 
 ## Alcance y estado
 
