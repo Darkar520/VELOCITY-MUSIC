@@ -74,6 +74,11 @@ actualiza la tabla si introduces un cambio.
   caché y proxy. Seleccionar solo m4a HTTPS original dentro del tier; nunca
   convertir bytes ni caer de nuevo a WebM. Capacidad desconocida conserva el
   comportamiento anterior. La firma HMAC sigue ligada al perfil exacto.
+- A31: applyMediaSrc asignaba src y React lo volvía a asignar declarativamente.
+  La escritura repetida recargaba el elemento y obligaba a otro play. React deja
+  de ser dueño del atributo; el adaptador escribe inmediatamente y la hidratación
+  usa el mismo adaptador solo cuando el valor cambia. Regresión con dos escrituras
+  antes y una después, más prueba real de navegador por generación.
 - Consumo: Screen Wake Lock mantiene pantalla encendida y no asegura audio
   oculto; se elimina la solicitud automática. Los relojes visuales dejan de
   renderizarse ocultos, el reloj de letra se detiene cerrado/oculto y se evita

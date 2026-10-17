@@ -12,7 +12,7 @@ import {
 } from './audioContinuity.js';
 import { selectPlaySync } from './audio/audioMachine.js';
 import { canUseOfflineAudio } from './audio/playbackFormat.js';
-import { runAudioEffects } from './audio/runAudioEffects.js';
+import { runAudioEffects, applyMediaSrc } from './audio/runAudioEffects.js';
 import { usePersisted, useViewport } from './hooks.js';
 import { useLibrarySync } from './hooks/useLibrarySync.js';
 import { useHomeFeed } from './hooks/useHomeFeed.js';
@@ -509,6 +509,9 @@ export default function App() {
     const a = audioRef.current;
     if (!a) return;
     // Mantener srcStatus alineado con playSrc real
+    // Hydration may set playSrc without STREAM_READY. All DOM assignments use
+    // the adapter; React must not write the same src again and reload playback.
+    if (playSrc && a.getAttribute('src') !== playSrc) applyMediaSrc(effectCtxRef.current, playSrc);
     const fresh = Boolean(playSrc && (isStreamUrlFresh(playSrc) || String(playSrc).startsWith('blob:')));
     if (fresh && getMachine().srcStatus !== 'ready') {
       patchMachine({ srcStatus: 'ready' });
@@ -859,7 +862,7 @@ export default function App() {
 
   const audioEl = (
     <>
-    <audio ref={audioRef} src={playSrc || undefined} preload="none"
+    <audio ref={audioRef} preload="none"
       onTimeUpdate={audioHandlers.onTimeUpdate}
       onLoadedMetadata={audioHandlers.onLoadedMetadata}
       onCanPlay={audioHandlers.onCanPlay}

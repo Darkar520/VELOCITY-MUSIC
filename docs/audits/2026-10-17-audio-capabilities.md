@@ -57,6 +57,21 @@ canPlayType niegue WebM y conserve su afirmación de AAC. Esa intervención no
 convierte Brave en Safari ni prueba ahorro de energía o audio físico móvil.
 Los resultados de navegador se guardan en test-results/mobile-audio/.
 
+## Observación posterior de navegador
+
+La simulación eligió high-aac y recibió 206 audio/mp4 (4096 bytes solicitados).
+Intro terminó a 127,92 s y VCR comenzó oculto; hubo una espera inicial de 95 ms
+en el primer segundo de Intro y no se contabiliza como reproducción sin espera.
+El contador mostró dos play por pista. Las pilas localizaron el segundo en el
+efecto de App. Una prueba de DOM confirmó dos setAttribute de la misma URL:
+adaptador imperativo y reconciliación del prop React src. Se elimina el prop;
+la hidratación monta fuente con el mismo adaptador cuando el atributo difiere.
+Este ajuste posterior requiere repetir el gate y el ensayo de navegador.
+
+La regresión A31 falla con dos escrituras de src y pasa con una. La repetición
+dirigida de shell/fuentes pasa 23 pruebas; build y lint correctos. El CI del
+head posterior incluye además la suite completa.
+
 ## Referencias primarias
 
 https://webkit.org/blog/15063/webkit-features-in-safari-17-4/

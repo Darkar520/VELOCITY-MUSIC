@@ -149,6 +149,25 @@ describe('App shell — flujos críticos', () => {
     expect(playSpy).toHaveBeenCalledOnce();
   });
 
+  it('gives the audio source one DOM owner instead of assigning the same src twice', async () => {
+    vi.useFakeTimers();
+    const { a } = seedTracks();
+    const { container } = render(<App />);
+    const audio = mainAudio(container);
+    const original = Element.prototype.setAttribute;
+    let signedWrites = 0;
+    vi.spyOn(Element.prototype, 'setAttribute').mockImplementation(function (name, value) {
+      if (this === audio && name === 'src' && value === SIGNED) signedWrites++;
+      return original.call(this, name, value);
+    });
+    await act(async () => {
+      usePlayerStore.getState().dispatchPolicy({ type: 'TRACK_SET', trackId: a.id, intent: 'play' });
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(signedWrites).toBe(1);
+    expect(audio.getAttribute('src')).toBe(SIGNED);
+  });
+
   it('deep-link de canción abre la vista compartida en lugar del home', async () => {
     const originalPath = window.location.pathname;
     window.history.replaceState({}, '', '/track/shared-route-1');
