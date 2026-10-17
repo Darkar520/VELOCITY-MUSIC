@@ -162,3 +162,41 @@ sin transferir datos necesita una detección de falta de progreso y fallback;
 no debe confundirse la detección de la API con soporte efectivo. Se solicitó
 al usuario una decisión de alcance entre PWA y una aplicación nativa para
 plataformas con restricciones web. No se declara completado el objetivo.
+
+## Alcance confirmado y detección de progreso
+
+El usuario eligió mantener la PWA. Por tanto, la implementación conserva
+continuidad donde el navegador la permite y reanudación en las otras plataformas,
+sin añadir aplicaciones nativas.
+
+El protocolo de worker v2 observa progreso real antes de confirmar el inicio.
+Si no llega durante 45 s y la página está visible y online, abandona esa
+inscripción y usa la cola de primer plano. Al volver detecta inscripciones
+sin bytes de más de 60 s y las recupera. La desactivación temporal de Background
+Fetch dura una hora y evita reiterar una capacidad que solo existe nominalmente.
+El abandono automático se distingue de una cancelación del usuario.
+
+Gate posterior: 445 Node, 482 frontend y build/lints correctos. Pruebas
+específicas de progreso y recuperación incluidas.
+
+Durante la prueba real de recuperación apareció otro bloqueo reproducible:
+MixCard llamaba a label.replace con una mezcla cacheada sin label, lo que
+desmontaba App y también sus efectos de descarga. El stack minificado se
+contrastó con el fuente. Se añade título alternativo y dos regresiones de
+renderizado; esas pruebas y las ocho del cliente de descargas pasan (10/10).
+La recuperación real se repite después de ese ajuste.
+
+La repetición real recuperó las nueve canciones detenidas en el navegador
+integrado: nueve blobs guardados, cola vacía y Background Fetch diferido. Se
+simuló temporalmente visibilidad de primer plano en ese origen de staging y se
+retiró la propiedad de prueba después. La UI Me gusta indica Descargado;
+captura `recovered-queue.png`. Se coalescen además eventos de reconexión recibidos
+mientras otra reanudación sigue activa; una regresión específica comprueba que
+el evento no se pierde y que el siguiente intento guarda la pista una sola vez.
+
+Último frontend completo: 40 archivos / 484 pruebas, cero fallos; build y lint
+correctos. Después, la regresión de coalescencia y los tests de cola, progreso
+y mezcla se ejecutaron juntos: 28 pruebas sin fallos. El CI del PR comprobará
+el conjunto final. Backend completo: 445 sin fallos. El primer commit está
+en PR #33; la recuperación y las regresiones posteriores se añaden antes de
+declararlo listo para integrar.

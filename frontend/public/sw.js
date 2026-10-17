@@ -11,7 +11,7 @@
 
 self.importScripts('/downloads-db.js', '/downloads-worker.js');
 
-const CACHE = 'velocity-v86';
+const CACHE = 'velocity-v87';
 const APP_SHELL = ['/', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'];
 
 self.addEventListener('install', (event) => {

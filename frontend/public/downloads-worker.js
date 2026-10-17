@@ -64,7 +64,16 @@
       await Promise.allSettled([...writes]);
       await notify();
     }
-    return { finish, abort, cancelAll };
+    async function abandon(batchId) {
+      if (!owned(batchId)) return;
+      // Detach jobs BEFORE aborting: the native abort event must not turn an
+      // automatic fallback into a user-requested pause.
+      await store.putMany((await store.list()).filter((job) => job.batchId === batchId)
+        .map((job) => ({ ...job, batchId: null, status: 'failed', error: 'no_progress' })));
+      await (await manager?.get(batchId))?.abort();
+      await notify();
+    }
+    return { finish, abort, cancelAll, abandon };
   }
   root.VelocityDownloadWorker = { createWorker };
   if (!root.registration || !root.VelocityDownloadDB) return;
@@ -75,7 +84,10 @@
   });
   root.addEventListener('message', (event) => {
     if (event.data?.type === 'vm-download-capabilities') {
-      event.ports[0]?.postMessage({ version: 1, background: !!root.registration.backgroundFetch });
+      event.ports[0]?.postMessage({ version: 2, background: !!root.registration.backgroundFetch });
+    } else if (event.data?.type === 'vm-download-abandon') {
+      event.waitUntil(worker.abandon(String(event.data.batchId || '')).then(() => event.ports[0]?.postMessage({ ok: true }))
+        .catch(() => event.ports[0]?.postMessage({ ok: false })));
     } else if (event.data?.type === 'vm-download-cancel-all') {
       event.waitUntil(worker.cancelAll().then(() => event.ports[0]?.postMessage({ ok: true }))
         .catch(() => event.ports[0]?.postMessage({ ok: false })));

@@ -218,6 +218,7 @@ export function MediaCard({ cover, title, subtitle, T, onClick, onPlay, onFav, o
 // Tarjeta de mezcla/playlist (collage de carátulas).
 export function MixCard({ mix, T, onPlay, onOpen }) {
   const tracks = mix.tracks || [];
+  const label = String(mix.label || mix.title || 'Mezcla').replace(/^Mezcla · /, '');
   let covers = [...new Set(tracks.map(t => t.cover).filter(c => c && !c.startsWith('data:')))].slice(0, 4);
   if (!covers.length) covers = [FALLBACK_COVER];
   while (covers.length < 4) covers.push(covers[covers.length - 1]);
@@ -232,7 +233,7 @@ export function MixCard({ mix, T, onPlay, onOpen }) {
         <div style={{ position:'absolute', top:8, left:10, fontSize:8.5, fontWeight:900, letterSpacing:1.5, color:'#fff', textTransform:'uppercase', opacity:.9, textShadow:'0 1px 3px #000' }}>Mezcla</div>
         <button aria-label="Reproducir mezcla" onClick={e => { e.stopPropagation(); onPlay(); }} className="btn-tap" style={{ position:'absolute', bottom:8, right:8, width:38, height:38, borderRadius:'50%', background:grad(T), border:'none', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', boxShadow:`0 4px 14px ${hex2rgba(T.accent,.6)}` }}><Icon.Play c="#04060a" sz={18} /></button>
       </div>
-      <div onClick={onOpen} style={{ fontSize:'var(--fs-card)', fontWeight:800, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', cursor:'pointer' }}>{mix.label.replace(/^Mezcla · /, '')}</div>
+      <div onClick={onOpen} style={{ fontSize:'var(--fs-card)', fontWeight:800, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', cursor:'pointer' }}>{label}</div>
       <div style={{ fontSize:'var(--fs-xs)', color:'var(--txt-2)', marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{artists || `${tracks.length} canciones`}</div>
     </div>
   );

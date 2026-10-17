@@ -3,7 +3,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 
 const apiMock = vi.hoisted(() => ({ signDownloadUrl: vi.fn(), ensureStreamUrl: vi.fn() }));
 vi.mock('../api.js', () => ({ api: apiMock }));
-import { enqueueBackground, downloadJobs, cancelBackgroundDownloads } from '../downloads.js';
+import { enqueueBackground, downloadJobs, cancelBackgroundDownloads, waitForBackgroundStart, recoverStalledBackground } from '../downloads.js';
 
 describe('browser handoff of complete download playlists', () => {
   let jobs, saved, registration;
@@ -11,11 +11,16 @@ describe('browser handoff of complete download playlists', () => {
   beforeEach(() => {
     jobs = new Map(); saved = [];
     vi.clearAllMocks();
+    localStorage.removeItem('velocity.backgroundUnavailableUntil');
     vi.stubGlobal('MessageChannel', MessageChannel);
     registration = {
       active: { postMessage: (data, ports) => {
-        if (data.type === 'vm-download-capabilities') ports[0].postMessage({ version: 1, background: true });
+        if (data.type === 'vm-download-capabilities') ports[0].postMessage({ version: 2, background: true });
         else if (data.type === 'vm-download-cancel-all') { jobs.clear(); ports[0].postMessage({ ok: true }); }
+        else if (data.type === 'vm-download-abandon') {
+          for (const [id, job] of jobs) if (job.batchId === data.batchId) jobs.set(id, { ...job, batchId: null, status: 'failed', error: 'no_progress' });
+          ports[0].postMessage({ ok: true });
+        }
         else throw new Error('a worker must never be asked to start the next batch');
         ports[0].close();
       } },
@@ -80,5 +85,25 @@ describe('browser handoff of complete download playlists', () => {
     await enqueueBackground([track('a')], 'high');
     await cancelBackgroundDownloads();
     expect(jobs.size).toBe(0);
+  });
+
+  it('distinguishes a real native transfer from an accepted registration with no progress', async () => {
+    const transfer = new EventTarget();
+    transfer.downloaded = 0; transfer.result = '';
+    expect(await waitForBackgroundStart(transfer, 10)).toBe(false);
+    const started = waitForBackgroundStart(transfer, 100);
+    transfer.downloaded = 1024;
+    transfer.dispatchEvent(new Event('progress'));
+    expect(await started).toBe(true);
+  });
+
+  it('recovers a stalled browser transfer after reopening and selects foreground for the retry', async () => {
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    jobs.set('stuck', { id: 'stuck', meta: track('stuck'), status: 'background', batchId: 'stuck-batch', startedAt: Date.now() - 61000 });
+    registration.backgroundFetch.get = async () => ({ downloaded: 0, result: '' });
+    expect(await recoverStalledBackground()).toEqual(['stuck']);
+    expect(jobs.get('stuck').error).toBe('no_progress');
+    expect(await enqueueBackground([track('stuck')], 'high')).toBe(false);
+    expect(registration.backgroundFetch.fetch).not.toHaveBeenCalled();
   });
 });

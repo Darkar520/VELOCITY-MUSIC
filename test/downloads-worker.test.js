@@ -93,3 +93,11 @@ test('worker replacement after a partial commit reconciles only remaining jobs',
   assert.equal(f.jobs.size, 0);
   assert.equal(await f.audio.get('song-0').blob.text(), 'already saved');
 });
+
+test('automatic no-progress fallback is not mistaken for user cancellation', async () => {
+  const f = fixture(3), worker = f.worker();
+  await worker.abandon(batchId);
+  await worker.abort({ registration: { id: batchId } });
+  assert.equal(f.active.size, 0);
+  assert.ok([...f.jobs.values()].every((job) => job.status === 'failed' && job.error === 'no_progress'));
+});

@@ -7,7 +7,7 @@ import { cacheTrack, saveMeta, trackById } from '../catalog.js';
 import { slimTrack } from '../helpers.js';
 import { usePlayerStore } from '../store/playerStore.js';
 import { scheduleLibraryOfflineSync } from '../offlineLibrary.js';
-import { activeDownloads, transferSlot, prepareSlot, enqueueBackground, downloadJobs, cancelBackgroundDownloads, downloadSession } from '../downloads.js';
+import { activeDownloads, transferSlot, prepareSlot, enqueueBackground, downloadJobs, cancelBackgroundDownloads, downloadSession, recoverStalledBackground } from '../downloads.js';
 
 const QUALITY_MAP = { high: 'high', medium: 'medium', low: 'low', HQ: 'high', Standard: 'medium', FLAC: 'low' };
 const quotaError = (error) => /quota/i.test(error?.name || '');
@@ -115,7 +115,10 @@ export function useDownloads({ quality, showToast, pendingRef, savePending, auth
         const jobs = await downloadJobs.list();
         const waiting = new Set(jobs.filter((job) => ['queued', 'background'].includes(job.status)).map((job) => job.id));
         todo.filter((id) => !waiting.has(id)).forEach((id) => state.removeDownloading(id));
-        showToast?.(waiting.size ? 'Descargas en segundo plano iniciadas. Puedes salir de la app.' : 'No se pudieron iniciar las descargas. Las pendientes se conservan.');
+        const saved = new Set(await offline.listIds());
+        todo.filter((id) => saved.has(id)).forEach((id) => { state.addDownloaded(id); pendingRef?.current?.delete(id); });
+        savePending?.();
+        showToast?.(waiting.size ? 'Cola entregada al gestor de descargas del navegador.' : todo.every((id) => saved.has(id)) ? 'Descargas completas · disponibles sin conexión' : 'No se pudieron iniciar todas las descargas. Las pendientes se conservan.');
         return;
       }
     } catch { /* denied/unavailable background fetch uses the foreground queue */ }
@@ -189,15 +192,18 @@ export function useDownloads({ quality, showToast, pendingRef, savePending, auth
 
   useEffect(() => {
     if (!authed) return;
-    let stopped = false, resuming = false;
+    let stopped = false, resuming = false, requested = false;
     const resume = async () => {
-      if (resuming || navigator.onLine === false) return;
+      if (stopped || navigator.onLine === false) return;
+      if (resuming) { requested = true; return; }
       resuming = true;
       try {
         for (let i = 0; i < 150 && downloadsHydratedRef && !downloadsHydratedRef.current && !stopped; i++) {
           await new Promise((resolve) => setTimeout(resolve, 100));
         }
         if (stopped) return;
+        const recovered = await recoverStalledBackground().catch(() => []);
+        recovered.forEach((id) => usePlayerStore.getState().removeDownloading(id));
         const jobs = await downloadJobs.list().catch(() => []);
         const current = options.current;
         jobs.forEach((job) => {
@@ -208,7 +214,10 @@ export function useDownloads({ quality, showToast, pendingRef, savePending, auth
         current.savePending?.();
         const pending = [...(current.pendingRef?.current || [])];
         if (pending.length && !stopped) await runLatest.current(pending, { resume: true });
-      } finally { resuming = false; }
+      } finally {
+        resuming = false;
+        if (requested && !stopped) { requested = false; queueMicrotask(resume); }
+      }
     };
     const onVisible = () => { if (document.visibilityState === 'visible') resume(); };
     resume();

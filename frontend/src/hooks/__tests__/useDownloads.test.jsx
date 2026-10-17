@@ -203,6 +203,29 @@ describe('useDownloads', () => {
     expect(usePlayerStore.getState().downloaded.has('short-body')).toBe(false);
   });
 
+  it('no pierde una reconexión recibida mientras el intento anterior sigue en curso', async () => {
+    const t = makeTrack({ id: 'reconnect-during-resume' });
+    cacheTrack(t);
+    const pendingRef = { current: new Set([t.id]) };
+    let rejectLast;
+    let requests = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      requests++;
+      if (requests < 3) throw new TypeError('offline');
+      if (requests === 3) return new Promise((_resolve, reject) => { rejectLast = reject; });
+      return { ok: true, blob: async () => ({ size: 4096, type: 'audio/webm' }) };
+    }));
+    renderHook(() => useDownloads({ quality: 'high', pendingRef, authed: true, downloadsHydratedRef: { current: true } }));
+    await vi.waitFor(() => expect(rejectLast).toBeTypeOf('function'), { timeout: 4000 });
+    await act(async () => {
+      window.dispatchEvent(new Event('online'));
+      rejectLast(new TypeError('connection lost'));
+    });
+    await vi.waitFor(() => expect(usePlayerStore.getState().downloaded.has(t.id)).toBe(true));
+    expect(offlineMock.saveTrack).toHaveBeenCalledTimes(1);
+    expect(pendingRef.current.has(t.id)).toBe(false);
+  });
+
   it('si todo está descargado avisa y no descarga nada', async () => {
     const a = makeTrack({ id: 'z1' });
     cacheTrack(a);
