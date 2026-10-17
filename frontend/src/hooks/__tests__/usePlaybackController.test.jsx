@@ -97,6 +97,17 @@ describe('selecting the current track', () => {
     expect(audio.pause).not.toHaveBeenCalled();
   });
 
+  it('preserves the DOM effect context and epoch across React renders', () => {
+    const { result, rerender } = setup();
+    const context = result.current.effectCtxRef.current;
+    context._audioEpoch = 9;
+    context._pendingSeek = 42;
+    rerender();
+    expect(result.current.effectCtxRef.current).toBe(context);
+    expect(result.current.effectCtxRef.current._audioEpoch).toBe(9);
+    expect(result.current.effectCtxRef.current._pendingSeek).toBe(42);
+  });
+
   it('resumes a paused track from its existing position and opens the player', () => {
     const { result, track, audio } = setup({ intent: 'pause' });
     act(() => result.current.play(track));

@@ -50,14 +50,16 @@ export function useAppUpdate({ playing }) {
       const s = document.querySelector('script[src*="/assets/index-"]');
       runningBundleRef.current = s ? (s.getAttribute('src').match(/index-[A-Za-z0-9_-]+\.js/) || [null])[0] : null;
     } catch {}
-    let stop = false;
+    let stop = false, checking = false;
     const checkVersion = async () => {
-      if (stop || !runningBundleRef.current) return;
+      if (stop || checking || document.visibilityState === 'hidden' || navigator.onLine === false || !runningBundleRef.current) return;
+      checking = true;
       try {
         const html = await fetch('/?_v=' + Date.now(), { cache: 'no-store' }).then(r => r.ok ? r.text() : '');
         const m = html.match(/index-[A-Za-z0-9_-]+\.js/);
         if (m && m[0] !== runningBundleRef.current) setUpdateReady(true);
       } catch {}
+      finally { checking = false; }
     };
     const iv = setInterval(checkVersion, 30000);
     const onVis = () => { if (document.visibilityState === 'visible') checkVersion(); };

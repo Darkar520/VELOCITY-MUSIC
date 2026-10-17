@@ -141,8 +141,9 @@ test('hardStopAudio + epoch invalida schedulePlay de la pista anterior', async (
     vol: 1,
   };
 
-  // Simula play de pista A programando reintentos
+  // El arranque inicial es inmediato para conservar la activación móvil.
   runAudioEffects([{ type: 'play' }], ctx);
+  assert.equal(playCalls, 1, 'primer play síncrono');
   // Cambio de pista: hard stop + epoch
   hardStopAudio(ctx);
   assert.equal(src, null);
@@ -150,7 +151,7 @@ test('hardStopAudio + epoch invalida schedulePlay de la pista anterior', async (
   assert.equal(ctx._suppressAudioError, true, 'suprimir onError tras clearSrc');
 
   await new Promise((r) => setTimeout(r, 500));
-  assert.equal(playCalls, 0, 'schedulePlay de la pista anterior no debe llamar play()');
+  assert.equal(playCalls, 1, 'ningún play adicional de la pista anterior después del stop');
 });
 
 test('bumpAudioEpoch limpia pendingSeek', () => {

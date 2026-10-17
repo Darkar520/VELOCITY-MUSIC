@@ -9,6 +9,7 @@ import { Icon } from '../Icons.jsx';
 import { Spinner, RangeSlider, CoverImg } from '../components.jsx';
 import { bestCoverFor } from '../catalog.js';
 import { usePlayerStore } from '../store/playerStore.js';
+import { usePageVisible } from '../hooks.js';
 
 export function PlayerBar({
   track: trackProp, playing: playingProp, togglePlay: togglePlayProp,
@@ -17,9 +18,10 @@ export function PlayerBar({
   repeat: repeatProp, setRepeat: setRepeatProp, faved, toggleFav, T,
   onExpand, onMenu, loadingAudio: loadingAudioProp, onQueue,
 }) {
+  const pageVisible = usePageVisible();
   const sTrack = usePlayerStore((s) => s.track);
   const sPlaying = usePlayerStore((s) => s.playing);
-  const sTime = usePlayerStore((s) => s.time);
+  const sTime = usePlayerStore((s) => pageVisible ? s.time : 0);
   const sDur = usePlayerStore((s) => s.duration);
   const sVol = usePlayerStore((s) => s.volume);
   const sShuffle = usePlayerStore((s) => s.shuffle);

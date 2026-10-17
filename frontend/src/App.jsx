@@ -550,7 +550,7 @@ export default function App() {
   //     realmente suena; handlers play/pause/next/prev siempre vivos. Es lo
   //     que mantiene la pestaña exenta de throttling agresivo.
   //  2. NO pausar el elemento al ocultarse (DOC_HIDDEN no toca el <audio>).
-  //  3. Wake Lock mientras está visible (abajo).
+  //  3. Permitir reposo de pantalla; Screen Wake Lock no mantiene audio oculto.
   //  4. Si Chrome corta el pipeline igualmente: DETECTAR (isAudioPipelineDead
   //     en el stuckCheck de abajo) → PIPELINE_DEAD → yield honesto con ancla,
   //     y reanudar en DOC_VISIBLE. Jamás play() oculto tras yield (A7) ni
@@ -558,7 +558,7 @@ export default function App() {
   //  NO usar: AudioContext/MediaElementSource (secuestra el <audio> y mata
   //  background en móvil), bucles de play() ocultos, ni keepalives sintéticos.
 
-  // ── Volumen, Wake Lock y dispositivos de salida: useAudioOutput ──
+  // ── Volumen y dispositivos de salida: useAudioOutput ──
   useAudioOutput({ audioRef, playing, vol, settings, sinkId, setOutputs, trackId: track?.id });
 
   // Sincronizar playingRef con la intención.

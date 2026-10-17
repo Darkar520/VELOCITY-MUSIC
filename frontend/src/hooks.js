@@ -1,7 +1,16 @@
 // ═══════════════════════════════════════════════════════════════
 // Hooks reutilizables.
 // ═══════════════════════════════════════════════════════════════
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useSyncExternalStore } from 'react';
+
+const subscribeVisibility = notify => {
+  document.addEventListener('visibilitychange', notify);
+  return () => document.removeEventListener('visibilitychange', notify);
+};
+const pageVisible = () => document.visibilityState !== 'hidden';
+export function usePageVisible() {
+  return useSyncExternalStore(subscribeVisibility, pageVisible, () => true);
+}
 
 // Swipe horizontal (siguiente/anterior). Devuelve handlers táctiles y dragX
 // para animar la transición. Llama preventDefault en touchmove horizontal

@@ -12,6 +12,7 @@ import { mergeRadioTail } from '../radioNext.js';
 import { cacheTrack, trackById, saveMeta, bestCoverFor, normalizeTrack } from '../catalog.js';
 import { isDocumentVisible, shouldFadeIn } from '../audioContinuity.js';
 import { runAudioEffects, bumpAudioEpoch } from '../audio/runAudioEffects.js';
+import { canStartPlayback } from '../audio/audioMachine.js';
 import { usePlayerStore } from '../store/playerStore.js';
 import { enrichCoverIfNeeded } from '../coverEnrich.js';
 
@@ -86,6 +87,7 @@ export function usePlaybackController(deps) {
   } = deps;
 
   const effectCtxRef = useRef({});
+  const mountedRef = useRef(true);
   const ensureStreamFnRef = useRef(async () => {});
   const resolveAbortRef = useRef(null);
   const playGenRef = useRef(0);
@@ -118,7 +120,8 @@ export function usePlaybackController(deps) {
   }, [syncMirrorsFromMachine]);
 
   // Registrar effect ctx en el store cada render (refs mutables).
-  effectCtxRef.current = {
+  // Keep epoch, pending seek and play cancellation on ONE context across renders.
+  Object.assign(effectCtxRef.current, {
     audioRef,
     selfPauseRef,
     playingRef,
@@ -131,6 +134,7 @@ export function usePlaybackController(deps) {
     vol,
     showToast,
     getIntent: () => getMachine().intent,
+    canPlay: () => mountedRef.current && canStartPlayback(getMachine()),
     ensureStream: (trackId) => { ensureStreamFnRef.current(trackId); },
     onPlayOk: (a) => {
       const tid = getMachine().trackId;
@@ -148,12 +152,17 @@ export function usePlaybackController(deps) {
       }
       dispatchAudio({ type: 'PLAY_FAILED', reason: err?.name || 'play' });
     },
-  };
+  });
   usePlayerStore.getState().setPolicyEffectCtx(effectCtxRef.current);
 
-  useEffect(() => () => {
-    resolveAbortRef.current?.abort();
-    usePlayerStore.getState().setPolicyEffectCtx(null);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      bumpAudioEpoch(effectCtxRef.current);
+      resolveAbortRef.current?.abort();
+      usePlayerStore.getState().setPolicyEffectCtx(null);
+    };
   }, []);
 
   const clearYieldedFocus = useCallback(() => {
@@ -254,7 +263,9 @@ export function usePlaybackController(deps) {
     resolveAbortRef.current = resolveController;
     try {
       if (downloaded.has(trackId)) {
-        const b = await offline.getBlob(trackId);
+        // A stale download index or unavailable IDB must retain online fallback.
+        const b = await offline.getBlob(trackId).catch(() => null);
+        if (resolveController.signal.aborted) return;
         if (b && getMachine().trackId === trackId) {
           if (objUrlRef.current) { try { URL.revokeObjectURL(objUrlRef.current); } catch { /* ignore */ } }
           const u = URL.createObjectURL(b);
@@ -269,6 +280,7 @@ export function usePlaybackController(deps) {
       // la única resolución del camino crítico.
       let url = api.peekStreamUrl(sp, 30);
       if (!url) url = await api.ensureStreamUrl(sp, { signal: resolveController.signal });
+      if (resolveController.signal.aborted) return;
       if (getMachine().trackId !== trackId || getMachine().intent !== 'play') return;
       setTrack((prev) => (prev && prev.id === trackId ? { ...prev, url } : { ...t, url }));
       signFailRef.current = { id: null, n: 0 };
@@ -353,39 +365,6 @@ export function usePlaybackController(deps) {
     }
   }, [radioSeedRef, radioRequestRef, setQueue]);
 
-  const applyOnlineSrc = useCallback((t, sp, gen) => {
-    const peeked = api.peekStreamUrl(sp, 90);
-    if (peeked) {
-      setTrack({ ...t, url: peeked });
-      dispatchAudio({ type: 'STREAM_READY', trackId: t.id, url: peeked });
-      return;
-    }
-    resolveAbortRef.current?.abort();
-    const resolveController = new AbortController();
-    resolveAbortRef.current = resolveController;
-    api.ensureStreamUrl(sp, { signal: resolveController.signal }).then((signedUrl) => {
-      if (playGenRef.current !== gen || getMachine().trackId !== t.id) return;
-      setTrack({ ...t, url: signedUrl });
-      dispatchAudio({ type: 'STREAM_READY', trackId: t.id, url: signedUrl });
-    }).catch((err) => {
-      if (err?.name === 'AbortError') return;
-      if (playGenRef.current !== gen) return;
-      setLoadingAudio?.(false);
-      dispatchAudio({ type: 'USER_PAUSE' });
-      const detail = typeof err?.message === 'string' && err.message.trim()
-        ? err.message
-        : 'El servidor no pudo preparar esta pista.';
-      showToast?.(err?.retryable === false ? detail : `${detail} Puedes volver a intentarlo.`);
-      api.reportPlaybackError({
-        trackId: t.id,
-        errorCode: err?.code || `http_${err?.status || 'network'}`,
-        errorMessage: detail,
-      }).catch(() => {});
-    }).finally(() => {
-      if (resolveAbortRef.current === resolveController) resolveAbortRef.current = null;
-    });
-  }, [dispatchAudio, getMachine, setLoadingAudio, setTrack, showToast]);
-
   const afterPlaySideEffects = useCallback((t, trackWithQuality, initialQueue, qParam, opts) => {
     setRecent((r) => [t.id, ...r.filter((x) => x !== t.id)].slice(0, 30));
     recordPlayStat?.(t);
@@ -469,7 +448,7 @@ export function usePlaybackController(deps) {
     });
 
     // 1) Invalidar plays/seeks de la pista anterior (timeouts schedulePlay).
-    const gen = ++playGenRef.current;
+    ++playGenRef.current;
     signFailRef.current = { id: null, n: 0 };
     // Resetear contadores de error: una acción explícita del usuario (nuevo track)
     // debe empezar limpia. Sin esto, fallos de pistas anteriores acumulan en
@@ -512,16 +491,7 @@ export function usePlaybackController(deps) {
     if (downloaded.has(t.id)) {
       const trackWithQuality = { ...t, url: api.streamUrl(sp) };
       setTrack(trackWithQuality);
-      offline.getBlob(t.id).then((b) => {
-        if (playGenRef.current !== gen || getMachine().trackId !== t.id) return;
-        if (b) {
-          const u = URL.createObjectURL(b);
-          objUrlRef.current = u;
-          dispatchAudio({ type: 'STREAM_READY', trackId: t.id, url: u });
-        } else applyOnlineSrc(t, sp, gen);
-      }).catch(() => {
-        if (playGenRef.current === gen) applyOnlineSrc(t, sp, gen);
-      });
+      // TRACK_SET -> ensureStream also owns offline lookup and online fallback.
       afterPlaySideEffects(t, { ...t, url: api.streamUrl(sp) }, initialQueue, qParam, opts);
       return;
     }
@@ -538,19 +508,11 @@ export function usePlaybackController(deps) {
     setTrack(trackWithQuality);
     afterPlaySideEffects(t, trackWithQuality, initialQueue, qParam, opts);
 
-    // UN solo camino de firma: TRACK_SET → ensureStream (arriba).
-    // Reutilizar solo una firma cuyo preflight ya comprobó una fuente.
-    const peeked = api.peekStreamUrl(sp, 45);
-    if (peeked) {
-      dispatchAudio({ type: 'STREAM_READY', trackId: t.id, url: peeked });
-    }
-    // Si no hay peek: ensureStream del TRACK_SET firma y hace STREAM_READY.
-    // No llamar ensureStreamUrl aquí (duplicaba firma → un catch tocaba toast
-    // aunque el otro camino arrancara el audio).
+    // A single path owns peek/sign/blob and STREAM_READY: TRACK_SET -> ensureStream.
   }, [
     setPlayingFrom, audioRef, fadeRafRef, fadeSafetyRef, selfPauseRef, pendingFadeRef,
     vol, setQueue, quality, streamParamsFor, objUrlRef, dispatchAudio, setTime, downloaded,
-    setTrack, getMachine, applyOnlineSrc, afterPlaySideEffects, backendDown, setPlaySrc, showToast,
+    setTrack, getMachine, afterPlaySideEffects, backendDown, setPlaySrc, showToast,
     playErrorRefDep, consecutiveFailsRefDep,
   ]);
 

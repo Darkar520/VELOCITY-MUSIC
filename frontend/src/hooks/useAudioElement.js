@@ -20,7 +20,9 @@
  *    se re-evalúe `hidden`; sin esto el yield no se ancla y al volver falla
  *    play() en iOS (NotAllowedError en background).
  */
+import { useEffect, useRef } from 'react';
 import { api } from '../api.js';
+import { canStartPlayback } from '../audio/audioMachine.js';
 import { isDocumentVisible, isExternalPause } from '../audioContinuity.js';
 import { flushPendingSeek } from '../audio/runAudioEffects.js';
 
@@ -36,6 +38,12 @@ export function useAudioElement({
   fadeInAudio, setMediaSessionState,
   onTrackEnded,
 }) {
+  const pauseTimerRef = useRef(null);
+  const sustainedTimerRef = useRef(null);
+  useEffect(() => () => {
+    clearTimeout(pauseTimerRef.current);
+    clearTimeout(sustainedTimerRef.current);
+  }, []);
   const onTimeUpdate = () => {
     const a = audioRef.current; if (!a) return;
     // Solo congelar reloj si la interrupción por vídeo está CONFIRMADA y sigue pausado.
@@ -96,9 +104,10 @@ export function useAudioElement({
   };
 
   const onPlay = () => {
+    clearTimeout(pauseTimerRef.current);
     selfPauseRef.current = false;
     const el = audioRef.current;
-    if (getMachine().intent !== 'play') {
+    if (!canStartPlayback(getMachine())) {
       selfPauseRef.current = true;
       try { el?.pause(); } catch {}
       selfPauseRef.current = false;
@@ -115,10 +124,11 @@ export function useAudioElement({
   };
 
   const onPlaying = () => {
+    clearTimeout(pauseTimerRef.current);
     selfPauseRef.current = false;
     bgLastProgressRef.current = Date.now();
     const el = audioRef.current;
-    if (getMachine().intent !== 'play') {
+    if (!canStartPlayback(getMachine())) {
       selfPauseRef.current = true;
       try { el?.pause(); } catch {}
       selfPauseRef.current = false;
@@ -136,8 +146,10 @@ export function useAudioElement({
     // onPlaying puede volver a dispararse tras una fuente fresca que falla unos
     // segundos después. Conservar el presupuesto de un reintento por pista.
     sustainedPlayRef.current = false;
-    setTimeout(() => {
-      if (audioRef.current && !audioRef.current.paused && audioRef.current.currentTime > 3) {
+    const trackId = getMachine().trackId;
+    clearTimeout(sustainedTimerRef.current);
+    sustainedTimerRef.current = setTimeout(() => {
+      if (getMachine().trackId === trackId && audioRef.current && !audioRef.current.paused && audioRef.current.currentTime > 3) {
         consecutiveFailsRef.current = 0;
         sustainedPlayRef.current = true;
       }
@@ -153,6 +165,7 @@ export function useAudioElement({
   const onWaiting = () => { if (playingRef.current) setLoadingAudio(true); };
 
   const onPause = () => {
+    clearTimeout(pauseTimerRef.current);
     const a = audioRef.current;
     if (!a) return;
     if (getMachine().intent !== 'play') {
@@ -176,9 +189,12 @@ export function useAudioElement({
     // visible tryResume dispara DOC_VISIBLE sin yield → play() falla en iOS
     // (NotAllowedError background). Fix: si el doc aún es visible, diferir
     // 300ms para que visibilitychange llegue y re-evaluar hidden.
+    const trackId = getMachine().trackId;
+    const source = a.getAttribute('src');
     const dispatchExternalPause = (hidden) => {
       // Re-verificar que el pause sigue siendo externo y el intent sigue activo.
-      if (getMachine().intent !== 'play') return;
+      if (getMachine().intent !== 'play' || getMachine().trackId !== trackId
+        || audioRef.current !== a || !a.paused || a.getAttribute('src') !== source) return;
       if (!isExternalPause({
         selfPause: selfPauseRef.current,
         pendingFade: pendingFadeRef.current,
@@ -200,7 +216,7 @@ export function useAudioElement({
       // Doc aún visible: posible race condition iOS. Diferir 300ms y
       // re-evaluar hidden. Si para entonces el audio reanudó (ej. ducking
       // resuelto), el chequeo isExternalPause lo descarta automáticamente.
-      setTimeout(() => {
+      pauseTimerRef.current = setTimeout(() => {
         dispatchExternalPause(!isDocumentVisible());
       }, 300);
     }

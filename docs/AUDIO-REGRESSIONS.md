@@ -44,6 +44,32 @@ actualiza la tabla si introduces un cambio.
 
 ## Runtime Windows y descargas completas (2026-10-17)
 
+- A25: los cinco play diferidos y sus promesas podían reclamar foco después de
+  yield; STREAM_READY y PLAYING tardíos también lo permitían. Un contexto nuevo
+  por render perdía epoch/seek. Conservar el contexto, verificar política al
+  ejecutar y completar, iniciar play síncrono y reintentar solo AbortError
+  acotado. Una promesa vieja nunca pausa una fuente nueva.
+- A26: el watchdog oculto clasificaba el elemento pausado de TRACK_SET como
+  pipeline muerto mientras resolvía la próxima canción. Un currentTime nuevo
+  menor que el de la pista anterior también heredaba el reloj de stall. Exigir
+  src listo y reiniciar la observación por pista/fuente/retroceso antes de medir.
+  No tocar audio sano en DOC_HIDDEN ni recuperar tras yield oculto.
+- A27: Media Session descartaba portadas /img relativas producidas por el propio
+  catálogo. Usar URL absoluta del proxy, metadata estable ante pause/play y
+  renovación HMAC, MIME/dimensiones no inventados, fallback ante imagen fallida
+  y liberar blobs de artwork al reemplazar/desmontar. Cada acción del SO se
+  registra de forma independiente; seekforward/backward buscan segundos, no
+  saltan de canción. Prueba del OS físico aún pendiente.
+- A28: TRACK_SET/ensureStream y el caller duplicaban lectura de blob offline y
+  montaje de fuente cacheada. Unificar en ensureStream; comprobar cancelación
+  después de IndexedDB/red. Tres regresiones reproducen doble lectura, doble
+  play de fuente cacheada y creación de blob después del desmontaje.
+- Consumo: Screen Wake Lock mantiene pantalla encendida y no asegura audio
+  oculto; se elimina la solicitud automática. Los relojes visuales dejan de
+  renderizarse ocultos, el reloj de letra se detiene cerrado/oculto y se evita
+  polling de versión oculto. Menos operaciones no prueba menor temperatura:
+  medir batería/temperatura en hardware antes de afirmar ese resultado.
+
 - A23: el runtime oficial descomprimido reduce el arranque sin recortar el
   deadline. Verificar checksum y sonda antes de activarlo; actualizar el paquete
   completo y conservar la generación anterior. Tests: `ytdlp-windows-runtime.test.js`.

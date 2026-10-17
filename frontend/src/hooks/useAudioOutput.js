@@ -1,12 +1,10 @@
 /**
- * useAudioOutput — volumen, Wake Lock y dispositivos de salida de audio.
+ * useAudioOutput — volumen y dispositivos de salida de audio.
  *
  * Extraído de App.jsx sin cambio de comportamiento. Notas que se conservan:
  *
- *  - Wake Lock: en algunos Android agresivos el navegador suspende el JS en
- *    background incluso con Media Session activa. El lock mantiene la CPU
- *    despierta mientras hay música y se re-adquiere al volver a primer plano
- *    (el sistema lo libera al apagar la pantalla).
+ *  - No solicitar Screen Wake Lock para música: mantiene la pantalla encendida
+ *    y no garantiza ejecución de audio con el documento oculto.
  *  - "Normalizar volumen" NO usa Web Audio: createMediaElementSource secuestra
  *    el <audio> de forma permanente y, al suspenderse el AudioContext en
  *    background, la música se detiene. Se dejó como ajuste simple de volumen
@@ -15,33 +13,11 @@
  *    vacíos: se rellenan nombres genéricos por posición y DeviceChip pide el
  *    permiso on-click.
  */
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 
-export function useAudioOutput({ audioRef, playing, vol, settings, sinkId, setOutputs, trackId }) {
-  // ── Wake Lock API: previene que la CPU/screen se suspenda mientras reproduce ──
-  const wakeLockRef = useRef(null);
-  useEffect(() => {
-    const requestLock = async () => {
-      if (!navigator.wakeLock) return;
-      try {
-        if (playing) {
-          wakeLockRef.current = await navigator.wakeLock.request('screen');
-        } else if (wakeLockRef.current) {
-          await wakeLockRef.current.release();
-          wakeLockRef.current = null;
-        }
-      } catch {}
-    };
-    requestLock();
-    // Re-adquirir el lock al volver a primer plano (se libera automáticamente
-    // cuando la pantalla se apaga).
-    const onVis = () => { if (document.visibilityState === 'visible' && playing) requestLock(); };
-    document.addEventListener('visibilitychange', onVis);
-    return () => {
-      document.removeEventListener('visibilitychange', onVis);
-      if (wakeLockRef.current) { wakeLockRef.current.release().catch(() => {}); wakeLockRef.current = null; }
-    };
-  }, [playing]);
+export function useAudioOutput({ audioRef, vol, settings, sinkId, setOutputs, trackId }) {
+  // Screen Wake Lock keeps the DISPLAY on; it cannot preserve background audio.
+  // Let the screen sleep. The native media element owns audio continuity.
 
   // ── Normalizar volumen (ajuste simple, sin Web Audio) ──
   useEffect(() => {

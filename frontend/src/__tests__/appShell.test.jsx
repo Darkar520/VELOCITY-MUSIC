@@ -236,6 +236,10 @@ describe('App shell — flujos críticos', () => {
     });
     const audio = mainAudio(container);
     expect(audio.getAttribute('src')).toBeTruthy();
+    // Complete the real browser's initial metadata/seek before simulating a
+    // mid-track stall. jsdom does not emit this lifecycle event automatically.
+    Object.defineProperty(audio, 'readyState', { value: 1, configurable: true });
+    await act(async () => { fireEvent.loadedMetadata(audio); });
     let position = 26.95;
     Object.defineProperties(audio, {
       paused: { value: false, configurable: true },

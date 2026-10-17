@@ -13,9 +13,16 @@
 /** Invalida plays/seeks programados. Llamar en cada cambio de pista. */
 export function bumpAudioEpoch(ctx) {
   if (!ctx) return 0;
+  cancelScheduledPlay(ctx);
   ctx._audioEpoch = (ctx._audioEpoch || 0) + 1;
   ctx._pendingSeek = null;
   return ctx._audioEpoch;
+}
+
+function cancelScheduledPlay(ctx) {
+  clearTimeout(ctx._playRetryTimer);
+  ctx._playRetryTimer = null;
+  ctx._playSequence = (ctx._playSequence || 0) + 1;
 }
 
 /**
@@ -86,6 +93,7 @@ export function runAudioEffects(effects, ctx) {
   for (const e of effects) {
     switch (e.type) {
       case 'pause': {
+        cancelScheduledPlay(ctx);
         const a = ctx.audioRef?.current;
         if (ctx.selfPauseRef) ctx.selfPauseRef.current = true;
         try { a?.pause(); } catch {}
@@ -154,6 +162,7 @@ function applySeek(ctx, position) {
   try {
     if (a.readyState >= 1) {
       a.currentTime = position;
+      ctx._pendingSeek = null;
       if (typeof ctx.setTime === 'function') ctx.setTime(position);
     } else {
       ctx._pendingSeek = position;
@@ -164,14 +173,28 @@ function applySeek(ctx, position) {
 }
 
 function schedulePlay(ctx, seekHint) {
-  // Capturar epoch: si hay TRACK_SET/clearSrc después, estos timeouts mueren.
+  cancelScheduledPlay(ctx);
+  const sequence = ctx._playSequence;
   const epoch = ctx._audioEpoch || 0;
   if (seekHint != null) ctx._pendingSeek = seekHint;
 
-  const attempt = () => {
-    if ((ctx._audioEpoch || 0) !== epoch) return;
-    if (ctx.playingRef && !ctx.playingRef.current) return;
-    if (ctx.getIntent && ctx.getIntent() !== 'play') return;
+  const current = () => (ctx._audioEpoch || 0) === epoch
+    && ctx._playSequence === sequence
+    && (!ctx.playingRef || ctx.playingRef.current)
+    && (!ctx.getIntent || ctx.getIntent() === 'play')
+    && (!ctx.canPlay || ctx.canPlay());
+
+  const failed = (err, retry) => {
+    if (!current()) return;
+    // load()/src changes can abort an otherwise permitted play. Retry only
+    // that transient case; never retry permission errors or successful plays.
+    if (err?.name === 'AbortError' && retry < 2) {
+      ctx._playRetryTimer = setTimeout(() => attempt(retry + 1), retry ? 150 : 50);
+    } else if (typeof ctx.onPlayFail === 'function') ctx.onPlayFail(err);
+  };
+
+  const attempt = (retry = 0) => {
+    if (!current()) return;
     const a = ctx.audioRef?.current;
     if (!a) return;
     // Sin src real no reintentar play (evita reanimar elemento vacío post-clearSrc).
@@ -194,16 +217,13 @@ function schedulePlay(ctx, seekHint) {
     try {
       p = a.play();
     } catch (err) {
-      if ((ctx._audioEpoch || 0) !== epoch) return;
-      if (typeof ctx.onPlayFail === 'function') ctx.onPlayFail(err);
+      failed(err, retry);
       return;
     }
     if (p && p.then) {
       p.then(() => {
-        if ((ctx._audioEpoch || 0) !== epoch) {
-          try { a.pause(); } catch {}
-          return;
-        }
+        // A stale promise must neither reclaim focus nor pause a newer track.
+        if (!current()) return;
         if (ctx._pendingSeek != null && a.readyState >= 1) {
           try { a.currentTime = ctx._pendingSeek; } catch {}
           ctx._pendingSeek = null;
@@ -214,20 +234,14 @@ function schedulePlay(ctx, seekHint) {
         }
         if (typeof ctx.onPlayOk === 'function') ctx.onPlayOk(a);
       }).catch((err) => {
-        if ((ctx._audioEpoch || 0) !== epoch) return;
-        if (err?.name === 'AbortError') return;
-        if (typeof ctx.onPlayFail === 'function') ctx.onPlayFail(err);
+        failed(err, retry);
       });
     }
   };
 
-  // setSrc de React es async: reintentos cortos (epoch los invalida al cambiar pista).
-  // Bug fix: añadido intento a 800ms para dar tiempo al browser a cargar el source.
-  setTimeout(attempt, 0);
-  setTimeout(attempt, 50);
-  setTimeout(attempt, 150);
-  setTimeout(attempt, 400);
-  setTimeout(attempt, 800);
+  // applyMediaSrc writes to the DOM synchronously. Preserve transient user
+  // activation for mobile play and lock-screen actions instead of using a timer.
+  attempt();
 }
 
 /** Aplicar seek pendiente cuando llega metadata (onLoadedMetadata / onCanPlay). */

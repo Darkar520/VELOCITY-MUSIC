@@ -36,6 +36,7 @@ export function useAudioResumeGuard({
   const stallCallbackRef = useRef(onStallTimeout);
   stallCallbackRef.current = onStallTimeout;
   const foregroundStallRef = useRef({ trackId: null, src: '', position: 0, since: 0, fired: false, reacquired: false });
+  const backgroundSourceRef = useRef({ trackId: null, src: '' });
   const forceReacquire = () => {
     if (!canForceReacquire(isDocumentVisible())) return;
     if (reacquireInFlight.current) return;
@@ -50,6 +51,11 @@ export function useAudioResumeGuard({
   };
 
   useEffect(() => {
+    const timers = new Set();
+    const scheduleResume = (delay) => {
+      const timer = setTimeout(() => { timers.delete(timer); tryResume(); }, delay);
+      timers.add(timer);
+    };
     const tryResume = () => {
       const a = audioRef.current;
       if (!a) return;
@@ -77,9 +83,9 @@ export function useAudioResumeGuard({
       if (document.visibilityState === 'visible') {
         preloadEpochRef.current += 1;
         setPreloadEpoch((value) => value + 1);
-        setTimeout(tryResume, 40);
-        setTimeout(tryResume, 350);
-        setTimeout(tryResume, 1000);
+        scheduleResume(40);
+        scheduleResume(350);
+        scheduleResume(1000);
       } else {
         preloadEpochRef.current += 1;
         setPreloadEpoch((value) => value + 1);
@@ -98,10 +104,10 @@ export function useAudioResumeGuard({
       }
     };
     const onFocus = () => {
-      if (isDocumentVisible()) setTimeout(tryResume, 60);
+      if (isDocumentVisible()) scheduleResume(60);
     };
     const onPageShow = (e) => {
-      if (e.persisted || isDocumentVisible()) setTimeout(tryResume, 60);
+      if (e.persisted || isDocumentVisible()) scheduleResume(60);
     };
 
     document.addEventListener('visibilitychange', onVis);
@@ -125,6 +131,23 @@ export function useAudioResumeGuard({
         foregroundStallRef.current = { trackId: null, src: '', position: 0, since: 0, fired: false, reacquired: false };
         // Si ya cedimos (yield), la recuperación es trabajo de DOC_VISIBLE.
         if (systemPausedRef.current) { bgLastCtRef.current = ct; return; }
+        const machine = getMachine();
+        const src = a.getAttribute('src') || a.currentSrc || '';
+        // TRACK_SET intentionally leaves a paused, empty element while the next
+        // source resolves. That is not an external pause or a dead pipeline.
+        if (machine.srcStatus !== 'ready' || !src) {
+          backgroundSourceRef.current = { trackId: null, src: '' };
+          bgLastCtRef.current = ct;
+          bgLastProgressRef.current = Date.now();
+          return;
+        }
+        const previous = backgroundSourceRef.current;
+        if (previous.trackId !== machine.trackId || previous.src !== src || ct < bgLastCtRef.current - 0.1) {
+          backgroundSourceRef.current = { trackId: machine.trackId, src };
+          bgLastCtRef.current = ct;
+          bgLastProgressRef.current = Date.now();
+          if (!a.paused) return;
+        }
         if (ct > (bgLastCtRef.current || 0) + 0.05) {
           // Reloj avanzando: pipeline sano (Media Session sigue honesta).
           bgLastProgressRef.current = Date.now();
@@ -176,6 +199,7 @@ export function useAudioResumeGuard({
     }, 1500);
 
     return () => {
+      timers.forEach(clearTimeout);
       document.removeEventListener('visibilitychange', onVis);
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('pageshow', onPageShow);
