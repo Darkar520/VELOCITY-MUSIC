@@ -102,8 +102,11 @@ export async function installWindowsRuntime({ binDir, fetchImpl = fetch, unpackI
     activated = true;
     // Conservar la generación anterior permite rollback y protege procesos en
     // vuelo. Borrar solo directorios administrados resueltos dentro de root.
-    for (const entry of await readdir(root, { withFileTypes: true }).catch(() => [])) {
+    const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
+    const anotherInstall = entries.some(entry => entry.name.startsWith('.install-') && entry.name !== path.basename(staging));
+    for (const entry of anotherInstall ? [] : entries) {
       if (!entry.isDirectory() || !FOLDER.test(entry.name) || [folder, previous?.folder].includes(entry.name)) continue;
+      if (entry.name === activeRuntime(binDir)?.folder) continue;
       const obsolete = path.resolve(root, entry.name);
       if (path.dirname(obsolete) === root) await rm(obsolete, { recursive: true, force: true }).catch(() => {});
     }

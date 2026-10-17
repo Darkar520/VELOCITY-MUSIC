@@ -65,6 +65,17 @@ test('active manifest cannot select an executable outside the managed directory'
   assert.equal(resolveWindowsRuntime(binDir), null);
 });
 
+test('cleanup preserves a generation being published by another installer', async (t) => {
+  const binDir = await fixture(t);
+  const root = path.join(binDir, 'yt-dlp-win');
+  const pending = path.join(root, 'runtime-11111111-1111-1111-1111-111111111111');
+  await mkdir(path.join(root, '.install-other'), { recursive: true });
+  await mkdir(pending);
+  await writeFile(path.join(pending, 'yt-dlp.exe'), 'pending verified executable');
+  await installWindowsRuntime({ binDir, fetchImpl: release('v1'), unpackImpl, probeImpl: async () => true });
+  assert.equal(await readFile(path.join(pending, 'yt-dlp.exe'), 'utf8'), 'pending verified executable');
+});
+
 test('auto-updater replaces the whole managed distribution instead of invoking unsupported -U', async (t) => {
   const binDir = await fixture(t);
   const { bin } = await installWindowsRuntime({ binDir, fetchImpl: release('v1'), unpackImpl, probeImpl: async () => true });
