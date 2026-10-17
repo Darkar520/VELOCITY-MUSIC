@@ -13,6 +13,7 @@ import { cacheTrack, trackById, saveMeta, bestCoverFor, normalizeTrack } from '.
 import { isDocumentVisible, shouldFadeIn } from '../audioContinuity.js';
 import { runAudioEffects, bumpAudioEpoch } from '../audio/runAudioEffects.js';
 import { canStartPlayback } from '../audio/audioMachine.js';
+import { canUseOfflineAudio } from '../audio/playbackFormat.js';
 import { usePlayerStore } from '../store/playerStore.js';
 import { enrichCoverIfNeeded } from '../coverEnrich.js';
 
@@ -266,7 +267,7 @@ export function usePlaybackController(deps) {
         // A stale download index or unavailable IDB must retain online fallback.
         const b = await offline.getBlob(trackId).catch(() => null);
         if (resolveController.signal.aborted) return;
-        if (b && getMachine().trackId === trackId) {
+        if (b && canUseOfflineAudio(b) && getMachine().trackId === trackId) {
           if (objUrlRef.current) { try { URL.revokeObjectURL(objUrlRef.current); } catch { /* ignore */ } }
           const u = URL.createObjectURL(b);
           objUrlRef.current = u;

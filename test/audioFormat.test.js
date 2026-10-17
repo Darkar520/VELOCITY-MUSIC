@@ -14,3 +14,14 @@ test('yt-dlp selectors only accept direct HTTPS audio, never HLS/DASH manifests'
 test('unknown quality keeps the high-quality direct-audio preference', () => {
   assert.equal(audioFormatSelector('unknown'), audioFormatSelector('high'));
 });
+
+test('AAC-only profiles retain each quality tier and never fall back to WebM', () => {
+  for (const tier of ['high', 'medium', 'low']) {
+    const selectors = audioFormatSelector(`${tier}-aac`).split('/');
+    assert.ok(selectors.every(s => s.includes('[ext=m4a]') && s.endsWith('[protocol=https]')));
+    assert.ok(!selectors.some(s => /opus|webm/.test(s)));
+  }
+  assert.match(audioFormatSelector('low-aac'), /abr<=96/);
+  assert.match(audioFormatSelector('medium-aac'), /abr<=140/);
+  assert.doesNotMatch(audioFormatSelector('high-aac'), /abr<=/);
+});

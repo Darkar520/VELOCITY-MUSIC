@@ -24,11 +24,14 @@ export function isDocumentVisible(doc = typeof document !== 'undefined' ? docume
  * - soft-play en cualquier otro caso con intención play
  *   (incluye next desde lock screen con document.hidden)
  */
-export function playSyncStrategy({ playing, hasSrc, yieldedFocus, visible }) {
+export function playSyncStrategy({ playing, hasSrc, yieldedFocus, visible, audioPaused }) {
   if (!hasSrc) return 'noop';
   if (!playing) return 'pause';
   // Solo bloquear play oculto cuando YA cedimos a otra app.
   if (yieldedFocus && visible !== true) return 'noop';
+  // Source effects already start the native element. UI synchronization must
+  // not repeat play while it is active; the watchdog handles confirmed stalls.
+  if (audioPaused === false) return 'noop';
   return 'soft-play';
 }
 

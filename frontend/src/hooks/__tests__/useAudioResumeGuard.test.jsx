@@ -37,3 +37,20 @@ it('still reports a confirmed stopped clock with a ready source', async () => {
   await act(() => vi.advanceTimersByTimeAsync(7500));
   expect(deps.dispatchAudio).toHaveBeenCalledWith({ type: 'PIPELINE_DEAD', hidden: true, position: 0.8 });
 });
+
+it('does not infer a stopped clock from a single sample when the window gains focus', async () => {
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+  const { deps } = setup({ position: 42 });
+  deps.lastTimeRef.current = 42;
+  act(() => window.dispatchEvent(new Event('focus')));
+  await act(() => vi.advanceTimersByTimeAsync(100));
+  expect(deps.dispatchAudio).not.toHaveBeenCalled();
+});
+
+it('still resumes an actually paused source on return', async () => {
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+  const { deps } = setup({ position: 42, paused: true });
+  act(() => window.dispatchEvent(new Event('focus')));
+  await act(() => vi.advanceTimersByTimeAsync(100));
+  expect(deps.dispatchAudio).toHaveBeenCalledWith({ type: 'DOC_VISIBLE', currentTime: 42 });
+});

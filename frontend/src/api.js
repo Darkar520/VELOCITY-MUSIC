@@ -1,6 +1,7 @@
 // Cliente del backend de Velocity Music.
 // En desarrollo, Vite hace proxy de /api -> http://localhost:3000 (ver vite.config.js).
 // En producción, el backend sirve este frontend como estático, así que /api es el mismo origen.
+import { compatiblePlaybackQuality } from './audio/playbackFormat.js';
 
 let token = localStorage.getItem('velocity.token') || null;
 let authGeneration = 0;
@@ -155,6 +156,7 @@ export const api = {
   // quality: 'high' | 'medium' | 'low' (mapeado desde la preferencia del usuario)
   // stream: URL directa (opcional, para SoundCloud/fuentes sin resolución).
   streamUrl({ artist, title, id, quality, stream }) {
+    quality = compatiblePlaybackQuality(quality);
     const params = new URLSearchParams();
     params.set('transport', '2'); // Evita reutilizar audio truncado de cachés previas.
     if (artist) params.set('artist', artist);
@@ -181,6 +183,7 @@ export const api = {
   _streamSignCache: new Map(),
   _streamSignInflight: new Map(),
   _streamSignKey({ artist, title, id, quality, stream }) {
+    quality = compatiblePlaybackQuality(quality);
     return [artist || '', title || '', id || '', quality || '', stream || ''].join('\0');
   },
   /**
@@ -201,6 +204,7 @@ export const api = {
   // Requiere JWT (Bearer). Reutiliza firma en caché si queda >60s de vida.
   // Dedup inflight: varias llamadas concurrentes al mismo key = 1 fetch.
   async ensureStreamUrl({ artist, title, id, quality, stream }, { forceRefresh = false, signal } = {}) {
+    quality = compatiblePlaybackQuality(quality);
     if (signal?.aborted) throw playbackPrepareAbortError();
     const params = { artist, title, id, quality, stream };
     const key = this._streamSignKey(params);
@@ -271,6 +275,7 @@ export const api = {
   // Sign only: source resolution happens lazily in the proxy, without storing
   // a Bearer token in the worker or extracting 350 URLs before handoff.
   async signDownloadUrl(params) {
+    params = { ...params, quality: compatiblePlaybackQuality(params.quality) };
     const query = new URLSearchParams();
     for (const key of ['artist', 'title', 'id', 'quality', 'stream']) {
       if (params[key]) query.set(key, params[key]);
@@ -286,6 +291,7 @@ export const api = {
   // No descarga audio: solo fuerza a que yt-dlp resuelva la URL y quede cacheada,
   // para que al reproducir esa pista el arranque sea instantáneo.
   prefetchStream({ artist, title, id, quality }) {
+    quality = compatiblePlaybackQuality(quality);
     const params = new URLSearchParams();
     if (artist) params.set('artist', artist);
     if (title) params.set('title', title);

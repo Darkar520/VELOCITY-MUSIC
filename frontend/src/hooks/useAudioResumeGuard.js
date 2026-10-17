@@ -59,10 +59,13 @@ export function useAudioResumeGuard({
     const tryResume = () => {
       const a = audioRef.current;
       if (!a) return;
-      const timeStuck = lastTimeRef.current > 0
-        && Math.abs((a.currentTime || 0) - lastTimeRef.current) < 0.05
-        && (a.currentTime || 0) > 0.5
-        && !a.paused;
+      // One nearly identical sample on focus is not evidence of a stopped
+      // clock. Only use the watchdog's sustained observation of THIS source.
+      const stall = foregroundStallRef.current;
+      const timeStuck = stall.trackId === getMachine().trackId
+        && stall.src === (a.getAttribute('src') || a.currentSrc || '')
+        && Date.now() - stall.since >= 4500
+        && Math.abs((a.currentTime || 0) - stall.position) < 0.05 && !a.paused;
       if (!shouldResumeOnForeground({
         userWantsPlay: getMachine().intent === 'play',
         audioEnded: a.ended,

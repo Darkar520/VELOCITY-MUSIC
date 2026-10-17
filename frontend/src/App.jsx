@@ -11,6 +11,7 @@ import {
   isStreamUrlFresh,
 } from './audioContinuity.js';
 import { selectPlaySync } from './audio/audioMachine.js';
+import { canUseOfflineAudio } from './audio/playbackFormat.js';
 import { runAudioEffects } from './audio/runAudioEffects.js';
 import { usePersisted, useViewport } from './hooks.js';
 import { useLibrarySync } from './hooks/useLibrarySync.js';
@@ -416,7 +417,7 @@ export default function App() {
           const s = loadPlayerState();
           if (s && s.track && s.track.id && ids.includes(s.track.id)) {
             const b = await offline.getBlob(s.track.id);
-            if (b) { const u = URL.createObjectURL(b); objUrlRef.current = u; setPlaySrc(u); }
+            if (b && canUseOfflineAudio(b)) { const u = URL.createObjectURL(b); objUrlRef.current = u; setPlaySrc(u); }
           }
         } catch {}
         // Limpieza de registros corruptos (sin blob o de tamaño 0). Va al FINAL
@@ -522,7 +523,7 @@ export default function App() {
       // no forzar pause aquí: yield mantiene intent play
     }
 
-    const strategy = selectPlaySync(getMachine(), { visible: isDocumentVisible() });
+    const strategy = selectPlaySync(getMachine(), { visible: isDocumentVisible(), audioPaused: a.paused });
     if (strategy === 'noop') return;
     if (strategy === 'pause') {
       selfPauseRef.current = true;

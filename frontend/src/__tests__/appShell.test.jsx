@@ -132,6 +132,23 @@ describe('App shell — flujos críticos', () => {
     expect(document.querySelector('audio')).toBeTruthy();
   });
 
+  it('does not replay an already active element on source synchronization or volume updates', async () => {
+    vi.useFakeTimers();
+    playSpy.mockImplementation(function () {
+      Object.defineProperty(this, 'paused', { configurable: true, value: false });
+      return Promise.resolve();
+    });
+    const { a } = seedTracks();
+    render(<App />);
+    await act(async () => {
+      usePlayerStore.getState().dispatchPolicy({ type: 'TRACK_SET', trackId: a.id, intent: 'play' });
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(playSpy).toHaveBeenCalledOnce();
+    await act(async () => { usePlayerStore.getState().setVolume(0.7); });
+    expect(playSpy).toHaveBeenCalledOnce();
+  });
+
   it('deep-link de canción abre la vista compartida en lugar del home', async () => {
     const originalPath = window.location.pathname;
     window.history.replaceState({}, '', '/track/shared-route-1');
