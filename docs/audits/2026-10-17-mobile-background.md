@@ -62,8 +62,18 @@ brillo, temperatura ambiente, carga de batería y apps de fondo controladas.
 
 ## Verificación de código
 
+La observación real inicial mostró dos play con una firma cacheada. Se rastreó
+a TRACK_SET/ensureStream y otro STREAM_READY del caller. El mismo doble camino
+leía dos veces un blob offline y podía crear una URL tras desmontar. Tres
+regresiones fallaron antes de unificar todo en ensureStream. La suite completa
+posterior pasó con 512 pruebas en 45 archivos. Una cuarta regresión comprueba
+fallback online ante error de lectura IDB (evita perder esa capacidad al quitar
+el camino redundante); el CI del commit final debe incluirla también.
+
 - Gate npm run verify: 446 pruebas Node, cero fallos; build correcto.
 - Frontend final: 509 pruebas / 44 archivos, cero fallos.
+- Repetición posterior al ajuste de fuentes: 512 / 45 archivos, cero fallos;
+  el caso IDB posterior se ejecuta dirigido y queda incluido en el CI final.
 - Lints backend y frontend sin errores; diff-check correcto.
 - Casos específicos: mobileAudio (11), MediaSession (7), guard (3), trabajo
   oculto (2), identidad del controller y matriz A7–A14 ampliada.
@@ -73,6 +83,18 @@ brillo, temperatura ambiente, carga de batería y apps de fondo controladas.
   la aserción 26,95 ni se declara ese fallo como reproducción física.
 
 ## Validación de dispositivos pendiente
+
+Ensayo real de navegador con el primer commit 28cf45a: Brave de escritorio,
+staging aislado 3001, cola del álbum xx. Intro (127,941 s) y VCR (176,541 s)
+terminaron completos y comenzó Crystalised automáticamente. La página estaba
+hidden desde el segundo 30,787 de Intro y siguió oculta durante ambos cambios.
+Se retiró temporalmente la emulación de foco del debugger para observar la
+visibilidad real; sin hacerlo, el navegador de automatización reportaba
+visible. En Crystalised se comprobó una portada /img decodificada de 512x512;
+en VCR el proxy devolvió 200 image/jpeg, 19.198 bytes. No prueba que el sistema
+Android haya pintado esa imagen en su notificación. Artefacto local:
+test-results/mobile-audio/hidden-events.json. El ensayo distingue un error del
+elemento vacío al limpiar fuente (id null) de un error durante una pista real.
 
 | Plataforma | Código / pruebas simuladas | Hardware físico |
 |---|---|---|

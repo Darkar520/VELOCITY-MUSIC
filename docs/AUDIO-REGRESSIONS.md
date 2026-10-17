@@ -60,6 +60,10 @@ actualiza la tabla si introduces un cambio.
   y liberar blobs de artwork al reemplazar/desmontar. Cada acción del SO se
   registra de forma independiente; seekforward/backward buscan segundos, no
   saltan de canción. Prueba del OS físico aún pendiente.
+- A28: TRACK_SET/ensureStream y el caller duplicaban lectura de blob offline y
+  montaje de fuente cacheada. Unificar en ensureStream; comprobar cancelación
+  después de IndexedDB/red. Tres regresiones reproducen doble lectura, doble
+  play de fuente cacheada y creación de blob después del desmontaje.
 - Consumo: Screen Wake Lock mantiene pantalla encendida y no asegura audio
   oculto; se elimina la solicitud automática. Los relojes visuales dejan de
   renderizarse ocultos, el reloj de letra se detiene cerrado/oculto y se evita
