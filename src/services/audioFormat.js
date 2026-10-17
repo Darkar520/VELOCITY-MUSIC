@@ -22,6 +22,11 @@ const LOSSLESS_CODECS = new Set(['flac', 'alac', 'wav', 'pcm', 'tta', 'ape']);
  */
 export function audioFormatSelector(quality = 'high') {
   const direct = (formats) => formats.map((format) => `${format}${DIRECT_HTTPS}`).join('/');
+  // Capability-negotiated profiles preserve the requested tier but cannot
+  // fall back to an incompatible WebM/Opus source. No transcoding is involved.
+  if (quality === 'high-aac') return direct(['bestaudio[ext=m4a]']);
+  if (quality === 'medium-aac') return direct(['bestaudio[ext=m4a][abr<=140]', 'bestaudio[ext=m4a]']);
+  if (quality === 'low-aac') return direct(['bestaudio[ext=m4a][abr<=96]', 'worstaudio[ext=m4a]']);
   if (quality === 'low') {
     // Menor consumo de datos.
     return direct(['bestaudio[ext=m4a][abr<=96]', 'worstaudio[ext=m4a]', 'bestaudio', 'best']);

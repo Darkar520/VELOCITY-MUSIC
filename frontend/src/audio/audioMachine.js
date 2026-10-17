@@ -26,12 +26,13 @@ export function initialState() {
  * ¿El efecto de sync debe play/pause/noop?
  * visible: boolean del document.
  */
-export function selectPlaySync(state, { visible } = {}) {
+export function selectPlaySync(state, { visible, audioPaused } = {}) {
   return playSyncStrategy({
     playing: state.intent === 'play',
     hasSrc: state.srcStatus === 'ready',
     yieldedFocus: state.focus === 'yielded',
     visible: visible === true,
+    audioPaused,
   });
 }
 

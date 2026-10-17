@@ -11,6 +11,14 @@ import {
 const SECRET = 'test-stream-secret-do-not-use-in-prod';
 const RUNS = { numRuns: 80 };
 
+test('AAC capability profile stays bound to the HMAC signature', () => {
+  const params = { artist: 'Artist', title: 'Song', id: 'a', quality: 'high-aac' };
+  const signed = { ...params, ...signStreamParams(params, SECRET) };
+  assert.equal(verifyStreamParams(signed, SECRET), true);
+  assert.equal(verifyStreamParams({ ...signed, quality: 'high' }, SECRET), false);
+  assert.equal(verifyStreamParams({ ...signed, quality: 'low-aac' }, SECRET), false);
+});
+
 test('streamSign: round-trip estable con mismos inputs', () => {
   const params = { artist: 'Daft Punk', title: 'One More Time', id: 'vid1', quality: 'high' };
   const nowMs = 1_700_000_000_000;

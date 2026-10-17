@@ -64,6 +64,21 @@ actualiza la tabla si introduces un cambio.
   montaje de fuente cacheada. Unificar en ensureStream; comprobar cancelación
   después de IndexedDB/red. Tres regresiones reproducen doble lectura, doble
   play de fuente cacheada y creación de blob después del desmontaje.
+- A29: el efecto de sincronización de App volvía a hacer play sobre un elemento
+  ya activo; focus podía inferir bloqueo desde una única muestra casi igual.
+  selectPlaySync recibe el estado paused del elemento y evita esa repetición;
+  solo una observación sostenida de la fuente actual acredita timeStuck. El
+  watchdog conserva la recuperación explícita de un pipeline realmente parado.
+- A30: WebM/Opus no es reproducible en todos los navegadores iPhone antiguos.
+  Si canPlayType niega WebM y afirma AAC, negociar high/medium/low-aac en firma,
+  caché y proxy. Seleccionar solo m4a HTTPS original dentro del tier; nunca
+  convertir bytes ni caer de nuevo a WebM. Capacidad desconocida conserva el
+  comportamiento anterior. La firma HMAC sigue ligada al perfil exacto.
+- A31: applyMediaSrc asignaba src y React lo volvía a asignar declarativamente.
+  La escritura repetida recargaba el elemento y obligaba a otro play. React deja
+  de ser dueño del atributo; el adaptador escribe inmediatamente y la hidratación
+  usa el mismo adaptador solo cuando el valor cambia. Regresión con dos escrituras
+  antes y una después, más prueba real de navegador por generación.
 - Consumo: Screen Wake Lock mantiene pantalla encendida y no asegura audio
   oculto; se elimina la solicitud automática. Los relojes visuales dejan de
   renderizarse ocultos, el reloj de letra se detiene cerrado/oculto y se evita

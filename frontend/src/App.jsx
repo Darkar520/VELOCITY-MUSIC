@@ -11,7 +11,8 @@ import {
   isStreamUrlFresh,
 } from './audioContinuity.js';
 import { selectPlaySync } from './audio/audioMachine.js';
-import { runAudioEffects } from './audio/runAudioEffects.js';
+import { canUseOfflineAudio } from './audio/playbackFormat.js';
+import { runAudioEffects, applyMediaSrc } from './audio/runAudioEffects.js';
 import { usePersisted, useViewport } from './hooks.js';
 import { useLibrarySync } from './hooks/useLibrarySync.js';
 import { useHomeFeed } from './hooks/useHomeFeed.js';
@@ -416,7 +417,7 @@ export default function App() {
           const s = loadPlayerState();
           if (s && s.track && s.track.id && ids.includes(s.track.id)) {
             const b = await offline.getBlob(s.track.id);
-            if (b) { const u = URL.createObjectURL(b); objUrlRef.current = u; setPlaySrc(u); }
+            if (b && canUseOfflineAudio(b)) { const u = URL.createObjectURL(b); objUrlRef.current = u; setPlaySrc(u); }
           }
         } catch {}
         // Limpieza de registros corruptos (sin blob o de tamaño 0). Va al FINAL
@@ -508,6 +509,9 @@ export default function App() {
     const a = audioRef.current;
     if (!a) return;
     // Mantener srcStatus alineado con playSrc real
+    // Hydration may set playSrc without STREAM_READY. All DOM assignments use
+    // the adapter; React must not write the same src again and reload playback.
+    if (playSrc && a.getAttribute('src') !== playSrc) applyMediaSrc(effectCtxRef.current, playSrc);
     const fresh = Boolean(playSrc && (isStreamUrlFresh(playSrc) || String(playSrc).startsWith('blob:')));
     if (fresh && getMachine().srcStatus !== 'ready') {
       patchMachine({ srcStatus: 'ready' });
@@ -522,7 +526,7 @@ export default function App() {
       // no forzar pause aquí: yield mantiene intent play
     }
 
-    const strategy = selectPlaySync(getMachine(), { visible: isDocumentVisible() });
+    const strategy = selectPlaySync(getMachine(), { visible: isDocumentVisible(), audioPaused: a.paused });
     if (strategy === 'noop') return;
     if (strategy === 'pause') {
       selfPauseRef.current = true;
@@ -858,7 +862,7 @@ export default function App() {
 
   const audioEl = (
     <>
-    <audio ref={audioRef} src={playSrc || undefined} preload="none"
+    <audio ref={audioRef} preload="none"
       onTimeUpdate={audioHandlers.onTimeUpdate}
       onLoadedMetadata={audioHandlers.onLoadedMetadata}
       onCanPlay={audioHandlers.onCanPlay}

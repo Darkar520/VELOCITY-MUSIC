@@ -1,6 +1,7 @@
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-const mocks = vi.hoisted(() => ({ blob: vi.fn(), peek: vi.fn(), ensure: vi.fn() }));
+const mocks = vi.hoisted(() => ({ blob: vi.fn(), peek: vi.fn(), ensure: vi.fn(), offlineCompatible: vi.fn() }));
+vi.mock('../../audio/playbackFormat.js', () => ({ canUseOfflineAudio: mocks.offlineCompatible }));
 vi.mock('../../api.js', () => ({ api: {
   peekStreamUrl: mocks.peek, ensureStreamUrl: mocks.ensure, streamUrl: () => '/api/unsigned',
   warmStreamUrl: vi.fn(), recordHistory: async () => {}, updateNowPlaying: vi.fn(), saveTracks: async () => {},
@@ -29,6 +30,7 @@ function setup(downloaded = false) {
 beforeEach(() => {
   vi.useFakeTimers();
   mocks.blob.mockReset().mockResolvedValue(null);
+  mocks.offlineCompatible.mockReset().mockReturnValue(true);
   mocks.peek.mockReset().mockReturnValue(null);
   mocks.ensure.mockReset().mockResolvedValue('/api/stream-proxy?signed');
   usePlayerStore.getState().patchMachine(initialState());
@@ -73,6 +75,17 @@ it('uses the online source once when offline storage cannot read the downloaded 
   const { result, track, audio } = setup(true);
   await act(async () => { result.current.play(track); });
   expect(mocks.blob).toHaveBeenCalledOnce();
+  expect(mocks.ensure).toHaveBeenCalledOnce();
+  expect(audio.getAttribute('src')).toContain('stream-proxy');
+});
+
+it('keeps an incompatible downloaded file and uses the online compatible source', async () => {
+  mocks.blob.mockResolvedValue(new Blob(['audio'], { type: 'audio/webm' }));
+  mocks.offlineCompatible.mockReturnValue(false);
+  const create = vi.spyOn(URL, 'createObjectURL');
+  const { result, track, audio } = setup(true);
+  await act(async () => { result.current.play(track); });
+  expect(create).not.toHaveBeenCalled();
   expect(mocks.ensure).toHaveBeenCalledOnce();
   expect(audio.getAttribute('src')).toContain('stream-proxy');
 });

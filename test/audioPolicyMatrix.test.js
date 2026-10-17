@@ -27,6 +27,15 @@ import { initialState, reduce, canStartPlayback } from '../frontend/src/audio/au
 
 const scenarios = [
   {
+    id: 'A29-no-replay-of-active-native-element', ids: ['A7', 'A11', 'A29'],
+    check() {
+      const state = { playing: true, hasSrc: true, yieldedFocus: false, visible: false };
+      assert.equal(playSyncStrategy({ ...state, audioPaused: false }), 'noop');
+      assert.equal(playSyncStrategy({ ...state, audioPaused: true }), 'soft-play');
+      assert.equal(playSyncStrategy({ ...state, audioPaused: true, yieldedFocus: true }), 'noop');
+    },
+  },
+  {
     id: 'A25-ready-during-yield-does-not-reclaim', ids: ['A7', 'A11', 'A25'],
     check() {
       const yielded = { ...initialState(), intent: 'play', focus: 'yielded', trackId: 'a' };
