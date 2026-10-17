@@ -4,6 +4,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { audioFormatSelector } from '../services/audioFormat.js';
 import { normalizeText } from '../lib/normalize.js';
+import { withAbortableTimeout } from '../lib/concurrency.js';
+import { resolveWindowsRuntime } from '../services/ytdlpWindowsRuntime.js';
 
 /**
  * Adaptador de yt-dlp como External_Extractor primario contra YouTube Music.
@@ -141,6 +143,10 @@ export function selectAlternateVideoCandidates({ artist, title, videoId, candida
  */
 export function resolveYtDlpBin() {
   if (process.env.YT_DLP_BIN) return process.env.YT_DLP_BIN;
+  if (process.platform === 'win32') {
+    const runtime = resolveWindowsRuntime(YT_DLP_BIN_DIR);
+    if (runtime) return runtime;
+  }
   const localName = process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp';
   const local = path.join(YT_DLP_BIN_DIR, localName);
   if (existsSync(local)) return local;
@@ -362,6 +368,7 @@ function failure(code, message, retryable) {
  */
 export function createYtDlpExtractor({
   scFallback,
+  searchVideos,
   logger = console,
   // Inyección para pruebas deterministas. En producción se usan los runners
   // acotados que matan el proceso hijo al vencer el presupuesto.
@@ -370,9 +377,8 @@ export function createYtDlpExtractor({
 } = {}) {
   return async function extractorImpl({ artist, title, videoId, quality }, { timeoutMs = 12000, signal } = {}) {
     const startedAt = Date.now();
-    // Una pista Premium puede requerir una búsqueda alternativa (≈5 s) y una
-    // extracción adicional (≈5 s) después del intento directo. Mantener un
-    // presupuesto acotado de 18 s permite ese fallback sin spinners infinitos.
+    // La extracción, búsqueda alternativa y cola comparten un solo plazo.
+    // Nunca renovar el deadline al pasar de una etapa a la siguiente.
     const budgetMs = Math.max(1, Math.min(18000, Number(timeoutMs) || 12000));
     const deadline = startedAt + budgetMs;
     const ytTarget = videoId
@@ -401,7 +407,12 @@ export function createYtDlpExtractor({
       try {
         const url = await runUrl(
           [...JS_RUNTIME_ARGS, ...baseArgs, ...clientArgs, ytTarget],
-          Math.min(remainingMs, 5500),
+          // El ejecutable one-file de Windows puede consumir 4–6 s solo en
+          // arrancar. Un sublímite de 5,5 s mataba una extracción válida antes
+          // de obtener audio y repetía ese coste con cada cliente. El proceso
+          // dispone del plazo restante; los fallos explícitos aún permiten
+          // probar otro cliente dentro del MISMO deadline global.
+          remainingMs,
           { signal, client: clientName },
         );
         if (url) return url;
@@ -423,6 +434,7 @@ export function createYtDlpExtractor({
       !signal?.aborted && deadline - Date.now() > 0
     ) {
       const alternateBudget = Math.min(ALTERNATE_SEARCH_TIMEOUT_MS, deadline - Date.now());
+      const searchDeadline = Date.now() + alternateBudget;
       let alternateCandidates = [];
       // Una consulta de búsqueda puede devolver cero líneas aunque YouTube
       // tenga subidas públicas válidas (fallo transitorio del endpoint de
@@ -433,8 +445,23 @@ export function createYtDlpExtractor({
         `${title} ${artist}`,
       ];
       for (const alternateQuery of alternateQueries) {
-        const searchRemaining = deadline - Date.now();
+        let searchRemaining = Math.min(deadline, searchDeadline) - Date.now();
         if (alternateCandidates.length || searchRemaining <= 0) break;
+        if (typeof searchVideos === 'function') {
+          const httpBudget = Math.min(2000, searchRemaining);
+          const candidates = await withAbortableTimeout(
+            (searchSignal) => searchVideos(alternateQuery, ALTERNATE_SEARCH_LIMIT, {
+              signal: searchSignal, timeoutMs: httpBudget,
+            }),
+            httpBudget,
+            [],
+            signal,
+          );
+          alternateCandidates = selectAlternateVideoCandidates({ artist, title, videoId, candidates });
+          if (alternateCandidates.length || signal?.aborted) break;
+          searchRemaining = Math.min(deadline, searchDeadline) - Date.now();
+          if (searchRemaining <= 0) break;
+        }
         try {
           const lines = await runLines([
             `ytsearch${ALTERNATE_SEARCH_LIMIT}:${alternateQuery}`,
@@ -456,7 +483,7 @@ export function createYtDlpExtractor({
         try {
           const alternateUrl = await runUrl(
             [...JS_RUNTIME_ARGS, ...baseArgs, `https://www.youtube.com/watch?v=${candidate.id}`],
-            Math.min(remainingMs, 5500),
+            remainingMs,
             { signal, client: 'alternate' },
           );
           if (alternateUrl) return alternateUrl;
@@ -480,7 +507,9 @@ export function createYtDlpExtractor({
       } catch { /* se conserva la causa original de YouTube */ }
     }
 
-    const finalError = lastError || new YtDlpError(classifyYtDlpFailure({ timedOut: Date.now() >= deadline }));
+    const finalError = signal?.aborted
+      ? new YtDlpError(classifyYtDlpFailure({ cancelled: true }))
+      : lastError || new YtDlpError(classifyYtDlpFailure({ timedOut: Date.now() >= deadline }));
     if (finalError.code !== 'YT_RESOLUTION_CANCELLED') {
       try {
         logger?.warn?.('[yt-dlp] resolución fallida', JSON.stringify({

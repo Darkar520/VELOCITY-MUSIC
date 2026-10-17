@@ -2,6 +2,25 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCancellableInflight, withAbortableTimeout } from '../src/lib/concurrency.js';
 
+test('abortable timeout propagates caller cancellation to resource-owning work', async () => {
+  const parent = new AbortController();
+  let aborted = false;
+  const pending = withAbortableTimeout((signal) => new Promise(() => {
+    signal.addEventListener('abort', () => { aborted = true; }, { once: true });
+  }), 5000, [], parent.signal);
+  await Promise.resolve();
+  parent.abort();
+  assert.deepEqual(await pending, []);
+  assert.equal(aborted, true);
+});
+
+test('abortable timeout never starts work for an already cancelled caller', async () => {
+  const parent = new AbortController();
+  parent.abort();
+  const result = await withAbortableTimeout(() => assert.fail('must not run'), 5000, [], parent.signal);
+  assert.deepEqual(result, []);
+});
+
 test('deduplicated work survives one caller aborting while another still waits', async () => {
   const dedupe = createCancellableInflight();
   const first = new AbortController();

@@ -8,7 +8,7 @@ import { normalizeText } from './src/lib/normalize.js';
 import { resolveActiveMode, createModeWatchdog } from './src/services/resolutionMode.js';
 import { probeYtDlp, getYtDlpDiagnostics, getYtDlpLoad, createYtDlpExtractor, createYtDlpCatalog, createSoundCloudCatalog, createSoundCloudExtractor, YT_DLP_BIN_DIR, resolveYtDlpBin } from './src/extractors/ytdlp.js';
 import { startYtDlpAutoUpdate } from './src/services/ytdlpUpdater.js';
-import { createYTMusicCatalog, createYTMusicArtist, createYTMusicAlbum, createYTMusicLyrics, createYTMusicSearchAll, createYTMusicRadio, createYTMusicSong, readyPromise as ytMusicReadyPromise } from './src/extractors/ytmusic.js';
+import { createYTMusicCatalog, createYTMusicVideoSearch, createYTMusicArtist, createYTMusicAlbum, createYTMusicLyrics, createYTMusicSearchAll, createYTMusicRadio, createYTMusicSong, readyPromise as ytMusicReadyPromise } from './src/extractors/ytmusic.js';
 import { installYtDlpByDownload } from './src/services/extractorSetup.js';
 import {
   createJsonUserRepo,
@@ -211,7 +211,10 @@ export async function bootstrap() {
       return null;
     }
   };
-  const baseExtractor = createYtDlpExtractor({ scFallback: scSearchAndResolve });
+  const baseExtractor = createYtDlpExtractor({
+    scFallback: scSearchAndResolve,
+    searchVideos: createYTMusicVideoSearch(),
+  });
   const extractorImpl = (args = {}, options = {}) => {
     const q = args.quality ? `#${args.quality}` : '';
     const key = args.videoId

@@ -1,4 +1,4 @@
-import { Readable } from 'node:stream';
+import { Readable, Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
 import { MAX_REDIRECTS, isRedirectStatus, resolveRedirect } from '../lib/redirectPolicy.js';
@@ -437,7 +437,31 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
         const expectedBytes = boundedRange.end - boundedRange.start + 1;
         const stream = bodyStream(primed, controller, expectedBytes, false);
         try {
-          if (stream) await pipeline(stream, res, { end: false });
+          if (stream) {
+            // pipeline deja listeners en su destino. Usar res repetidamente
+            // acumulaba listeners por bloque durante descargas largas. Este
+            // destino pertenece solo al bloque y no termina la respuesta HTTP.
+            let onDrain = null;
+            const sink = new Writable({ write(chunk, _encoding, done) {
+              // compression puede envolver write sin conservar su callback,
+              // incluso si filter=false. El booleano y drain sí se conservan.
+              if (res.write(chunk)) done();
+              else {
+                onDrain = () => { onDrain = null; done(); };
+                res.once('drain', onDrain);
+              }
+            } });
+            const onError = (error) => sink.destroy(error);
+            const onClose = () => sink.destroy(new Error('La conexión de audio se cerró.'));
+            res.once('error', onError);
+            res.once('close', onClose);
+            try { await pipeline(stream, sink); }
+            finally {
+              res.removeListener('error', onError);
+              res.removeListener('close', onClose);
+              if (onDrain) res.removeListener('drain', onDrain);
+            }
+          }
         } catch (err) {
           try {
             logger?.warn?.('[stream-proxy] bloque de descarga incompleto', JSON.stringify({

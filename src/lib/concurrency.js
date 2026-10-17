@@ -121,9 +121,11 @@ export function createCancellableInflight() {
  * @param {(signal: AbortSignal) => Promise<any> | any} task
  * @param {number} timeoutMs
  * @param {any} fallback
+ * @param {AbortSignal} [signal] Cancelación del caller, además del deadline.
  * @returns {Promise<any>}
  */
-export function withAbortableTimeout(task, timeoutMs, fallback) {
+export function withAbortableTimeout(task, timeoutMs, fallback, signal) {
+  if (signal?.aborted) return Promise.resolve(fallback);
   const controller = new AbortController();
   const budget = Math.max(1, Number(timeoutMs) || 1);
   let timer = null;
@@ -134,8 +136,15 @@ export function withAbortableTimeout(task, timeoutMs, fallback) {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       resolve(value);
     };
+
+    const onAbort = () => {
+      controller.abort();
+      finish(fallback);
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
 
     timer = setTimeout(() => {
       // Abort before resolving the fallback so resource-owning tasks start
@@ -145,7 +154,7 @@ export function withAbortableTimeout(task, timeoutMs, fallback) {
     }, budget);
 
     Promise.resolve()
-      .then(() => task(controller.signal))
+      .then(() => controller.signal.aborted ? fallback : task(controller.signal))
       .then(finish, () => finish(fallback));
   });
 }

@@ -276,6 +276,37 @@ export function createYTMusicCatalog() {
   };
 }
 
+/**
+ * Consulta de videos para la resolución alternativa. Reutiliza el cliente
+ * anónimo ya inicializado. La librería no acepta opciones en searchVideos:
+ * una vista del cliente añade signal/timeout al POST sin mutar el transporte
+ * compartido ni cancelar las búsquedas de otros usuarios.
+ */
+export async function searchYTMusicVideosWithClient(client, query, limit = 8, { signal, timeoutMs = 2000 } = {}) {
+  if (signal?.aborted) return [];
+  const scoped = Object.create(client);
+  const transport = client.client;
+  if (transport) {
+    scoped.client = {
+      defaults: transport.defaults,
+      post: (url, body, config) => transport.post(url, body, { ...config, signal, timeout: timeoutMs }),
+    };
+  }
+  const results = await scoped.searchVideos(query);
+  if (signal?.aborted) return [];
+  return results.slice(0, limit).map((video) => ({
+    id: video.videoId,
+    title: video.name,
+    artist: typeof video.artist === 'string' ? video.artist : video.artist?.name || '',
+  })).filter((video) => video.id && video.title);
+}
+
+export function createYTMusicVideoSearch() {
+  return (query, limit, options) => _client
+    ? searchYTMusicVideosWithClient(_client, query, limit, options)
+    : Promise.resolve([]);
+}
+
 /** Perfil de artista: nombre, portada, canciones más escuchadas y álbumes. */
 export async function getArtistData(artistId) {
   return withClient(async (client) => {
