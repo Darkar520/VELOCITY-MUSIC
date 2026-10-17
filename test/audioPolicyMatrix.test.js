@@ -21,10 +21,23 @@ import {
   hideRecoverDelays,
   isAudioPipelineDead,
 } from '../frontend/src/audioContinuity.js';
+import { initialState, reduce, canStartPlayback } from '../frontend/src/audio/audioMachine.js';
 
 /** @typedef {{ id: string, ids: string[], note?: string, check: () => void }} Scenario */
 
 const scenarios = [
+  {
+    id: 'A25-ready-during-yield-does-not-reclaim', ids: ['A7', 'A11', 'A25'],
+    check() {
+      const yielded = { ...initialState(), intent: 'play', focus: 'yielded', trackId: 'a' };
+      const ready = reduce(yielded, { type: 'STREAM_READY', trackId: 'a', url: '/audio' });
+      assert.equal(ready.effects.some(e => e.type === 'play'), false);
+      assert.equal(canStartPlayback(ready.state), false);
+      const resumed = reduce(ready.state, { type: 'USER_PLAY' });
+      assert.equal(canStartPlayback(resumed.state), true);
+      assert.ok(resumed.effects.some(e => e.type === 'play'));
+    },
+  },
   // ── A7 / A11: play oculto ──
   {
     id: 'A7-hidden-yielded-no-steal',

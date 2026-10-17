@@ -12,6 +12,7 @@ import { mergeRadioTail } from '../radioNext.js';
 import { cacheTrack, trackById, saveMeta, bestCoverFor, normalizeTrack } from '../catalog.js';
 import { isDocumentVisible, shouldFadeIn } from '../audioContinuity.js';
 import { runAudioEffects, bumpAudioEpoch } from '../audio/runAudioEffects.js';
+import { canStartPlayback } from '../audio/audioMachine.js';
 import { usePlayerStore } from '../store/playerStore.js';
 import { enrichCoverIfNeeded } from '../coverEnrich.js';
 
@@ -86,6 +87,7 @@ export function usePlaybackController(deps) {
   } = deps;
 
   const effectCtxRef = useRef({});
+  const mountedRef = useRef(true);
   const ensureStreamFnRef = useRef(async () => {});
   const resolveAbortRef = useRef(null);
   const playGenRef = useRef(0);
@@ -118,7 +120,8 @@ export function usePlaybackController(deps) {
   }, [syncMirrorsFromMachine]);
 
   // Registrar effect ctx en el store cada render (refs mutables).
-  effectCtxRef.current = {
+  // Keep epoch, pending seek and play cancellation on ONE context across renders.
+  Object.assign(effectCtxRef.current, {
     audioRef,
     selfPauseRef,
     playingRef,
@@ -131,6 +134,7 @@ export function usePlaybackController(deps) {
     vol,
     showToast,
     getIntent: () => getMachine().intent,
+    canPlay: () => mountedRef.current && canStartPlayback(getMachine()),
     ensureStream: (trackId) => { ensureStreamFnRef.current(trackId); },
     onPlayOk: (a) => {
       const tid = getMachine().trackId;
@@ -148,12 +152,17 @@ export function usePlaybackController(deps) {
       }
       dispatchAudio({ type: 'PLAY_FAILED', reason: err?.name || 'play' });
     },
-  };
+  });
   usePlayerStore.getState().setPolicyEffectCtx(effectCtxRef.current);
 
-  useEffect(() => () => {
-    resolveAbortRef.current?.abort();
-    usePlayerStore.getState().setPolicyEffectCtx(null);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      bumpAudioEpoch(effectCtxRef.current);
+      resolveAbortRef.current?.abort();
+      usePlayerStore.getState().setPolicyEffectCtx(null);
+    };
   }, []);
 
   const clearYieldedFocus = useCallback(() => {

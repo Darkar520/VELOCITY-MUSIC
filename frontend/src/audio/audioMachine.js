@@ -35,6 +35,12 @@ export function selectPlaySync(state, { visible } = {}) {
   });
 }
 
+// Re-evaluated at effect execution and completion, including delayed promises.
+// Only USER_PLAY / DOC_VISIBLE may reclaim focus after an interruption.
+export function canStartPlayback(state) {
+  return state.intent === 'play' && state.focus !== 'yielded';
+}
+
 function push(effects, effect) {
   effects.push(effect);
 }
@@ -173,7 +179,7 @@ export function reduce(state, event) {
       };
       if (url) push(effects, { type: 'setSrc', url });
 
-      if (state.intent === 'play') {
+      if (canStartPlayback(state)) {
         // Nuevo src siempre arranca en 0 en el elemento: hay que seek explícito.
         // Prioridad: sesión (A12) → ancla yield (A10) → live SOLO si ya había src
         // (re-sign mid-play). Tras TRACK_SET srcStatus es 'none': SIEMPRE 0,
@@ -348,6 +354,7 @@ export function reduce(state, event) {
     }
 
     case 'PLAYING': {
+      if (!canStartPlayback(state)) break;
       // Ignorar eventos del <audio> de la pista anterior (solape / race).
       if (event.trackId != null && state.trackId && String(event.trackId) !== String(state.trackId)) {
         break;

@@ -1,6 +1,6 @@
 import React from 'react';
 import { hex2rgba, grad } from '../helpers.js';
-import { useHSwipe } from '../hooks.js';
+import { useHSwipe, usePageVisible } from '../hooks.js';
 import { Icon } from '../Icons.jsx';
 import { Spinner, CoverImg } from '../components.jsx';
 import { bestCoverFor } from '../catalog.js';
@@ -13,12 +13,13 @@ export function MiniPlayerBar({
   loadingAudio: loadingAudioProp,
   T, pct, setExpanded, setMenuTarget, next, prev,
 }) {
+  const pageVisible = usePageVisible();
   const storeTrack = usePlayerStore((s) => s.track);
   const storePlaying = usePlayerStore((s) => s.playing);
   const storeLoading = usePlayerStore((s) => s.loadingAudio);
   const storeToggle = usePlayerStore((s) => s.togglePlay);
   // Progreso: esta barra es quien lo pinta, así que se suscribe ella (no App).
-  const storeTime = usePlayerStore((s) => s.time);
+  const storeTime = usePlayerStore((s) => pageVisible ? s.time : 0);
   const storeDur = usePlayerStore((s) => s.duration);
 
   const track = trackProp ?? storeTrack;

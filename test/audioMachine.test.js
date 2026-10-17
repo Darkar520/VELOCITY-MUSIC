@@ -31,6 +31,13 @@ function reduceAll(state, events) {
 
 // ── initial ──
 
+test('A25: late PLAYING cannot override pause or yielded focus', () => {
+  for (const patch of [{ intent: 'pause' }, { intent: 'play', focus: 'yielded' }]) {
+    const s = { ...initialState(), trackId: 'a', srcStatus: 'ready', ...patch };
+    assert.deepEqual(reduce(s, { type: 'PLAYING', trackId: 'a', position: 42 }), { state: s, effects: [] });
+  }
+});
+
 test('initialState: pausado, sin yield, sin src', () => {
   const s = initialState();
   assert.equal(s.intent, 'pause');

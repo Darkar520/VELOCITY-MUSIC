@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { api } from '../api.js';
 import * as offline from '../offline.js';
 import { fmt, hex2rgba, grad, hiResCover, dedupeByTitle, capPerArtist, slimTrack, parseLRC, lyricsOverlapRatio, plainFromSyncedLines, tintedVars } from '../helpers.js';
-import { usePersisted, useViewport, useDominantColor, useHSwipe } from '../hooks.js';
+import { usePersisted, useViewport, useDominantColor, useHSwipe, usePageVisible } from '../hooks.js';
 import { FALLBACK_COVER } from '../constants.js';
 import { Icon } from '../Icons.jsx';
 import { EQViz, Spinner, ProgressRing, DownloadAllButton, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider, SettingCard, ToggleRow, ColorField } from '../components.jsx';
@@ -14,6 +14,7 @@ import { DeviceChip } from './DeviceChip.jsx';
 export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next, prev, time: timeProp, dur, seek,
   vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved, toggleFav, T, quality, glow, compact, desktop, onAdd, onMenu, loadingAudio, onQueue, outputs, sinkId, setOutput, lyricOffset = 0, setLyricOffset, audioRef, nextCover, prevCover, inLibrary = false }) {
   const [showLyrics, setShowLyrics] = useState(false);
+  const pageVisible = usePageVisible();
   // iOS no permite controlar el volumen por software (solo botones físicos).
   const isIOS = typeof navigator !== 'undefined' && /iphone|ipad|ipod/i.test(navigator.userAgent) && !/crios|fxios/i.test(navigator.userAgent);
   // Deslizar hacia abajo para minimizar (solo móvil, si el panel está arriba del todo).
@@ -37,17 +38,16 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
   // Reloj de progreso: del store SOLO mientras el player está abierto (si no,
   // este árbol completo se re-renderizaría ~4 veces/seg estando oculto).
   // La prop `time` (tests / llamantes explícitos) tiene prioridad.
-  const sTime = usePlayerStore((s) => (open ? s.time : null));
+  const sTime = usePlayerStore((s) => (open && pageVisible ? s.time : null));
   const time = timeProp ?? sTime ?? 0;
   // ~5 Hz basta para resaltar línea; 15 Hz re-renderizaba todo el player (lag).
   useEffect(() => {
-    if (!showLyrics && !desktop) return;
-    if (!playing) return;
+    if (!open || !pageVisible || !showLyrics || !playing) return;
     const read = () => { const a = audioRef?.current; if (a) setLyricTime(a.currentTime || 0); };
     read();
     const id = setInterval(read, 200);
     return () => clearInterval(id);
-  }, [showLyrics, desktop, audioRef, playing, track?.id]);
+  }, [showLyrics, pageVisible, open, audioRef, playing, track?.id]);
   // Tiempo efectivo: el de alta frecuencia si la letra está abierta, si no el prop.
   const effTime = showLyrics ? lyricTime : time;
   // Color dominante de la portada actual. useDominantColor asume recibir la
