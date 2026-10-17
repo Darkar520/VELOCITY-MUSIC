@@ -1,0 +1,164 @@
+# Auditoría de descargas — en curso
+
+## Alcance y estado
+
+Objetivo: acelerar canciones y listas de unas 350 pistas manteniendo el audio
+original, conservar la cola y continuar al cambiar de app, bloquear o cerrar la
+PWA. El usuario confirmó que incluye Android, iPhone, laptop, tablet y TV.
+
+**El objetivo completo sigue abierto; los cambios se preparan para revisión.** La compatibilidad de una
+API no demuestra que el dispositivo complete una transferencia cerrada la app.
+
+## Defectos reproducidos antes de corregir
+
+Tres pruebas nuevas fallaron contra la implementación anterior:
+
+- Un ID repetido tres veces ocasionó tres guardados del mismo audio.
+- Dos pulsaciones antes de otro render ocasionaron dos guardados.
+- Una descarga individual fallida desapareció de pendientes.
+
+Los tres casos pasan con la cola nueva. Las listas y canciones comparten ocho
+slots de trabajo y cuatro de preparación; ya no hay otro recorrido completo de
+prefetch del catálogo compitiendo con las preparaciones de las descargas.
+Solo se invalida la preparación de la canción que se reintenta. Se verifica el
+Content-Length cuando existe y se rechazan cuerpos vacíos o no musicales.
+Las carátulas se completan después del audio, sin bloquear su guardado.
+
+## Segundo plano: intervención y prueba negativa
+
+Una primera variante pretendía registrar lotes sucesivos de ocho peticiones
+desde el Service Worker. Pasó el modelo simulado y falló en Chromium 155 real
+con NotAllowedError. Se sustituyó antes de publicar: la página registra todas
+las peticiones de la lista con Background Fetch; el worker solo guarda los
+resultados y nunca inicia nuevas descargas. La concurrencia de ese transporte
+la administra el navegador.
+
+La restricción existe en Chromium desde la política de Chrome 149:
+https://chromium.googlesource.com/chromium/src/+/40b33139e0..328bcb443d
+
+La cola persistente `velocity-downloads/jobs` guarda metadata, calidad, estado
+y URLs firmadas HMAC; no guarda tokens Bearer. El audio se escribe en los stores
+existentes de `velocity-offline` v3, sin borrar las descargas anteriores.
+
+El modelo final comprueba 350 respuestas, reemplazo del worker, contenido
+inalterado mediante SHA-256, respuestas parciales o HTML, errores de cuota,
+cancelación y limpieza durante una transferencia. El cliente comprueba que se
+entregan las 350 peticiones en una sola operación del navegador y como máximo
+se firman cuatro a la vez. No son 350 canciones descargadas de la red real.
+
+## Observaciones reales en staging
+
+Datos aislados: `data-staging/download-audit-20261017`, backend 3001, preview
+4173 con VITE_API=http://127.0.0.1:3001. No se modificó la biblioteca real.
+
+En primer plano se guardaron nueve canciones reales, 32.214.219 bytes, en
+23.735 ms hasta el último commit de audio. Primer commit a 8.737 ms. Es una
+sola muestra local, incluye resoluciones frías y no demuestra una mejora de
+velocidad frente a la versión anterior ni permite proyectar 350 canciones.
+
+En otro origen (`localhost:4173`) se pulsó Descargar, se observaron nueve jobs
+background y una inscripción nativa; cero canciones guardadas a los 627 ms.
+Se cerró la pestaña. Después se inspeccionó únicamente el manifest, sin ejecutar
+React: seguían cero archivos y la inscripción reportaba cero bytes, sin error.
+El permiso background-fetch figuraba granted. **Esta prueba no pasó.**
+
+Se abrió después una sesión aislada equivalente en Brave, se entregaron nueve
+peticiones y se cerró la pestaña con cero archivos guardados. La inspección de
+esa sesión sigue pendiente: la automatización de la pestaña de inspección
+agotó el tiempo y posteriormente notificó Debugger unattached. No se cambió la
+configuración de seguridad ni se tomó el timeout como prueba de fallo del audio.
+
+## Verificación y pendientes
+
+- Pruebas específicas finales: 7 Node y 23 frontend, cero fallos.
+- Gate repetido sin ejecutar ambas suites simultáneamente: 443 pruebas Node,
+  cero fallos; build correcto. Frontend completo con dos workers en ejecución
+  al registrar este estado. Lint backend y frontend sin errores.
+- La primera ejecución simultánea produjo dos fallos de deadlines pequeños en
+  streamProxy y cuatro fallos de frontend (tres timeouts y un seek). No se
+  relajaron las aserciones. Se debe conservar el resultado de la repetición.
+- Falta demostrar transferencia y guardado con la página cerrada, explicar el
+  contador nativo detenido y validar reconexión/reapertura en dispositivos.
+- Falta comparar rendimiento con controles equivalentes (fuente, caché, calidad,
+  red y concurrencia), incluyendo una canción y una lista larga.
+- Safari/iPhone y dispositivos sin Background Fetch no ofrecen una garantía
+  universal de ejecución tras cerrar una PWA. La alternativa implementada
+  conserva las canciones completas y reanuda pendientes al volver; una descarga
+  parcial de ese transporte todavía se reinicia desde cero.
+- No se ha creado commit, PR ni publicación de esta intervención.
+
+Actualización de la repetición: el frontend con dos workers volvió a fallar
+en `appShell / flujo resume` (seek 0 en lugar de 42); ese mismo caso ejecutado
+aisladamente pasó. Esto no permite declarar la suite verde: falta aislar la
+interacción entre pruebas. Se detectaron además puertos MessageChannel del mock
+Node sin cerrar y se corrigió su cierre explícito; debe repetirse la suite con
+esa corrección. No se modificó ni debilitó la aserción de resume.
+
+Guía primaria de capacidades y restricciones:
+https://developer.mozilla.org/en-US/docs/Web/API/Background_Fetch_API
+https://developer.chrome.com/blog/background-fetch
+
+## Verificación posterior de Brave
+
+Se recuperó la conexión y se inspeccionó únicamente el manifest (sin React).
+La cola estaba vacía y había nueve canciones, 32.214.219 bytes, guardadas tras
+cerrar la pestaña. El último commit ocurrió a los 17.613 ms del inicio. La
+resolución del servidor ya estaba caliente: no es una comparación causal con
+los 23.735 ms del primer ensayo en frío.
+
+Los blobs originales de Don't Know Why, Rolling in the Deep y NUEVAYoL conservan
+exactamente los tres SHA-256 registrados en `2026-10-17-cold-playback.md`.
+Esto verifica los bytes de tres de las nueve pistas del lote real en segundo
+plano. No prueba un teléfono bloqueado, un TV ni 350 transferencias reales.
+
+El fallo intermitente de resume se rastreó al protocolo del test: jsdom no
+emitía metadata para completar el seek inicial a 0. El test parcheaba después
+sessionPosition=42 dejando aquel seek pendiente; el siguiente metadata aplicaba
+SEEK_APPLIED y borraba la posición recién parcheada. Se completa ahora el
+metadata inicial antes de instalar el 42. No se cambió la máquina de audio ni
+la aserción final. La suite completa se repite con ese protocolo.
+
+La repetición completa posterior pasó: 39 archivos y 480 pruebas frontend,
+cero fallos (78,62 s, dos workers).
+
+## Experimento controlado de pausas entre bloques
+
+Se comparó el mismo handler, las mismas tres URLs upstream y calidad, sin
+extracción, alternando 120/0/0/120 ms de pausa fija. Dos muestras por variante:
+
+| Archivo | Bytes | Con 120 ms | Con 0 ms |
+|---|---:|---:|---:|
+| 0 | 4.968.484 | 2306 / 1964 ms | 1608 / 1446 ms |
+| 1 | 3.257.849 | 1401 / 1350 ms | 964 / 975 ms |
+| 2 | 3.635.310 | 1446 / 1353 ms | 1015 / 1017 ms |
+
+Las doce respuestas fueron 200, sin 403 ni avisos, y con SHA-256 idéntico por
+archivo entre variantes. Media agregada 1636,7 frente a 1170,8 ms (28,5% menos)
+en este ensayo local; no es un porcentaje garantizado de la playlist pública.
+Artefacto: `test-results/download-audit/pacing.json`. El helper inicial tuvo un
+error de fixture y produjo 502; se corrigió antes de recoger estos resultados.
+
+Se elimina por ello la pausa obligatoria en transferencias sanas. Ante un 403
+intermedio se conserva el backoff de 800/1800 ms y se activa además la pausa de
+120 ms para los bloques restantes. Una regresión nueva comprueba recuperación
+del bloque rechazado sin pérdida ni duplicación de bytes.
+
+Dos rondas de ocho transferencias simultáneas con la variante adaptativa
+terminaron en 4883 y 4645 ms: dieciséis respuestas 200 con SHA-256 esperado,
+cero 403 y cero avisos del proxy. Son las tres mismas fuentes repetidas, no
+dieciséis canciones diferentes. Artefacto: `concurrent.json` en la misma carpeta.
+
+Gate final después del cambio de transporte: 444 pruebas Node sin fallos,
+build correcto, lints backend/frontend y diff-check correctos. La suite completa
+frontend pasó con 480 pruebas como se describe arriba; el último cambio después
+de ella afecta únicamente al proxy backend y su prueba.
+
+Al reabrir Brave, Me gusta muestra nueve canciones y el botón Descargado.
+Captura: `test-results/download-audit/background-completed.png`.
+
+Permanece por verificar reconexión real, dispositivos móviles bloqueados y una
+playlist real de 350 pistas. El navegador integrado que expone Background Fetch
+sin transferir datos necesita una detección de falta de progreso y fallback;
+no debe confundirse la detección de la API con soporte efectivo. Se solicitó
+al usuario una decisión de alcance entre PWA y una aplicación nativa para
+plataformas con restricciones web. No se declara completado el objetivo.

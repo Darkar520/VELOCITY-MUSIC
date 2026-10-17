@@ -181,7 +181,6 @@ export default function App() {
   const persistRef = useRef({});
   const pendingRef = useRef(null);
   if (!pendingRef.current) { pendingRef.current = new Set(); try { JSON.parse(localStorage.getItem('velocity.pendingDl') || '[]').forEach(x => pendingRef.current.add(x)); } catch {} }
-  const resumedRef = useRef(false);
   // ¿Ya se leyó IndexedDB para saber qué está descargado? El auto-reanudado de
   // pendientes no debe correr antes: lo haría con `downloaded` vacío.
   const downloadsHydratedRef = useRef(false);
@@ -490,40 +489,6 @@ export default function App() {
   // libReadyRef se pasa como booleano en cada render (App re-renderiza al hidratar lib).
   useHomeFeed({ authed, libReady: libReadyRef.current, downloaded, recentSearches, onboardPrefs, offline: backendDown });
 
-  // ── Reanudar descargas pendientes al volver a la app ──
-  // Antes esto disparaba downloadMany(pendientes) a los 1200 ms de autenticar,
-  // sin esperar a que IndexedDB dijera qué había ya descargado. Con una
-  // biblioteca grande la hidratación tarda más que ese timeout, así que
-  // `downloaded` estaba vacío: las pistas YA descargadas se re-descargaban y se
-  // pintaban como "descargando". Ahora se espera la hidratación y, además, se
-  // confirma contra IndexedDB (fuente de verdad) justo antes de reanudar.
-  useEffect(() => {
-    if (!authed || resumedRef.current) return;
-    if (!pendingRef.current.size) return;
-    let cancelled = false;
-    resumedRef.current = true;
-    (async () => {
-      // Esperar la hidratación de descargas (máx ~15 s por si IndexedDB falla).
-      for (let i = 0; i < 150 && !downloadsHydratedRef.current && !cancelled; i++) {
-        await new Promise(r => setTimeout(r, 100));
-      }
-      if (cancelled) return;
-      let already = new Set();
-      try { already = new Set(await offline.listIds()); } catch { /* sin IDB: no reanudar a ciegas */ return; }
-      // Purgar de la cola lo que ya está en disco (quedó ahí por un cierre a
-      // medias) y quedarse solo con lo que de verdad falta.
-      let changed = false;
-      for (const id of [...pendingRef.current]) {
-        if (already.has(id)) { pendingRef.current.delete(id); changed = true; }
-      }
-      if (changed) savePending();
-      const pend = [...pendingRef.current];
-      if (!pend.length || cancelled) return;
-      downloadMany(pend);
-    })();
-    return () => { cancelled = true; };
-  }, [authed]); // eslint-disable-line react-hooks/exhaustive-deps
-
   // Hydrate machine una vez (A12/A13) — App reabre en pause sin auto-play.
   useEffect(() => {
     if (audioHydratedRef.current) return;
@@ -666,7 +631,7 @@ export default function App() {
   // play/toggle/next/seek/queue viven en usePlaybackController (playerStore.dispatchPolicy).
 
   // ── Descargas offline: extraídas a useDownloads ──
-  const { download, downloadMany, removeDownload, clearDownloads, getDownloads } = useDownloads({ quality, showToast, pendingRef, savePending });
+  const { download, downloadMany, removeDownload, clearDownloads, getDownloads } = useDownloads({ quality, showToast, pendingRef, savePending, authed, downloadsHydratedRef });
 
   useEffect(() => { homeRowsRef.current = homeRows; }, [homeRows]);
 

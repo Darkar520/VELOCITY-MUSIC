@@ -659,6 +659,31 @@ test('Handler: resolución degradada no se confunde con pista inexistente (404)'
 });
 
 // ── Handler: 403 en el primer chunk sin Range → reintento forceRefresh ──
+test('Handler: 403 intermedio reintenta el mismo bloque sin duplicar ni perder audio', async () => {
+  const expected = Buffer.alloc(RANGE_CHUNK_BYTES + 123, 71);
+  const ranges = [];
+  let rejected = false;
+  const handler = createStreamProxyHandler({
+    resolveUrl: async () => ({ url: 'https://cdn/audio' }),
+    fetchImpl: async (_url, { headers }) => {
+      ranges.push(headers.Range);
+      const [, a, b] = /^bytes=(\d+)-(\d+)$/.exec(headers.Range);
+      const start = Number(a), end = Math.min(Number(b), expected.length - 1);
+      if (start > 0 && !rejected) { rejected = true; return new Response(null, { status: 403 }); }
+      return new Response(expected.subarray(start, end + 1), { status: 206, headers: {
+        'content-type': 'audio/webm', 'content-range': `bytes ${start}-${end}/${expected.length}`,
+        'content-length': String(end - start + 1),
+      } });
+    },
+  });
+  const res = makeStreamingRes();
+  await handler({ query: { artist: 'A', title: 'B' }, headers: {} }, res);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(Buffer.concat(res.chunks), expected);
+  assert.equal(ranges.length, 3);
+  assert.equal(ranges[1], ranges[2]);
+});
+
 test('Handler: 403 en modo full dispara reintento con forceRefresh', async () => {
   let resolveCount = 0;
   let forced = false;

@@ -1,228 +1,253 @@
-/**
- * useDownloads — descargas offline (IndexedDB).
- *
- * Responsabilidades:
- *   - download(track): descarga una pista con reintentos.
- *   - downloadMany(ids): descarga concurrente (4 workers).
- *   - removeDownload(id), clearDownloads(), getDownloads().
- *
- * Lee downloaded/downloading del playerStore.
- * Usa offline.js para IndexedDB.
- *
- * Uso:
- *   const { download, downloadMany, removeDownload, clearDownloads, getDownloads } =
- *     useDownloads({ quality, showToast, pendingRef, savePending });
- */
-import { useCallback } from 'react';
+/** Browser-owned background transfers where supported; one bounded foreground
+ * queue shared by songs and playlists everywhere else. */
+import { useCallback, useEffect, useRef } from 'react';
 import { api } from '../api.js';
 import * as offline from '../offline.js';
 import { cacheTrack, saveMeta, trackById } from '../catalog.js';
 import { slimTrack } from '../helpers.js';
 import { usePlayerStore } from '../store/playerStore.js';
 import { scheduleLibraryOfflineSync } from '../offlineLibrary.js';
+import { activeDownloads, transferSlot, prepareSlot, enqueueBackground, downloadJobs, cancelBackgroundDownloads, downloadSession } from '../downloads.js';
 
-const QUALITY_MAP = { high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' };
+const QUALITY_MAP = { high: 'high', medium: 'medium', low: 'low', HQ: 'high', Standard: 'medium', FLAC: 'low' };
+const quotaError = (error) => /quota/i.test(error?.name || '');
 
-// Medido en producción (auditoría): la transferencia está limitada POR RECURSO
-// (~33 KB/s por pista), no por un tope global, así que descargar pistas
-// DISTINTAS en paralelo escala de verdad:
-//   1 pista → 33 KB/s · 4 → 129 KB/s · 8 → 232 KB/s (resolve ya caliente).
-// Rangos paralelos del MISMO archivo no aportan nada (6 rangos → 33 KB/s), por
-// eso se paraleliza por pista y no por trozos.
-const TRANSFER_CONCURRENCY = 8;
-// El resolve (yt-dlp) es CPU en el backend: más de 4 en paralelo lo castiga sin
-// mejorar nada, y compite con la reproducción de otros usuarios.
-const RESOLVE_CONCURRENCY = 4;
-// Reintentos del cuerpo de la descarga (la red del túnel corta a veces).
-const MAX_ATTEMPTS = 3;
-
-/** Ejecuta `fn` sobre `items` con un límite de tareas concurrentes. */
-async function mapLimit(items, limit, fn) {
-  const queue = [...items];
-  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, queue.length)) }, async () => {
-    while (queue.length) await fn(queue.shift());
-  }));
+async function fetchAudio(url, job) {
+  const controller = new AbortController();
+  job.controller = controller;
+  const timeout = setTimeout(() => controller.abort(), 240000);
+  try {
+    const response = await fetch(url, { signal: controller.signal, cache: 'no-store' });
+    if (!response.ok) throw Object.assign(new Error(`http_${response.status}`), { retryable: ![400, 401, 403, 404].includes(response.status) });
+    const blob = await response.blob();
+    const expected = Number(response.headers?.get('content-length'));
+    if (!blob?.size || (expected > 0 && blob.size !== expected)) throw new Error('incomplete_audio');
+    if (blob.type && !/^(audio\/|video\/webm)/i.test(blob.type)) throw Object.assign(new Error('invalid_audio'), { retryable: false });
+    return blob;
+  } finally { clearTimeout(timeout); job.controller = null; }
 }
 
-export function useDownloads({ quality, showToast, pendingRef, savePending } = {}) {
-  const downloaded = usePlayerStore((s) => s.downloaded);
-  const downloading = usePlayerStore((s) => s.downloading);
-  const setDownloaded = usePlayerStore((s) => s.setDownloaded);
-  const setDownloading = usePlayerStore((s) => s.setDownloading);
-  const addDownloaded = usePlayerStore((s) => s.addDownloaded);
-  const addDownloading = usePlayerStore((s) => s.addDownloading);
-  const removeDownloading = usePlayerStore((s) => s.removeDownloading);
+function backfillExtras(ids) {
+  if (!ids.length) return;
+  scheduleLibraryOfflineSync(ids);
+  // Optional extras never delay committing a complete audio file.
+  offline.backfillCovers?.().then((metas) => { metas.forEach(cacheTrack); saveMeta(); }).catch(() => {});
+}
 
-  const streamUrlQ = useCallback(async (t) => {
-    return api.ensureStreamUrl({
-      artist: t.artist, title: t.title, id: t.id,
-      quality: QUALITY_MAP[quality] || 'high',
-    });
-  }, [quality]);
+export function useDownloads({ quality, showToast, pendingRef, savePending, authed = false, downloadsHydratedRef } = {}) {
+  const options = useRef({ showToast, pendingRef, savePending });
+  options.current = { showToast, pendingRef, savePending };
+  const runLatest = useRef(null);
 
-  // 90s era insuficiente: medido en producción, una descarga de ~4.5MB puede
-  // tardar >130s cuando el CDN de origen (YouTube) limita el bandwidth de la
-  // conexión — el fetch entero completaba con status 200 y content-length
-  // correcto, pero el AbortController lo cortaba a mitad de la descarga del
-  // body (net::ERR_ABORTED), dejando la descarga "colgada" indefinidamente en
-  // la UI (el catch silencioso hacía un único retry, que también expiraba).
-  // 4 minutos da margen holgado incluso a conexiones lentas sin bloquear la
-  // UI para siempre: si de verdad no hay red, expira igual y el catch avisa.
-  const fetchBlobWithTimeout = useCallback(async (url, ms = 240000) => {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), ms);
-    try {
-      const res = await fetch(url, { signal: ctrl.signal });
-      if (!res.ok) throw new Error('http ' + res.status);
-      return await res.blob();
-    } finally { clearTimeout(t); }
+  useEffect(() => {
+    let stopped = false;
+    let refreshing = false;
+    const refresh = async () => {
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        const [ids, jobs] = await Promise.all([offline.listIds(), downloadJobs.list().catch(() => [])]);
+        if (stopped) return;
+        const saved = new Set(ids);
+        const state = usePlayerStore.getState();
+        const newlySaved = ids.filter((id) => !state.downloaded.has(id));
+        const running = jobs.filter((job) => ['queued', 'background'].includes(job.status));
+        state.setDownloaded(saved);
+        state.setDownloading(new Set([...downloadSession.preparing, ...activeDownloads.keys(), ...running.map((job) => job.id)]));
+        jobs.forEach((job) => { if (job.meta) cacheTrack(job.meta); });
+        const current = options.current;
+        for (const id of current.pendingRef?.current || []) {
+          if (saved.has(id) || jobs.some((job) => job.id === id && job.status === 'paused')) current.pendingRef.current.delete(id);
+        }
+        current.savePending?.();
+        if (!running.length) backfillExtras(newlySaved);
+      } catch { /* preserve last-known state on storage failure */ }
+      finally { refreshing = false; }
+    };
+    const onMessage = (event) => { if (event.data?.type === 'vm-downloads-changed') refresh(); };
+    const onVisible = () => { if (document.visibilityState === 'visible') refresh(); };
+    navigator.serviceWorker?.addEventListener?.('message', onMessage);
+    window.addEventListener('online', refresh);
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      stopped = true;
+      navigator.serviceWorker?.removeEventListener?.('message', onMessage);
+      window.removeEventListener('online', refresh);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, []);
 
-  // 3 intentos con backoff (antes 1 solo reintento): a 33 KB/s una pista tarda
-  // minutos y un corte puntual del túnel tiraba la descarga entera.
-  const fetchTrackBlob = useCallback(async (tk) => {
-    let lastErr = null;
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      try {
-        if (attempt > 1) {
-          await new Promise(r => setTimeout(r, 1200 * (attempt - 1)));
-          api._streamSignCache?.clear?.();
-        }
-        let url = await streamUrlQ(tk);
-        // Romper la caché HTTP solo en reintentos: en el primer intento una
-        // respuesta cacheada es justamente lo que queremos aprovechar.
-        if (attempt > 1) url += (url.includes('?') ? '&' : '?') + '_r=' + Date.now();
-        const blob = await fetchBlobWithTimeout(url, 240000);
-        if (!blob || !blob.size) throw new Error('blob vacío');
-        return blob;
-      } catch (err) { lastErr = err; }
-    }
-    throw lastErr || new Error('descarga fallida');
-  }, [streamUrlQ, fetchBlobWithTimeout]);
-
-  /**
-   * Pre-calienta la resolución en el backend SIN descargar audio.
-   *
-   * Medido: TTFB en frío 5,9 s (yt-dlp) vs 0,35 s ya resuelto. Al calentar
-   * primero, la transferencia no paga esa espera pista a pista.
-   */
-  const warmResolves = useCallback(async (ids) => {
-    const qParam = QUALITY_MAP[quality] || 'high';
-    await mapLimit(ids, RESOLVE_CONCURRENCY, async (id) => {
-      const t = trackById(id);
-      if (!t) return;
-      try { await api.prefetchStream({ artist: t.artist, title: t.title, id: t.id, quality: qParam }); } catch { /* best-effort */ }
-    });
-  }, [quality]);
-
-  const download = useCallback(async (tk) => {
-    if (!tk || downloaded.has(tk.id) || downloading.has(tk.id)) return;
-    // Reintentar aquí la persistencia: al arrancar el navegador puede denegarla
-    // por falta de engagement, pero tras una acción explícita del usuario
-    // (descargar) suele concederla. Sin persistencia el navegador puede
-    // desalojar IndexedDB y las descargas desaparecen entre sesiones.
+  const downloadMany = useCallback(async (input, { resume = false } = {}) => {
+    const generation = downloadSession.generation;
+    const state = usePlayerStore.getState();
+    const ids = [...new Set(input)].filter((id) => trackById(id) && !state.downloaded.has(id) && !state.downloading.has(id));
+    if (!ids.length) { showToast?.('Ya está todo descargado o en la cola'); return; }
+    // Claim before the first await, including two clicks in one React render.
+    state.setDownloading((current) => new Set([...current, ...ids]));
+    ids.forEach((id) => downloadSession.preparing.add(id));
+    const release = () => ids.forEach((id) => downloadSession.preparing.delete(id));
+    ids.forEach((id) => pendingRef?.current?.add(id));
+    savePending?.(); saveMeta();
     offline.ensurePersistentStorage();
-    addDownloading(tk.id);
-    cacheTrack(tk); saveMeta();
-    pendingRef?.current?.add(tk.id); savePending?.();
-    api.saveTracks([slimTrack(tk)]).catch(() => {});
-    try {
-      const blob = await fetchTrackBlob(tk);
-      await offline.saveTrack(tk, blob);
-      addDownloaded(tk.id);
-      // Una pista descargada debe poder verse/cantarse sin conexión: la letra
-      // va en el mismo paquete offline que el audio.
-      scheduleLibraryOfflineSync([tk.id]);
-      showToast?.('Descargada · disponible sin conexión');
-    } catch (err) {
-      if (err instanceof offline.QuotaError) showToast?.('Almacenamiento lleno. Libera espacio para descargar.');
-      else showToast?.(`No se pudo descargar: ${tk.title}`);
-    }
-    finally {
-      removeDownloading(tk.id);
-      pendingRef?.current?.delete(tk.id); savePending?.();
-    }
-  }, [downloaded, downloading, addDownloading, addDownloaded, removeDownloading, fetchTrackBlob, showToast, pendingRef, savePending]);
-
-  const clearDownloads = useCallback(async () => {
-    try { await offline.deleteAll(); } catch {}
-    setDownloaded(new Set());
-    showToast?.('Todas las descargas eliminadas');
-  }, [setDownloaded, showToast]);
-
-  const getDownloads = useCallback(() => offline.downloadsInfo(), []);
-
-  const removeDownload = useCallback(async (id) => {
-    try { await offline.deleteTrack(id); } catch {}
-    setDownloaded(d => { const n = new Set(d); n.delete(id); return n; });
-    showToast?.('Descarga eliminada');
-  }, [setDownloaded, showToast]);
-
-  const downloadMany = useCallback(async (ids) => {
-    const candidates = ids.filter(id => !downloaded.has(id) && !downloading.has(id) && trackById(id));
-    if (!candidates.length) { showToast?.('Ya está todo descargado'); return; }
-    // IndexedDB es la fuente de verdad: el estado de React puede ir por detrás
-    // (hidratación asíncrona al arrancar). Sin esta comprobación se volvían a
-    // descargar pistas que ya estaban en disco, mostrándolas como "descargando"
-    // y gastando red y batería para nada.
-    let onDisk = new Set();
-    try { onDisk = new Set(await offline.listIds()); } catch { /* sin IDB: seguir con lo que sabemos */ }
-    const already = candidates.filter(id => onDisk.has(id));
-    if (already.length) {
-      // Reconciliar: marcarlas como descargadas y sacarlas de la cola pendiente.
-      already.forEach(id => addDownloaded(id));
-      already.forEach(id => pendingRef?.current?.delete(id));
-      savePending?.();
-    }
-    const todo = candidates.filter(id => !onDisk.has(id));
-    if (!todo.length) { showToast?.('Ya está todo descargado'); return; }
-    todo.forEach(id => addDownloading(id));
-    todo.forEach(id => pendingRef?.current?.add(id)); savePending?.(); saveMeta();
-    offline.ensurePersistentStorage();
-    api.saveTracks(todo.map(trackById).map(slimTrack).filter(Boolean)).catch(() => {});
-    // Calentar los resolves EN PARALELO a las transferencias: las primeras
-    // pistas empiezan ya, y para cuando les toca el turno a las siguientes su
-    // resolve está listo (0,35 s en vez de 5,9 s).
-    warmResolves(todo);
-    let ok = 0, done = 0, quotaHit = false;
-    let lastToast = 0;
-    const worker = async (id) => {
-      if (quotaHit) { removeDownloading(id); return; }
-      const tk = trackById(id);
-      try {
-        const blob = await fetchTrackBlob(tk);
-        await offline.saveTrack(tk, blob);
-        addDownloaded(id);
-        // Solo se saca de pendientes cuando de verdad está en disco: si el lote
-        // se interrumpe, al volver se reanuda exactamente lo que falta.
-        pendingRef?.current?.delete(id); savePending?.();
-        ok++;
-      } catch (err) {
-        if (err instanceof offline.QuotaError) quotaHit = true;
-      }
-      finally {
-        removeDownloading(id);
-        done++;
-        // Un aviso por pista era ruido; se limita a uno cada 1,5 s.
-        const now = Date.now();
-        if (now - lastToast > 1500 || done === todo.length) {
-          lastToast = now;
-          showToast?.(`Descargando ${done}/${todo.length}…`);
-        }
-      }
-    };
-    await mapLimit(todo, TRANSFER_CONCURRENCY, worker);
-    if (quotaHit) {
-      showToast?.('Almacenamiento lleno. Libera espacio para seguir descargando.');
+    let onDisk;
+    try { onDisk = new Set(await offline.listIds()); }
+    catch {
+      ids.forEach((id) => state.removeDownloading(id));
+      release();
+      showToast?.('No se pudo abrir el almacenamiento. La cola sigue pendiente.');
       return;
     }
-    // Letras del lote completo (solo las que sí descargaron audio); el propio
-    // scheduler limita a 2 workers concurrentes, así que no compite por red/CPU
-    // con las descargas de audio que ya terminaron.
-    scheduleLibraryOfflineSync(todo);
-    showToast?.(`${ok}/${todo.length} descargadas`);
-  }, [downloaded, downloading, addDownloading, addDownloaded, removeDownloading, fetchTrackBlob, warmResolves, showToast, pendingRef, savePending]);
+    if (generation !== downloadSession.generation) { release(); return; }
+    const already = ids.filter((id) => onDisk.has(id));
+    already.forEach((id) => { state.addDownloaded(id); state.removeDownloading(id); pendingRef?.current?.delete(id); });
+    savePending?.();
+    const todo = ids.filter((id) => !onDisk.has(id));
+    if (!todo.length) { release(); showToast?.('Ya está todo descargado'); return; }
+    const tracks = todo.map(trackById);
+    api.saveTracks(tracks.map(slimTrack)).catch(() => {});
+    showToast?.(`Preparando ${todo.length} descarga${todo.length === 1 ? '' : 's'}…`);
+    try {
+      if (await enqueueBackground(tracks, QUALITY_MAP[quality] || 'high', { resume })) {
+        release();
+        if (generation !== downloadSession.generation) return;
+        const jobs = await downloadJobs.list();
+        const waiting = new Set(jobs.filter((job) => ['queued', 'background'].includes(job.status)).map((job) => job.id));
+        todo.filter((id) => !waiting.has(id)).forEach((id) => state.removeDownloading(id));
+        showToast?.(waiting.size ? 'Descargas en segundo plano iniciadas. Puedes salir de la app.' : 'No se pudieron iniciar las descargas. Las pendientes se conservan.');
+        return;
+      }
+    } catch { /* denied/unavailable background fetch uses the foreground queue */ }
+    if (generation !== downloadSession.generation) { release(); return; }
+    const browserOwned = new Set((await downloadJobs.list().catch(() => [])).filter((job) => job.status === 'background').map((job) => job.id));
+    await downloadJobs.putMany(tracks.filter((track) => !browserOwned.has(track.id)).map((meta) => ({
+      id: meta.id, meta, quality: QUALITY_MAP[quality] || 'high', status: 'foreground', attempts: 0,
+    }))).catch(() => {});
+    if (generation !== downloadSession.generation) { release(); return; }
+    showToast?.('Descargando. Si el dispositivo suspende la app, continuaremos al volver.');
+    let quotaHit = false;
+    const succeeded = [];
+    let finished = 0;
+    let lastToast = 0;
+    const work = todo.filter((id) => !browserOwned.has(id)).map((id) => {
+      const job = { cancelled: false, controller: null };
+      const promise = transferSlot(async () => {
+        if (quotaHit || job.cancelled) return;
+        const track = trackById(id);
+        try {
+          let blob;
+          for (let attempt = 0; attempt < 3; attempt++) {
+            if (job.cancelled) return;
+            try {
+              const url = await prepareSlot(() => api.ensureStreamUrl({
+                artist: track.artist, title: track.title, id,
+                quality: QUALITY_MAP[quality] || 'high',
+              }, { forceRefresh: attempt > 0 }));
+              if (job.cancelled) return;
+              blob = await fetchAudio(url, job);
+              break;
+            } catch (error) {
+              if (job.cancelled) return;
+              if (attempt === 2 || error.retryable === false) throw error;
+              await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
+            }
+          }
+          if (job.cancelled) return;
+          await offline.saveTrack(track, blob, { cacheCover: false });
+          if (job.cancelled) { await offline.deleteTrack(id); return; }
+          state.addDownloaded(id);
+          pendingRef?.current?.delete(id); savePending?.();
+          await downloadJobs.remove(id).catch(() => {});
+          succeeded.push(id);
+        } catch (error) { if (quotaError(error)) quotaHit = true; }
+      }).finally(() => {
+        activeDownloads.delete(id);
+        state.removeDownloading(id);
+        finished++;
+        if (Date.now() - lastToast > 1500) {
+          lastToast = Date.now();
+          showToast?.(`Descargando · ${succeeded.length}/${todo.length} guardadas · ${finished} procesadas`);
+        }
+      });
+      job.promise = promise;
+      activeDownloads.set(id, job);
+      return promise;
+    });
+    release();
+    await Promise.all(work);
+    backfillExtras(succeeded);
+    if (quotaHit) {
+      const jobs = await downloadJobs.list().catch(() => []);
+      await downloadJobs.putMany(jobs.filter((job) => todo.includes(job.id)).map((job) => ({ ...job, status: 'paused', error: 'storage_full' }))).catch(() => {});
+      showToast?.('Almacenamiento lleno. Libera espacio para seguir descargando.');
+    }
+    else if (succeeded.length === todo.length) showToast?.(`${succeeded.length}/${todo.length} descargadas · disponibles sin conexión`);
+    else showToast?.(`${succeeded.length}/${todo.length} descargadas. Las pendientes se conservan para reintentar.`);
+  }, [quality, showToast, pendingRef, savePending]);
+  runLatest.current = downloadMany;
 
+  useEffect(() => {
+    if (!authed) return;
+    let stopped = false, resuming = false;
+    const resume = async () => {
+      if (resuming || navigator.onLine === false) return;
+      resuming = true;
+      try {
+        for (let i = 0; i < 150 && downloadsHydratedRef && !downloadsHydratedRef.current && !stopped; i++) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        if (stopped) return;
+        const jobs = await downloadJobs.list().catch(() => []);
+        const current = options.current;
+        jobs.forEach((job) => {
+          if (job.meta) cacheTrack(job.meta);
+          if (job.status === 'paused') current.pendingRef?.current?.delete(job.id);
+          else current.pendingRef?.current?.add(job.id);
+        });
+        current.savePending?.();
+        const pending = [...(current.pendingRef?.current || [])];
+        if (pending.length && !stopped) await runLatest.current(pending, { resume: true });
+      } finally { resuming = false; }
+    };
+    const onVisible = () => { if (document.visibilityState === 'visible') resume(); };
+    resume();
+    window.addEventListener('online', resume);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { stopped = true; window.removeEventListener('online', resume); document.removeEventListener('visibilitychange', onVisible); };
+  }, [authed, downloadsHydratedRef]);
+
+  const download = useCallback((track) => {
+    if (!track?.id) return;
+    cacheTrack(track);
+    return downloadMany([track.id]);
+  }, [downloadMany]);
+
+  const clearDownloads = useCallback(async () => {
+    downloadSession.generation++;
+    downloadSession.preparing.clear();
+    const running = [...activeDownloads.values()];
+    running.forEach((job) => { job.cancelled = true; job.controller?.abort(); });
+    await cancelBackgroundDownloads();
+    await Promise.allSettled(running.map((job) => job.promise));
+    await offline.deleteAll();
+    usePlayerStore.getState().setDownloaded(new Set());
+    usePlayerStore.getState().setDownloading(new Set());
+    pendingRef?.current?.clear(); savePending?.();
+    showToast?.('Todas las descargas eliminadas');
+  }, [pendingRef, savePending, showToast]);
+
+  const removeDownload = useCallback(async (id) => {
+    const running = activeDownloads.get(id);
+    if (running) { running.cancelled = true; running.controller?.abort(); await running.promise; }
+    await downloadJobs.remove(id).catch(() => {});
+    await offline.deleteTrack(id);
+    usePlayerStore.getState().setDownloaded((current) => { const next = new Set(current); next.delete(id); return next; });
+    pendingRef?.current?.delete(id); savePending?.();
+    showToast?.('Descarga eliminada');
+  }, [pendingRef, savePending, showToast]);
+
+  const getDownloads = useCallback(() => offline.downloadsInfo(), []);
   return { download, downloadMany, removeDownload, clearDownloads, getDownloads };
 }
 
