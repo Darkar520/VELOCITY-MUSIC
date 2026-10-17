@@ -164,14 +164,14 @@ export async function deleteLyrics(id) {
   } catch { return false; }
 }
 
-export async function saveTrack(meta, blob) {
+export async function saveTrack(meta, blob, { cacheCover = true } = {}) {
   const db = await openDB();
   if (!blob || !blob.size) throw new Error('blob vacío');
   // Cachear la carátula como data URL (vía proxy mismo-origen) para verla sin
   // conexión. Best-effort: si falla, se guarda la meta con su URL original.
   let m = meta;
   try {
-    const dataUrl = await coverToDataUrl(meta && meta.cover);
+    const dataUrl = cacheCover ? await coverToDataUrl(meta && meta.cover) : null;
     if (dataUrl && dataUrl.startsWith('data:')) m = { ...meta, cover: dataUrl };
   } catch {}
   const at = Date.now();

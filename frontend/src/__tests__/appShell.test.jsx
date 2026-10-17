@@ -390,14 +390,17 @@ describe('App shell — flujos críticos', () => {
     });
     await waitFor(() => expect(mainAudio(container).getAttribute('src')).toBeTruthy());
 
-    // Fijar la posición de sesión en la machine y simular metadatos listos.
-    await act(async () => {
-      usePlayerStore.getState().patchMachine({ sessionPosition: 42, srcStatus: 'ready' });
-    });
     const audio = mainAudio(container);
     // jsdom no implementa duration/readyState: simularlos para applySessionResume.
     Object.defineProperty(audio, 'readyState', { value: 2, configurable: true });
     Object.defineProperty(audio, 'duration', { value: 200, configurable: true });
+    // STREAM_READY puede tener aún un seek inicial a 0 pendiente porque jsdom
+    // no emite metadata. Completar ese arranque antes de instalar la posición
+    // de sesión: mezclar ambos estados hacía que SEEK_APPLIED borrara el 42.
+    await act(async () => { fireEvent.loadedMetadata(audio); });
+    await act(async () => {
+      usePlayerStore.getState().patchMachine({ sessionPosition: 42, srcStatus: 'ready' });
+    });
     let seeked = 0;
     Object.defineProperty(audio, 'currentTime', {
       get: () => seeked, set: (v) => { seeked = v; }, configurable: true,

@@ -6,3 +6,9 @@
 
 /sw.js
   Cache-Control: no-cache, no-store, must-revalidate
+
+/downloads-db.js
+  Cache-Control: no-cache
+
+/downloads-worker.js
+  Cache-Control: no-cache

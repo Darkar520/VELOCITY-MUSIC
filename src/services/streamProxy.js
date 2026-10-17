@@ -298,6 +298,7 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
       let start = 0;
       let first = true;
       let contentLength = null;
+      let chunkDelayMs = 0;
       // Reintentos de chunk con backoff: googlevideo aplica límites de ráfaga
       // por IP; un 403 puntual de un chunk se cura solo en ~1-2 s. Sin esto,
       // una descarga completa (muchos chunks seguidos) quedaba truncada en el
@@ -329,6 +330,9 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
           }
           if (!allowRetries) return last;
           if (!(last.kind === 'ok' && last.upstream.status === 403)) return last;
+          // Pace only after the provider actually signals a burst limit.
+          // Healthy transfers otherwise paid 120 ms on every block.
+          chunkDelayMs = 120;
         }
         return last;
       };
@@ -477,10 +481,9 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
 
         if (boundedRange.end >= boundedRange.total - 1) break;
         start = boundedRange.end + 1;
-        // Pequeño respiro entre chunks: reduce la presión de ráfaga sobre el
-        // rate-limit por IP de googlevideo (los chunks encadenados sin pausa
-        // disparaban 403 en descargas completas).
-        await sleep(120);
+        // Keep yielding between blocks; introduce pacing only after a 403.
+        // fetchChunk retains its bounded 800/1800 ms retries for that signal.
+        await sleep(chunkDelayMs);
       }
       res.end();
       return { kind: 'ok', upstream: null };

@@ -267,6 +267,21 @@ export const api = {
   warmStreamUrl(params) {
     return this.ensureStreamUrl(params).catch(() => null);
   },
+  // Background Fetch must receive the entire queue while the page is alive.
+  // Sign only: source resolution happens lazily in the proxy, without storing
+  // a Bearer token in the worker or extracting 350 URLs before handoff.
+  async signDownloadUrl(params) {
+    const query = new URLSearchParams();
+    for (const key of ['artist', 'title', 'id', 'quality', 'stream']) {
+      if (params[key]) query.set(key, params[key]);
+    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    try {
+      const data = await jsonOrThrow(await fetch(`/api/stream-sign?${query}`, { headers: authHeaders(), signal: controller.signal }));
+      return this.buildSignedStreamUrl({ ...params, exp: data.exp, sig: data.sig });
+    } finally { clearTimeout(timeout); }
+  },
   // Precarga (warm-up) de la resolución de una pista en la caché del backend.
   // No descarga audio: solo fuerza a que yt-dlp resuelva la URL y quede cacheada,
   // para que al reproducir esa pista el arranque sea instantáneo.

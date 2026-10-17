@@ -6,10 +6,12 @@
 //    para que la app abra aunque no haya internet.
 //  - Assets con hash (/assets/*.js, *.css, íconos): cache-first (inmutables).
 //  - Peticiones a /api/ (streaming, auth, catálogo): SIEMPRE red, nunca caché.
-//  - El audio descargado NO lo maneja el SW: vive en IndexedDB (offline.js).
+//  - Background Fetch guarda el audio en la misma IndexedDB que offline.js.
 // ═══════════════════════════════════════════════════════════════
 
-const CACHE = 'velocity-v85';
+self.importScripts('/downloads-db.js', '/downloads-worker.js');
+
+const CACHE = 'velocity-v87';
 const APP_SHELL = ['/', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'];
 
 self.addEventListener('install', (event) => {
