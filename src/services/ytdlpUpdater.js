@@ -22,6 +22,8 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { copyFile, rename, unlink } from 'node:fs/promises';
+import path from 'node:path';
+import { installWindowsRuntime, isManagedWindowsRuntime } from './ytdlpWindowsRuntime.js';
 
 /**
  * Ejecuta `<bin> -U` una vez. No lanza: resuelve con un resumen del resultado.
@@ -31,7 +33,13 @@ import { copyFile, rename, unlink } from 'node:fs/promises';
  * @param {() => Promise<boolean>} [opts.probe]  Sonda posterior al update.
  * @returns {Promise<{ updated: boolean, alreadyLatest: boolean, output: string }>}
  */
-export function updateYtDlpOnce({ bin, timeoutMs = 120000, probe } = {}) {
+export function updateYtDlpOnce({ bin, timeoutMs = 120000, probe, installRuntime = installWindowsRuntime } = {}) {
+  // El paquete descomprimido no soporta -U. Actualizar la distribución entera
+  // con checksum y sonda antes de cambiar el puntero de la generación activa.
+  if (isManagedWindowsRuntime(bin)) {
+    return installRuntime({ binDir: path.dirname(path.dirname(path.dirname(bin))) })
+      .catch(() => ({ updated: false, alreadyLatest: false, output: 'No se pudo actualizar el runtime; se conserva el anterior.' }));
+  }
   return new Promise((resolve) => {
     let out = '';
     let settled = false;

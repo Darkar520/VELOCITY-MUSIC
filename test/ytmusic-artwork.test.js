@@ -14,7 +14,45 @@ const {
   getAlbumDataWithClient,
   isVideoThumb,
   resolveAlbumTrackArtwork,
+  searchYTMusicVideosWithClient,
 } = await import('../src/extractors/ytmusic.js');
+
+test('video search scopes HTTP cancellation without mutating the shared client', async () => {
+  const calls = [];
+  const transport = {
+    defaults: { baseURL: 'https://music.youtube.com/' },
+    post: async (url, body, config) => {
+      calls.push({ url, body, config });
+      return [{ videoId: 'public-id', name: 'Artist - Song', artist: { name: 'Artist' } }];
+    },
+  };
+  const client = {
+    client: transport,
+    async searchVideos(query) { return this.client.post('/search', { query }, { responseType: 'json' }); },
+  };
+  const first = new AbortController();
+  const second = new AbortController();
+  const results = await Promise.all([
+    searchYTMusicVideosWithClient(client, 'first', 8, { signal: first.signal, timeoutMs: 1200 }),
+    searchYTMusicVideosWithClient(client, 'second', 8, { signal: second.signal, timeoutMs: 1800 }),
+  ]);
+  assert.equal(client.client, transport);
+  assert.equal(calls[0].config.signal, first.signal);
+  assert.equal(calls[1].config.signal, second.signal);
+  assert.equal(calls[0].config.timeout, 1200);
+  assert.equal(calls[1].config.timeout, 1800);
+  assert.equal(calls[0].config.responseType, 'json');
+  assert.deepEqual(results[0], [{ id: 'public-id', title: 'Artist - Song', artist: 'Artist' }]);
+});
+
+test('video search discards a late result after caller cancellation', async () => {
+  const controller = new AbortController();
+  const client = { async searchVideos() {
+    controller.abort();
+    return [{ videoId: 'public-id', name: 'Song', artist: { name: 'Artist' } }];
+  } };
+  assert.deepEqual(await searchYTMusicVideosWithClient(client, 'query', 8, { signal: controller.signal }), []);
+});
 
 const VIDEO = 'https://i.ytimg.com/vi/iywaBOMvYLI/hqdefault.jpg';
 const ALBUM = 'https://lh3.googleusercontent.com/abc=w1200-h1200-l90-rj';

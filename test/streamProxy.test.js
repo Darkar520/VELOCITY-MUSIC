@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fc from 'fast-check';
 import { Writable } from 'node:stream';
+import { createServer } from 'node:http';
+import express from 'express';
+import compression from 'compression';
 import {
   validateProxyParams,
   buildResponseHeaders,
@@ -352,6 +355,53 @@ test('Handler: rechaza un Content-Range con inicio incorrecto antes de enviar ca
   assert.equal(res.statusCode, 502);
   assert.match(res.body.error, /rango solicitado/);
   assert.match(warnings.join(' '), /STREAM_UPSTREAM_RANGE_MISMATCH/);
+});
+
+test('full download keeps response listeners bounded across many upstream chunks', async () => {
+  const res = makeStreamingRes();
+  const total = 12 * RANGE_CHUNK_BYTES + 17;
+  const snapshots = [];
+  const handler = createStreamProxyHandler({
+    resolveUrl: async () => ({ url: 'https://cdn/audio' }),
+    fetchImpl: async (_url, { headers }) => {
+      snapshots.push(['close', 'error', 'finish'].map(event => res.listenerCount(event)));
+      const start = Number(/^bytes=(\d+)-/.exec(headers.Range)[1]);
+      const end = Math.min(start + RANGE_CHUNK_BYTES - 1, total - 1);
+      return new Response(Buffer.alloc(end - start + 1, 7), { status: 206, headers: {
+        'content-type': 'audio/webm', 'content-range': `bytes ${start}-${end}/${total}`,
+      } });
+    },
+  });
+  await handler({ query: { artist: 'A', title: 'B' }, headers: {} }, res);
+  assert.equal(Buffer.concat(res.chunks).length, total);
+  for (const counts of snapshots) {
+    assert.ok(counts.every(count => count <= 2), `response listeners grew with chunks: ${counts}`);
+  }
+});
+
+test('full download crosses HTTP with backpressure and compression middleware bypassed', { timeout: 10000 }, async (t) => {
+  const expected = Buffer.alloc(3 * RANGE_CHUNK_BYTES + 17, 9);
+  const handler = createStreamProxyHandler({
+    resolveUrl: async () => ({ url: 'https://cdn/audio' }),
+    fetchImpl: async (_url, { headers }) => {
+      const start = Number(/^bytes=(\d+)-/.exec(headers.Range)[1]);
+      const end = Math.min(start + RANGE_CHUNK_BYTES, expected.length);
+      return new Response(expected.subarray(start, end), { status: 206, headers: {
+        'content-range': `bytes ${start}-${end - 1}/${expected.length}`,
+      } });
+    },
+  });
+  const app = express();
+  app.use(compression({ filter: () => false }));
+  app.get('/', (req, res) => {
+    req.query = { artist: 'A', title: 'B' };
+    handler(req, res).catch(error => res.destroy(error));
+  });
+  const server = createServer(app);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const response = await fetch(`http://127.0.0.1:${server.address().port}`, { signal: AbortSignal.timeout(5000) });
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), expected);
 });
 
 // ── Handler: sin Range (descargas/prebuffer) → encadena chunks y responde 200

@@ -125,3 +125,120 @@ test('yt-dlp load snapshot exposes bounded process and queue capacity', () => {
   assert.ok(load.maxConcurrent >= 1 && load.maxConcurrent <= 16);
   assert.equal(load.maxQueued, load.maxConcurrent * 8);
 });
+
+test('public video lookup avoids another executable and retains strict matching', async () => {
+  const attempts = [];
+  const extract = createYtDlpExtractor({
+    logger: { warn() {} },
+    searchVideos: async (_query, limit, { signal, timeoutMs }) => {
+      assert.equal(limit, 8);
+      assert.equal(signal.aborted, false);
+      assert.ok(timeoutMs <= 2000);
+      return [
+        { id: 'remix', title: 'Artist - Song (Remix)', artist: 'Artist' },
+        { id: 'public-id', title: 'Artist - Song', artist: 'Artist' },
+      ];
+    },
+    runLines: async () => assert.fail('HTTP candidates must not start a search executable'),
+    runUrl: async (args) => {
+      const target = args.at(-1);
+      attempts.push(target);
+      if (target.includes('restricted-id')) throw new YtDlpError({
+        code: 'YT_PREMIUM_REQUIRED', message: 'Premium', retryable: false,
+      });
+      assert.ok(target.includes('public-id'));
+      return 'https://cdn.example.test/song.webm';
+    },
+  });
+  assert.equal(await extract({ artist: 'Artist', title: 'Song', videoId: 'restricted-id' }),
+    'https://cdn.example.test/song.webm');
+  assert.equal(attempts.length, 2);
+});
+
+test('cancel during public HTTP lookup aborts it without starting another extractor', async () => {
+  const parent = new AbortController();
+  let attempts = 0;
+  let searchAborted = false;
+  const extract = createYtDlpExtractor({
+    logger: { warn() {} },
+    runUrl: async () => {
+      attempts++;
+      throw new YtDlpError({ code: 'YT_PREMIUM_REQUIRED', message: 'Premium', retryable: false });
+    },
+    searchVideos: async (_query, _limit, { signal }) => {
+      signal.addEventListener('abort', () => { searchAborted = true; }, { once: true });
+      parent.abort();
+      return [];
+    },
+    runLines: async () => assert.fail('must not launch a process after cancellation'),
+  });
+  await assert.rejects(extract({ artist: 'Artist', title: 'Song', videoId: 'restricted-id' }, {
+    signal: parent.signal, timeoutMs: 18000,
+  }), { code: 'YT_RESOLUTION_CANCELLED' });
+  assert.equal(attempts, 1);
+  assert.equal(searchAborted, true);
+});
+
+test('una extracción fría de 9 s puede terminar dentro del presupuesto total de 18 s', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: 100000 });
+  const calls = [];
+  const extract = createYtDlpExtractor({
+    logger: { warn() {} },
+    runUrl: async (_args, timeoutMs, { client }) => {
+      calls.push(client);
+      t.mock.timers.tick(Math.min(timeoutMs, 9000));
+      if (timeoutMs < 9000) {
+        throw new YtDlpError(classifyYtDlpFailure({ timedOut: true }));
+      }
+      return 'https://cdn.example.test/audio.webm';
+    },
+  });
+
+  const url = await extract({ artist: 'Artist', title: 'Song', videoId: 'public-id' }, { timeoutMs: 18000 });
+  assert.equal(url, 'https://cdn.example.test/audio.webm');
+  assert.deepEqual(calls, ['default']);
+  assert.equal(Date.now(), 109000);
+});
+
+test('un intento que agota el plazo total no reinicia otros clientes', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: 100000 });
+  let attempts = 0;
+  const extract = createYtDlpExtractor({
+    logger: { warn() {} },
+    runUrl: async (_args, timeoutMs) => {
+      attempts++;
+      t.mock.timers.tick(timeoutMs);
+      throw new YtDlpError(classifyYtDlpFailure({ timedOut: true }));
+    },
+  });
+
+  await assert.rejects(
+    extract({ artist: 'Artist', title: 'Song' }, { timeoutMs: 18000 }),
+    { code: 'YT_EXTRACTOR_TIMEOUT' },
+  );
+  assert.equal(attempts, 1);
+  assert.equal(Date.now(), 118000);
+});
+
+test('cancelar durante la extracción impide lanzar clientes o búsquedas adicionales', async () => {
+  const controller = new AbortController();
+  let attempts = 0;
+  const extract = createYtDlpExtractor({
+    logger: { warn() {} },
+    runUrl: async (_args, _timeoutMs, { signal }) => {
+      attempts++;
+      assert.equal(signal, controller.signal);
+      controller.abort();
+      throw new YtDlpError(classifyYtDlpFailure({ cancelled: true }));
+    },
+    runLines: async () => assert.fail('No debe buscar tras cancelar'),
+  });
+
+  await assert.rejects(
+    extract({ artist: 'Artist', title: 'Song', videoId: 'public-id' }, {
+      timeoutMs: 18000, signal: controller.signal,
+    }),
+    { code: 'YT_RESOLUTION_CANCELLED' },
+  );
+  assert.equal(attempts, 1);
+});

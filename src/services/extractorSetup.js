@@ -9,6 +9,7 @@
 
 import { mkdir, writeFile, chmod, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
+import { installWindowsRuntime, resolveWindowsRuntime } from './ytdlpWindowsRuntime.js';
 
 /** Comando de instalación sugerido según la plataforma. */
 export function installCommandFor(platform = process.platform) {
@@ -129,6 +130,10 @@ export async function installYtDlpByDownload({ binDir, probe, platform = process
     return { installed: true, output: 'yt-dlp ya está disponible.', command: null };
   }
   try {
+    if (platform === 'win32' && resolveWindowsRuntime(binDir)) {
+      const result = await installWindowsRuntime({ binDir, fetchImpl });
+      return { installed: await safeProbe(probe), output: result.output, command: 'runtime oficial Windows verificado' };
+    }
     const dest = await downloadYtDlp({ binDir, platform, fetchImpl });
     const ok = await safeProbe(probe);
     return {

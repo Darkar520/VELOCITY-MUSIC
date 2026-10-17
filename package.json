@@ -19,6 +19,7 @@
     "verify": "node --test test/*.test.js && cd frontend && npm run build",
     "preflight": "powershell -ExecutionPolicy Bypass -File scripts/preflight.ps1",
     "setup:hooks": "git config core.hooksPath .githooks",
+    "setup:extractor:fast": "node scripts/install-fast-ytdlp.js",
     "db:init": "node src/db/init.js",
     "db:migrate": "node scripts/migrate-json-to-pg.js"
   },
