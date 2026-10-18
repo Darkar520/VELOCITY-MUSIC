@@ -47,6 +47,20 @@ it('does not infer a stopped clock from a single sample when the window gains fo
   expect(deps.dispatchAudio).not.toHaveBeenCalled();
 });
 
+it.each(['loading', 'previous-source'])('does not anchor an old clock while the next resource is %s', async mode => {
+  const { deps, audio } = setup({ paused: true, position: 145 });
+  audio.readyState = mode === 'loading' ? 0 : 4;
+  audio.currentSrc = new URL('/previous', location.href).href;
+  await act(() => vi.advanceTimersByTimeAsync(6000));
+  expect(deps.dispatchAudio).not.toHaveBeenCalled();
+  audio.currentSrc = new URL('/second', location.href).href;
+  audio.readyState = 4;
+  audio.currentTime = 0;
+  audio.paused = false;
+  await act(() => vi.advanceTimersByTimeAsync(1500));
+  expect(deps.dispatchAudio).not.toHaveBeenCalled();
+});
+
 it('still resumes an actually paused source on return', async () => {
   Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
   const { deps } = setup({ position: 42, paused: true });

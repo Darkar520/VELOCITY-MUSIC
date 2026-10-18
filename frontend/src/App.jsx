@@ -6,13 +6,10 @@ import { CSS, THEMES, BASE_VARS } from './constants.js';
 import { hex2rgba, grad, dedupeByTitle, capPerArtist, tintedVars } from './helpers.js';
 import { cacheTrack, trackById, loadPlayerState, normalizeTrack, bestCoverFor } from './catalog.js';
 import {
-  isDocumentVisible,
   shouldPreExtendQueue,
-  isStreamUrlFresh,
 } from './audioContinuity.js';
-import { selectPlaySync } from './audio/audioMachine.js';
 import { canUseOfflineAudio } from './audio/playbackFormat.js';
-import { runAudioEffects, applyMediaSrc } from './audio/runAudioEffects.js';
+import { syncAudioElement } from './audio/syncAudioElement.js';
 import { usePersisted, useViewport } from './hooks.js';
 import { useLibrarySync } from './hooks/useLibrarySync.js';
 import { useHomeFeed } from './hooks/useHomeFeed.js';
@@ -314,7 +311,7 @@ export default function App() {
   // ── Playback controller: play/toggle/next/seek + dispatch unificado al store ──
   const {
     play, togglePlay, next, prev, seek, retrySource,
-    dispatchAudio, getMachine, patchMachine,
+    dispatchAudio, getMachine,
     restoreInterruptPosition, applySessionResume,
     fadeInAudio, effectCtxRef, nextCover, prevCover,
     addToQueue, reorderQueue, removeFromQueue, removeFromQueueToast, prefetchNext,
@@ -421,7 +418,8 @@ export default function App() {
             if (b && canUseOfflineAudio(b) && getMachine().trackId === s.track.id
               && getMachine().intent === 'pause' && effectCtxRef.current._audioEpoch === epoch
               && !audioRef.current?.getAttribute('src')) {
-              const u = URL.createObjectURL(b); objUrlRef.current = u; setPlaySrc(u);
+              const u = URL.createObjectURL(b); objUrlRef.current = u;
+              dispatchAudio({ type: 'STREAM_READY', trackId: s.track.id, url: u });
             }
           }
         } catch {}
@@ -495,46 +493,9 @@ export default function App() {
 
   // ── Sincronizar elemento audio vía selectPlaySync(machine) ──
   useEffect(() => {
-    const a = audioRef.current;
-    if (!a) return;
-    // Mantener srcStatus alineado con playSrc real
-    // Hydration may set playSrc without STREAM_READY. All DOM assignments use
-    // the adapter; React must not write the same src again and reload playback.
-    if (playSrc && a.getAttribute('src') !== playSrc) applyMediaSrc(effectCtxRef.current, playSrc);
-    const fresh = Boolean(playSrc && (isStreamUrlFresh(playSrc) || String(playSrc).startsWith('blob:')));
-    if (fresh && getMachine().srcStatus !== 'ready') {
-      patchMachine({ srcStatus: 'ready' });
-    } else if (!playSrc && getMachine().srcStatus === 'ready') {
-      patchMachine({ srcStatus: 'none' });
-    }
-    // intent desde React playing (por si UI cambió sin dispatch)
-    if (playing && getMachine().intent !== 'play') {
-      patchMachine({ intent: 'play' });
-      playingRef.current = true;
-    } else if (!playing && getMachine().intent === 'play' && !mediaInterrupted) {
-      // no forzar pause aquí: yield mantiene intent play
-    }
-
-    const strategy = selectPlaySync(getMachine(), { visible: isDocumentVisible(), audioPaused: a.paused });
-    if (strategy === 'noop') return;
-    if (strategy === 'pause') {
-      selfPauseRef.current = true;
-      try { a.pause(); } catch {}
-      selfPauseRef.current = false;
-      setLoadingAudio(false);
-      return;
-    }
-    if (strategy === 'soft-play') {
-      if (!fresh) return;
-      if (a.volume < vol * 0.5) {
-        cancelAnimationFrame(fadeRafRef.current);
-        clearTimeout(fadeSafetyRef.current);
-        a.volume = vol;
-      }
-      applySessionResume(a);
-      restoreInterruptPosition(a);
-      runAudioEffects([{ type: 'play' }], effectCtxRef.current);
-    }
+    syncAudioElement({ audioRef, effectCtxRef, getMachine,
+      getPlayerState: usePlayerStore.getState, selfPauseRef, setLoadingAudio,
+      vol, fadeRafRef, fadeSafetyRef, applySessionResume, restoreInterruptPosition });
   }, [playing, track, playSrc, vol, mediaInterrupted]);
 
   // ── Estrategia de continuidad en background (A14, anti-zombie) ──
@@ -555,7 +516,7 @@ export default function App() {
   useAudioOutput({ audioRef, playing, vol, settings, sinkId, setOutputs, trackId: track?.id });
 
   // Sincronizar playingRef con la intención.
-  useEffect(() => { playingRef.current = playing; }, [playing]);
+  useEffect(() => { playingRef.current = getMachine().intent === 'play'; }, [playing]);
 
   // ── Reanudación tras interrupción / zombie silencioso: useAudioResumeGuard ──
   useAudioResumeGuard({

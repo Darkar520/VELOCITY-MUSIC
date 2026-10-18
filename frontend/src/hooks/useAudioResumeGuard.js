@@ -17,6 +17,7 @@
  *    una precarga a medias no se dé por completada al volver (preloadEpoch).
  */
 import { useEffect, useRef } from 'react';
+import { ownsLoadedAudioResource } from '../audio/audioResource.js';
 import {
   isDocumentVisible,
   shouldResumeOnForeground,
@@ -78,7 +79,7 @@ export function useAudioResumeGuard({
 
       dispatchAudio({
         type: 'DOC_VISIBLE',
-        currentTime: a.currentTime || 0,
+        currentTime: ownsLoadedAudioResource(a, getMachine()) ? a.currentTime || 0 : undefined,
       });
     };
 
@@ -95,7 +96,7 @@ export function useAudioResumeGuard({
         const a = audioRef.current;
         dispatchAudio({
           type: 'DOC_HIDDEN',
-          position: a && Number.isFinite(a.currentTime) ? a.currentTime : undefined,
+          position: ownsLoadedAudioResource(a, getMachine()) && Number.isFinite(a.currentTime) ? a.currentTime : undefined,
         });
         if (shouldSuspendPreloads(false)) {
           for (const r of [preloadAudioRef, preloadAudio2Ref]) {
@@ -138,7 +139,7 @@ export function useAudioResumeGuard({
         const src = a.getAttribute('src') || a.currentSrc || '';
         // TRACK_SET intentionally leaves a paused, empty element while the next
         // source resolves. That is not an external pause or a dead pipeline.
-        if (machine.srcStatus !== 'ready' || !src) {
+        if (!ownsLoadedAudioResource(a, machine)) {
           backgroundSourceRef.current = { trackId: null, src: '' };
           bgLastCtRef.current = ct;
           bgLastProgressRef.current = Date.now();

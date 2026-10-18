@@ -123,6 +123,19 @@ actualiza la tabla si introduces un cambio.
   interrupciones reales sobre una fuente cargada ni hacer play tras yield.
   Control nativo antes/después y límites: audits/2026-10-18-notification-next.md.
 
+- A35 (2026-10-18, 3.26): A34 protegía los eventos nativos, pero no el efecto
+  de sincronización de React ni el watchdog. Un render atrasado podía volver a
+  montar el src anterior, promover ready o revivir intent play. El watchdog
+  aceptaba el reloj viejo aun con metadata pendiente/currentSrc distinto,
+  emitía PIPELINE_DEAD y anclaba esa posición en la siguiente pista. Leer el
+  store al ejecutar sync; STREAM_READY es el único montaje (incluida la
+  hidratación offline); nunca inferir srcStatus/intent de props. Compartir
+  validación de recurso cargado entre eventos, watchdog y visibilidad. Next/prev
+  leen selección/cola actuales del store, sin esperar refs de efectos React.
+  Seis regresiones fallan antes y pasan después; conservar cesión real a otras
+  apps, pausa manual, reanudación de sesión y cero plays ocultos tras yield.
+  Evidencia y límites: audits/2026-10-18-notification-next-recurrence.md.
+
 | Capa | Archivo | Rol |
 |------|---------|-----|
 | Predicados | `frontend/src/audioContinuity.js` | Reglas puras A7–A14 (incluye `isAudioPipelineDead`) |

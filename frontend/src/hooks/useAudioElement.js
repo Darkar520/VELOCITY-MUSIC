@@ -25,6 +25,7 @@ import { api } from '../api.js';
 import { canStartPlayback } from '../audio/audioMachine.js';
 import { isDocumentVisible, isExternalPause } from '../audioContinuity.js';
 import { flushPendingSeek } from '../audio/runAudioEffects.js';
+import { ownsLoadedAudioResource } from '../audio/audioResource.js';
 
 const QUALITY_MAP = { high: 'high', medium: 'medium', low: 'low', HQ: 'high', Standard: 'medium', FLAC: 'low' };
 
@@ -47,12 +48,7 @@ export function useAudioElement({
   // The element is reused across tracks. Its currentSrc/currentTime can still
   // describe the previous resource after TRACK_SET removed the src attribute.
   // Only the selected, loaded resource may publish native events to policy/UI.
-  const ownsResource = a => {
-    if (!a || getMachine().srcStatus !== 'ready') return false;
-    const src = a.getAttribute('src');
-    if (!src || a.readyState === 0) return false;
-    return !a.currentSrc || a.currentSrc === new URL(src, location.href).href;
-  };
+  const ownsResource = a => ownsLoadedAudioResource(a, getMachine());
   const onTimeUpdate = () => {
     const a = audioRef.current; if (!a) return;
     if (!ownsResource(a)) return;

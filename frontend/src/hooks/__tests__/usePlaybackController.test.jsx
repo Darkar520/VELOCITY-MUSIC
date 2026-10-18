@@ -127,6 +127,15 @@ describe('selecting the current track', () => {
     expect(audio.pause).toHaveBeenCalledOnce();
   });
 
+  it('consecutive notification next actions advance even before React mirrors the selected track', () => {
+    const { result, track, other } = setup();
+    act(() => result.current.next());
+    expect(result.current.getMachine().trackId).toBe(other.id);
+    act(() => result.current.next());
+    expect(result.current.getMachine().trackId).toBe(track.id);
+    expect(usePlayerStore.getState().time).toBe(0);
+  });
+
   it('allows replaying a track that has ended', () => {
     const { result, track } = setup({ intent: 'pause', ended: true });
     act(() => result.current.play(track));
