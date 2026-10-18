@@ -313,7 +313,7 @@ export default function App() {
 
   // ── Playback controller: play/toggle/next/seek + dispatch unificado al store ──
   const {
-    play, togglePlay, next, prev, seek,
+    play, togglePlay, next, prev, seek, retrySource,
     dispatchAudio, getMachine, patchMachine,
     restoreInterruptPosition, applySessionResume,
     fadeInAudio, effectCtxRef, nextCover, prevCover,
@@ -416,8 +416,13 @@ export default function App() {
         try {
           const s = loadPlayerState();
           if (s && s.track && s.track.id && ids.includes(s.track.id)) {
+            const epoch = effectCtxRef.current._audioEpoch;
             const b = await offline.getBlob(s.track.id);
-            if (b && canUseOfflineAudio(b)) { const u = URL.createObjectURL(b); objUrlRef.current = u; setPlaySrc(u); }
+            if (b && canUseOfflineAudio(b) && getMachine().trackId === s.track.id
+              && getMachine().intent === 'pause' && effectCtxRef.current._audioEpoch === epoch
+              && !audioRef.current?.getAttribute('src')) {
+              const u = URL.createObjectURL(b); objUrlRef.current = u; setPlaySrc(u);
+            }
           }
         } catch {}
         // Limpieza de registros corruptos (sin blob o de tamaño 0). Va al FINAL
@@ -429,19 +434,17 @@ export default function App() {
             setDownloaded(prev => { const n = new Set(prev); bad.forEach(id => n.delete(id)); return n; });
           }
         } catch {}
-        // Rellenar covers de descargas antiguas (solo con red).
+        // Recover from local image variants even without a network connection.
         try {
-          if (navigator.onLine !== false) {
-            const filled = await offline.backfillCovers({ coverFor: bestCoverFor });
-            if (filled && filled.length) {
-              filled.forEach(m => cacheTrack({ ...(trackById(m.id) || m), cover: m.cover }));
-              setTrack(prev => {
-                if (!prev || !prev.id) return prev;
-                const m = filled.find(x => x && x.id === prev.id);
-                if (m && m.cover) return { ...prev, cover: m.cover };
-                return prev;
-              });
-            }
+          const filled = await offline.backfillCovers({ coverFor: bestCoverFor });
+          if (filled && filled.length) {
+            filled.forEach(m => cacheTrack({ ...(trackById(m.id) || m), cover: m.cover }));
+            setTrack(prev => {
+              if (!prev || !prev.id) return prev;
+              const m = filled.find(x => x && x.id === prev.id);
+              if (m && m.cover) return { ...prev, cover: m.cover };
+              return prev;
+            });
           }
         } catch {}
       } catch {}
@@ -731,7 +734,7 @@ export default function App() {
     playErrorRef, consecutiveFailsRef,
     track, queue, quality,
     getMachine, dispatchAudio, setTrack, setLoadingAudio, setPlaying,
-    showToast, next,
+    showToast, next, retrySource,
   });
   stallRecoveryRef.current = handleAudioError;
 

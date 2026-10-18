@@ -254,6 +254,7 @@ describe('App shell — flujos críticos', () => {
     expect(audio.getAttribute('src')).toBeTruthy();
     const callsBefore = apiMock.ensureStreamUrl.mock.calls.length;
 
+    Object.defineProperty(audio, 'error', { value: { code: 2 }, configurable: true });
     await act(async () => { fireEvent.error(audio); });
     // Antes del plazo no debe haber otra resolución.
     await act(async () => { await vi.advanceTimersByTimeAsync(400); });
@@ -403,9 +404,11 @@ describe('App shell — flujos críticos', () => {
     const audio = mainAudio(container);
     expect(audio.getAttribute('src')).toBeTruthy();
 
+    Object.defineProperty(audio, 'error', { value: { code: 2 }, configurable: true });
     await act(async () => { fireEvent.error(audio); });
     await act(async () => { await vi.advanceTimersByTimeAsync(500); });
     // Segundo error tras la nueva URL: detención y salto acotado.
+    Object.defineProperty(audio, 'error', { value: { code: 2 }, configurable: true });
     await act(async () => { fireEvent.error(audio); });
     await act(async () => { await vi.advanceTimersByTimeAsync(700); });
 

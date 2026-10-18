@@ -81,7 +81,7 @@ export function useDownloads({ quality, showToast, pendingRef, savePending, auth
         }
         current.savePending?.();
         if (!running.length) backfillExtras(newlySaved);
-        if (!running.length && !newlySaved.length && navigator.onLine !== false) {
+        if (!running.length && !newlySaved.length) {
           offline.backfillCovers?.({ coverFor: bestCoverFor }).then(metas => metas.forEach(promoteCover)).catch(() => {});
         }
       } catch { /* preserve last-known state on storage failure */ }

@@ -98,6 +98,21 @@ actualiza la tabla si introduces un cambio.
 
 ## Política actual (código) — máquina de estados (2026-07-17)
 
+- A32 (2026-10-18): al cambiar de una descarga válida, removeAttribute('src')
+  seguido de src='' inicia una selección vacía. Brave emitió MediaError 4 con
+  currentSrc todavía apuntando al blob anterior en 23/30 controles, aunque las
+  30 cargas siguientes decodificaron. Eliminar esa asignación dio 0/30 errores
+  con 30/30 decodificaciones. El manejador debe ignorar el atributo vacío,
+  una fuente actual distinta y eventos sin MediaError vigente. Retirar la
+  fuente antes de revocar su object URL; un fallo local real puede reabrir el
+  mismo archivo una vez, sin red, borrados, invalidaciones ni saltos de cola.
+- A33: IndexedDB decide la disponibilidad; el índice visual puede ir por
+  detrás del worker o del arranque. Leer el blob antes de exigir título/artista
+  para preparar una fuente remota. Una restauración inicial tardía no debe
+  sobrescribir la selección del usuario: comprobar trackId, intención, epoch
+  y fuente ya montada. Mantener el presupuesto de fallos entre avances de
+  cola; reiniciarlo solo en selección explícita o reproducción sostenida.
+
 | Capa | Archivo | Rol |
 |------|---------|-----|
 | Predicados | `frontend/src/audioContinuity.js` | Reglas puras A7–A14 (incluye `isAudioPipelineDead`) |

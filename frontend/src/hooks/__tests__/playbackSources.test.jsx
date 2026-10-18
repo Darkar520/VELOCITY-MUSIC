@@ -25,7 +25,7 @@ function setup(downloaded = false) {
     mixSessionRef: { current: { used: new Set() } }, vol: 1, quality: 'high', downloaded: new Set(downloaded ? [track.id] : []), queue: [],
     setTrack: set('track'), setTime: set('time'), setPlaying: set('playing'), setPlaySrc: set('playSrc'), setQueue: set('queue'),
     setLoadingAudio: set('loadingAudio'), setMediaInterrupted: set('mediaInterrupted'), setRecent: vi.fn(), showToast: vi.fn() };
-  return { ...renderHook(() => usePlaybackController(deps)), track, audio };
+  return { ...renderHook(() => usePlaybackController(deps)), track, audio, deps };
 }
 beforeEach(() => {
   vi.useFakeTimers();
@@ -48,6 +48,45 @@ it('reads one offline blob and mounts one object URL per track selection', async
   await act(async () => { result.current.play(track); });
   expect(mocks.blob).toHaveBeenCalledOnce();
   expect(create).toHaveBeenCalledOnce();
+  expect(mocks.ensure).not.toHaveBeenCalled();
+});
+
+it('finds a stored file even when the React download index has not hydrated yet', async () => {
+  mocks.blob.mockResolvedValue(new Blob(['audio'], { type: 'audio/webm' }));
+  const { result, track } = setup(false);
+  await act(async () => { result.current.play(track); });
+  expect(mocks.blob).toHaveBeenCalledWith(track.id);
+  expect(mocks.ensure).not.toHaveBeenCalled();
+});
+
+it('plays local bytes without requiring artist metadata used only by the server', async () => {
+  mocks.blob.mockResolvedValue(new Blob(['audio'], { type: 'audio/webm' }));
+  const { result, track } = setup(true);
+  await act(async () => { result.current.play({ ...track, id: 'local-no-artist', artist: '' }); });
+  expect(mocks.blob).toHaveBeenCalledWith('local-no-artist');
+  expect(mocks.ensure).not.toHaveBeenCalled();
+  expect(usePlayerStore.getState().playSrc).toContain('blob:');
+});
+
+it('keeps the failure budget when advancing a queue instead of resetting it at every skipped song', async () => {
+  const { deps, track } = setup();
+  const failures = { current: 2 };
+  const { result } = renderHook(() => usePlaybackController({ ...deps, consecutiveFailsRef: failures }));
+  await act(async () => { result.current.play({ ...track, id: 'next-in-queue' }, ['source-test','next-in-queue'], { keepMix: true }); });
+  expect(failures.current).toBe(2);
+});
+
+it('detaches an active blob before revoking its URL, including a local retry', async () => {
+  mocks.blob.mockResolvedValue(new Blob(['audio'], { type: 'audio/webm' }));
+  const { result, track, audio } = setup(true);
+  await act(async () => { result.current.play(track); });
+  const previous = audio.getAttribute('src');
+  const revoked = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(url => {
+    expect(audio.getAttribute('src')).not.toBe(url);
+  });
+  await act(async () => { await result.current.retrySource(track.id); });
+  expect(revoked).toHaveBeenCalledWith(previous);
+  await act(async () => { result.current.play({ ...track, id: 'following-local' }, [track.id,'following-local'], { keepMix: true }); });
   expect(mocks.ensure).not.toHaveBeenCalled();
 });
 

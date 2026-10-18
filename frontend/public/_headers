@@ -12,3 +12,6 @@
 
 /downloads-worker.js
   Cache-Control: no-cache
+
+/offline-artwork.js
+  Cache-Control: no-cache

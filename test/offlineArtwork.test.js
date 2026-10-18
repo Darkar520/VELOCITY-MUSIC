@@ -57,3 +57,32 @@ test('a partial replacement preserves already saved artwork and known text witho
     assert.equal(meta.artworkStatus, 'ready');
   } finally { globalThis.fetch = fetcher; }
 });
+
+test('a list-sized cached cover repairs original-size metadata without network access', async () => {
+  const fetcher = globalThis.fetch, cacheStorage = globalThis.caches;
+  let network = 0;
+  const original = '/img?u=' + encodeURIComponent('https://lh3.googleusercontent.com/album=w1200-h1200-l90-rj') + '&id=saved';
+  const cached = new Request('https://velocity.invalid/img?u=' + encodeURIComponent('https://lh3.googleusercontent.com/album=w512-h512-l90-rj') + '&id=saved');
+  try {
+    globalThis.fetch = async () => { network++; throw new Error('server unavailable'); };
+    globalThis.caches = {
+      keys: async () => ['velocity-v91'],
+      open: async () => ({ keys: async () => [cached], match: async request => request.url === cached.url ? new Response('hello', { headers: { 'content-type': 'image/png' } }) : undefined }),
+    };
+    const meta = await art.prepare({ id: 'saved', cover: original });
+    assert.equal(meta.cover, image);
+    assert.equal(meta.artworkStatus, 'ready');
+    assert.equal(network, 0);
+  } finally { globalThis.fetch = fetcher; globalThis.caches = cacheStorage; }
+});
+
+test('cached variant matching never substitutes a different album or another explicit fallback id', async () => {
+  const cacheStorage = globalThis.caches;
+  try {
+    const wrong = new Request('https://velocity.invalid/img?u=' + encodeURIComponent('https://lh3.googleusercontent.com/other=w512-h512-l90-rj') + '&id=saved');
+    const otherId = new Request('https://velocity.invalid/img?u=' + encodeURIComponent('https://lh3.googleusercontent.com/album=w512-h512-l90-rj') + '&id=other');
+    globalThis.caches = { keys: async () => ['velocity-v91'], open: async () => ({ keys: async () => [wrong, otherId], match: async request => [wrong.url, otherId.url].includes(request.url || request) ? new Response('hello', { headers: { 'content-type': 'image/png' } }) : undefined }) };
+    const url = '/img?u=' + encodeURIComponent('https://lh3.googleusercontent.com/album=w900-h900-l90-rj') + '&id=saved';
+    assert.equal(await art.cached(url), null);
+  } finally { globalThis.caches = cacheStorage; }
+});

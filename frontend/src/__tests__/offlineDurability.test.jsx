@@ -294,6 +294,32 @@ describe('cuota agotada', () => {
 describe('store de metadatos separado (v3)', () => {
   beforeEach(() => { vi.resetModules(); });
 
+  it('repairs a legacy download from its list-size HTTP cache while offline in a 354-song library', async () => {
+    const original = '/img?u=' + encodeURIComponent('https://lh3.googleusercontent.com/album=w1200-h1200-l90-rj') + '&id=legacy';
+    const cachedUrl = new URL('/img?u=' + encodeURIComponent('https://lh3.googleusercontent.com/album=w512-h512-l90-rj') + '&id=legacy', location.origin).href;
+    const records = Array.from({ length: 354 }, (_, i) => {
+      const id = i === 0 ? 'legacy' : 'saved-' + i;
+      const meta = { id, title: id, cover: i === 0 ? original : 'data:image/png;base64,aGVsbG8=' };
+      return { id, meta, blob: new Blob(['audio-' + i]), at: i };
+    });
+    const stub = makeIDBStubV3(records, records);
+    vi.stubGlobal('indexedDB', stub);
+    const fetcher = vi.fn(() => { throw new Error('offline'); });
+    vi.stubGlobal('fetch', fetcher);
+    vi.stubGlobal('caches', { keys: async () => ['velocity-v91'], open: async () => ({ keys: async () => [{ url: cachedUrl }], match: async request => (request.url || request) === cachedUrl ? new Response(new NativeBlob(['artwork'], { type: 'image/png' })) : undefined }) });
+    vi.stubGlobal('navigator', { onLine: false });
+    try {
+      const offline = await import('../offline.js');
+      const repaired = await offline.backfillCovers();
+      expect(repaired).toHaveLength(1);
+      expect(repaired[0].id).toBe('legacy');
+      expect(repaired[0].cover).toMatch(/^data:image\/png;base64,/);
+      expect(stub.__meta.get('legacy').meta.cover).toBe(repaired[0].cover);
+      expect(fetcher).not.toHaveBeenCalled();
+      for (const record of records) expect(stub.__tracks.get(record.id).blob).toBe(record.blob);
+    } finally { vi.unstubAllGlobals(); }
+  });
+
   it('repairs an empty legacy cover when the catalog knows the image', async () => {
     const blob = new Blob(['original-audio']);
     const meta = { id: 'empty-legacy-cover', title: 'Title', artist: 'Artist', cover: '' };

@@ -10,7 +10,8 @@
  *    Si falla, se detiene y comunica el motivo en vez de dejar el spinner activo.
  *  - Sin intención de play (A13): PLAY_FAILED 'stale' y se resetea el contador,
  *    nunca se auto-reproduce.
- *  - Las fuentes blob: (descargas offline) no se reintentan.
+ *  - Blob: renovar una URL local una vez, conservando bytes y disponibilidad.
+ *    Si vuelve a fallar, detener sin saltar pistas ni invalidar descargas.
  *  - Agotado el reintento: anti-cascada. Al 3er fallo consecutivo de pistas
  *    distintas se detiene con aviso; si no, se salta a la siguiente de la cola.
  *
@@ -27,18 +28,23 @@ export function useAudioErrorRecovery({
   playErrorRef, consecutiveFailsRef,
   track, queue, quality,
   getMachine, dispatchAudio, setTrack, setLoadingAudio, setPlaying,
-  showToast, next,
+  showToast, next, retrySource,
 }) {
   const handleAudioError = (failure) => {
     // Ignorar errores al vaciar src o sin URL real (cambio de pista).
     if (effectCtxRef.current?._suppressAudioError) return;
     const a = audioRef.current;
-    const rawSrc = (a?.currentSrc || a?.getAttribute?.('src') || a?.src || '').trim();
+    const rawSrc = (a?.getAttribute ? a.getAttribute('src') || '' : a?.currentSrc || a?.src || '').trim();
     if (!a || !rawSrc || rawSrc === (typeof location !== 'undefined' ? location.href : '')) return;
+    // Queued events from a cleared/replaced resource do not establish a
+    // failure of the new song. A fresh load resets the native MediaError.
+    if (failure?.kind !== 'stall' && !a.error) return;
+    if (a.currentSrc && a.currentSrc !== new URL(rawSrc, location.href).href) return;
     // El elemento <audio> no expone el body 401/502; se vuelve a preparar una vez.
 
     selfPauseRef.current = false;
     const cur = track?.id;
+    if (getMachine().trackId && getMachine().trackId !== cur) return;
     if (!cur) {
       dispatchAudio({ type: 'PLAY_FAILED', reason: 'no-el' });
       return;
@@ -55,7 +61,25 @@ export function useAudioErrorRecovery({
     const interruptedAt = Number.isFinite(failure?.position)
       ? failure.position : Number(a.currentTime);
     const duration = Number(a.duration);
-    const isBlob = typeof a.currentSrc === 'string' && a.currentSrc.startsWith('blob:');
+    const isBlob = rawSrc.startsWith('blob:');
+    if (isBlob && retrySource) {
+      if (st.id === cur && st.localUrl === rawSrc) return;
+      const localAttempts = st.id === cur ? (st.localAttempts || 0) : 0;
+      // Recover transient URL/decoder startup using the same saved bytes.
+      if (localAttempts < 1) {
+        playErrorRef.current = { id: cur, n: 0, localAttempts: 1, localUrl: rawSrc };
+        setLoadingAudio(true);
+        retrySource(cur);
+        return;
+      }
+      dispatchAudio({ type: 'USER_PAUSE' });
+      setLoadingAudio(false);
+      setPlaying(false);
+      showToast('No se pudo iniciar el audio local. La descarga se conserva; no se han saltado canciones.');
+      api.reportPlaybackError({ trackId: cur, errorCode: 'AUDIO_LOCAL_START_FAILED',
+        errorMessage: `MediaError ${a.error?.code || 0}; local URL reopened once; saved bytes retained.` }).catch(() => {});
+      return;
+    }
     // Reintentos solo con intención de play y con límite corto.
     if (n < MAX_PLAY_RETRIES && !isBlob) {
       const attempt = n + 1;
