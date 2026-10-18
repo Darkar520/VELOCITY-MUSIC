@@ -76,3 +76,25 @@ metadata decodificada implique reproducción completa ni que Windows pruebe
 la presentación física o todas las condiciones de Samsung/Brave. La causa
 exacta de cada evento del teléfono requiere validar la versión nueva allí;
 el mecanismo y los defectos anteriores sí están reproducidos localmente.
+
+## Cierre de restauración online: 3.23 / worker v94
+
+La comprobación pública posterior de 3.22 encontró otro camino: al reabrir con
+una firma remota vigente en velocity.player, hydratePlayerStoreOnce montaba esa
+URL y HYDRATE marcaba la fuente ready antes de consultar IndexedDB. La protección
+contra restauraciones tardías conservaba esa fuente ya montada. La prueba online
+no pasó: quedó una fuente HTTPS en 0:00, pese a tener un archivo local reproducible.
+
+La firma guardada se conserva como metadata, pero ya no se monta desde el
+snapshot. La máquina restaura posición e identidad con urlFresh=false; el
+archivo local o ensureStream deciden después la fuente. Esto mantiene la
+protección de epoch contra selecciones posteriores sin privilegiar una URL
+remota sobre la descarga.
+
+La nueva regresión con firma realmente vigente falló antes del ajuste y pasa
+después. El control nativo prepara una firma válida mediante stream-sign para
+OnGf-JgMaSU y reabre la app: antes del toque, el elemento ya tiene blob; con un
+toque reproduce desde 134.97 a 135.07 s, con internet, cero errores y ninguna
+preparación remota. Artefactos adicionales: public-online-reopen.json documenta
+el control fallido de 3.22; restored-signed-online-323.json documenta el positivo.
+Gate local: 461 pruebas Node y frontend completo de 554 pruebas en 48 archivos.

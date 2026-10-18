@@ -503,7 +503,9 @@ export default function App() {
       type: 'HYDRATE',
       trackId: s.track.id,
       position: s.t || 0,
-      urlFresh: isStreamUrlFresh(s.track.url),
+      // Source availability must be resolved local-first, even if the saved
+      // remote signature has not expired. The chosen source is mounted later.
+      urlFresh: false,
     });
   }, []);
 

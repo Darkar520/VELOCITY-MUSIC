@@ -11,7 +11,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { usePlayerStore } from '../store/playerStore.js';
 import { loadPlayerState, trackById, bestCoverFor, subscribeTrack, cacheTrack } from '../catalog.js';
-import { isStreamUrlFresh } from '../audioContinuity.js';
 
 function makeSetter(key) {
   return (value) => {
@@ -37,8 +36,8 @@ export function hydratePlayerStoreOnce() {
     const best = bestCoverFor(track.id, track.cover || '');
     if (best) track = { ...track, cover: best };
   }
-  const u = track.url || null;
-  const playSrc = isStreamUrlFresh(u) ? u : null;
+  // A persisted remote URL is metadata, not a source decision. Mounting it
+  // now bypasses IndexedDB on the first USER_PLAY after a cold online start.
   const queue = Array.isArray(s.queue) && s.queue.length ? s.queue : (track.id ? [track.id] : []);
 
   usePlayerStore.setState({
@@ -47,7 +46,7 @@ export function hydratePlayerStoreOnce() {
     time: s.t || 0,
     duration: 0,
     queue,
-    playSrc,
+    playSrc: null,
     loadingAudio: false,
   });
 }
