@@ -83,6 +83,14 @@ test('runAudioEffects: clearSrc y ensureStream delegan (sin load vacío)', () =>
   assert.equal(loaded, false, 'clearSrc NO debe load() sin src (dispara onError)');
 });
 
+test('clearing audio removes src without assigning an empty URL that starts another resource selection', () => {
+  const writes = [];
+  const audio = { pause() {}, removeAttribute(name) { assert.equal(name, 'src'); },
+    set src(value) { writes.push(value); } };
+  hardStopAudio({ audioRef: { current: audio } });
+  assert.deepEqual(writes, []);
+});
+
 test('hasRealMediaSrc rechaza vacío y location.href', () => {
   assert.equal(hasRealMediaSrc(null), false);
   assert.equal(hasRealMediaSrc({ src: '', currentSrc: '', getAttribute: () => null }), false);

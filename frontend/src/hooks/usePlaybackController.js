@@ -237,45 +237,52 @@ export function usePlaybackController(deps) {
   }, [audioRef, fadeRafRef, fadeSafetyRef, vol]);
 
   ensureStreamFnRef.current = async (trackId) => {
+    if (getMachine().trackId !== trackId || getMachine().intent !== 'play') return;
     const t = trackById(trackId)
       || (trackRef.current?.id === trackId ? trackRef.current : null)
       || (playSnapRef.current?.id === trackId ? playSnapRef.current : null);
-    if (!t || !t.title) {
-      // Reintento corto: a veces el catálogo aún no tiene la meta.
-      const n = signFailRef.current.id === trackId ? signFailRef.current.n + 1 : 1;
-      signFailRef.current = { id: trackId, n };
-      if (n <= 2) {
-        await new Promise((r) => setTimeout(r, 120));
-        if (getMachine().trackId === trackId) return ensureStreamFnRef.current(trackId);
-      }
-      setLoadingAudio?.(false);
-      return;
-    }
-    if (!t.artist) {
-      // Firma exige artist+title; sin artista no hay stream-sign.
-      setLoadingAudio?.(false);
-      showToast?.('Falta el artista de esta pista. Prueba buscarla de nuevo.');
-      return;
-    }
-    const qParam = QUALITY_MAP[quality] || 'high';
-    const sp = streamParamsFor(t, qParam);
     resolveAbortRef.current?.abort();
     const resolveController = new AbortController();
     resolveAbortRef.current = resolveController;
     try {
-      if (downloaded.has(trackId)) {
-        // A stale download index or unavailable IDB must retain online fallback.
-        const b = await offline.getBlob(trackId).catch(() => null);
-        if (resolveController.signal.aborted) return;
-        if (b && canUseOfflineAudio(b) && getMachine().trackId === trackId) {
-          if (objUrlRef.current) { try { URL.revokeObjectURL(objUrlRef.current); } catch { /* ignore */ } }
-          const u = URL.createObjectURL(b);
-          objUrlRef.current = u;
-          signFailRef.current = { id: null, n: 0 };
-          dispatchAudio({ type: 'STREAM_READY', trackId, url: u });
-          return;
-        }
+      // IndexedDB owns availability; the React badge can lag a worker write.
+      // Local bytes require neither artist metadata nor a signed stream URL.
+      const b = await offline.getBlob(trackId).catch(() => null);
+      if (resolveController.signal.aborted || !mountedRef.current) return;
+      if (b && canUseOfflineAudio(b) && getMachine().trackId === trackId && getMachine().intent === 'play') {
+        const previousUrl = objUrlRef.current;
+        const u = URL.createObjectURL(b);
+        objUrlRef.current = u;
+        signFailRef.current = { id: null, n: 0 };
+        dispatchAudio({ type: 'STREAM_READY', trackId, url: u });
+        if (previousUrl && previousUrl !== u) { try { URL.revokeObjectURL(previousUrl); } catch {} }
+        return;
       }
+      if (getMachine().trackId !== trackId || getMachine().intent !== 'play') return;
+      if (backendDown || navigator.onLine === false) {
+        dispatchAudio({ type: 'USER_PAUSE' });
+        showToast?.('Sin conexión: no hay una copia local reproducible. La descarga pendiente se conserva para repararla al volver.');
+        return;
+      }
+      if (!t || !t.title) {
+        // Reintento corto: a veces el catálogo aún no tiene la meta.
+        const n = signFailRef.current.id === trackId ? signFailRef.current.n + 1 : 1;
+        signFailRef.current = { id: trackId, n };
+        if (n <= 2) {
+          await new Promise((r) => setTimeout(r, 120));
+          if (getMachine().trackId === trackId) return ensureStreamFnRef.current(trackId);
+        }
+        dispatchAudio({ type: 'USER_PAUSE' });
+        showToast?.('Faltan los datos de esta pista y no se encontró una copia local reproducible.');
+        return;
+      }
+      if (!t.artist) {
+        dispatchAudio({ type: 'USER_PAUSE' });
+        showToast?.('Falta el artista de esta pista. Prueba buscarla de nuevo.');
+        return;
+      }
+      const qParam = QUALITY_MAP[quality] || 'high';
+      const sp = streamParamsFor(t, qParam);
       // Usar solo la firma de la pista actual. Si una precarga anterior ya dejó
       // la firma en caché, peek evita otra petición; si no, ensureStreamUrl es
       // la única resolución del camino crítico.
@@ -455,7 +462,7 @@ export function usePlaybackController(deps) {
     // debe empezar limpia. Sin esto, fallos de pistas anteriores acumulan en
     // consecutiveFailsRef y disparan el corte anti-cascada antes de tiempo.
     if (playErrorRefDep) playErrorRefDep.current = { id: null, n: 0 };
-    if (consecutiveFailsRefDep) consecutiveFailsRefDep.current = 0;
+    if (consecutiveFailsRefDep && !opts.keepMix) consecutiveFailsRefDep.current = 0;
     try {
       cancelAnimationFrame(fadeRafRef.current);
       clearTimeout(fadeSafetyRef.current);
@@ -481,7 +488,8 @@ export function usePlaybackController(deps) {
     const qParam = QUALITY_MAP[quality] || 'high';
     const sp = streamParamsFor(t, qParam);
 
-    if (objUrlRef.current) { URL.revokeObjectURL(objUrlRef.current); objUrlRef.current = null; }
+    const previousUrl = objUrlRef.current;
+    objUrlRef.current = null;
 
     // TRACK_SET: live/session=0, clearSrc (hardStop), ensureStream. Seek 0.
     // No volver a bumpAudioEpoch aquí: STREAM_READY del peek/sign debe
@@ -489,23 +497,8 @@ export function usePlaybackController(deps) {
     const metadataDuration = trackById(t.id)?.durationSeconds;
     usePlayerStore.getState().setDuration(Number.isFinite(metadataDuration) && metadataDuration > 0 ? metadataDuration : 0);
     dispatchAudio({ type: 'TRACK_SET', trackId: t.id, intent: 'play' });
+    if (previousUrl) { try { URL.revokeObjectURL(previousUrl); } catch {} }
     setTime(0);
-
-    if (downloaded.has(t.id)) {
-      const trackWithQuality = { ...t, url: api.streamUrl(sp) };
-      setTrack(trackWithQuality);
-      // TRACK_SET -> ensureStream also owns offline lookup and online fallback.
-      afterPlaySideEffects(t, { ...t, url: api.streamUrl(sp) }, initialQueue, qParam, opts);
-      return;
-    }
-
-    if (backendDown) {
-      setTrack({ ...t, url: '' });
-      dispatchAudio({ type: 'USER_PAUSE' });
-      setPlaySrc(null);
-      showToast?.('Sin conexión: esta canción no está descargada');
-      return;
-    }
 
     const trackWithQuality = { ...t, url: api.streamUrl(sp) };
     setTrack(trackWithQuality);
@@ -514,8 +507,8 @@ export function usePlaybackController(deps) {
     // A single path owns peek/sign/blob and STREAM_READY: TRACK_SET -> ensureStream.
   }, [
     setPlayingFrom, audioRef, fadeRafRef, fadeSafetyRef, selfPauseRef, pendingFadeRef,
-    vol, setQueue, quality, streamParamsFor, objUrlRef, dispatchAudio, setTime, downloaded,
-    setTrack, getMachine, afterPlaySideEffects, backendDown, setPlaySrc, showToast,
+    vol, setQueue, quality, streamParamsFor, objUrlRef, dispatchAudio, setTime,
+    setTrack, getMachine, afterPlaySideEffects,
     playErrorRefDep, consecutiveFailsRefDep,
   ]);
 
@@ -643,6 +636,7 @@ export function usePlaybackController(deps) {
     fadeInAudio,
     effectCtxRef,
     ensureStreamFnRef,
+    retrySource: (trackId) => ensureStreamFnRef.current(trackId),
     playGenRef,
     orderIds,
     nextCover,

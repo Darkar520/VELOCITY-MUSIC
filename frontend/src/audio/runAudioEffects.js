@@ -55,8 +55,9 @@ export function hardStopAudio(ctx) {
       try {
         // Quitar src sin load(): evita error event en elemento vacío.
         a.removeAttribute('src');
-        // Algunos browsers dejan a.src = location.href; forzar vacío lógico.
-        try { a.src = ''; } catch { /* ignore */ }
+        // Do not assign src='': it starts an empty-resource selection and can
+        // emit MEDIA_ERR_SRC_NOT_SUPPORTED while currentSrc is still the old
+        // valid blob. The absent attribute is the authoritative empty state.
       } catch { /* ignore */ }
     }
   } catch { /* ignore */ }
