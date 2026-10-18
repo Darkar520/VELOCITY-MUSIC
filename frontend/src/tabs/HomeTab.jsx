@@ -1,19 +1,19 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { SEED_ROWS, LATIN_ROWS, DISCOVERY, GENRES, ONBOARDING_GENRES, MOODS, ERAS, FALLBACK_COVER } from '../constants.js';
-import { hex2rgba, grad, hiResCover, dedupeByTitle } from '../helpers.js';
+import React, { useState } from 'react';
+import { ONBOARDING_GENRES } from '../constants.js';
+import { hex2rgba, grad, dedupeByTitle } from '../helpers.js';
 import { Icon } from '../Icons.jsx';
-import { EQViz, Spinner, CoverImg, SectionHeader, TrackRow, MediaCard, MixCard, RangeSlider } from '../components.jsx';
+import { EQViz, Spinner, CoverImg, SectionHeader, MediaCard } from '../components.jsx';
 import { trackById } from '../catalog.js';
 import { Avatar } from '../avatars.jsx';
 import { useLibraryStore } from '../store/libraryStore.js';
 import { usePlayerStore } from '../store/playerStore.js';
-import { api } from '../api.js';
+import { useOnboardingArtists } from '../hooks/useOnboardingArtists.js';
+import { HomeDiscovery } from '../components/HomeDiscovery.jsx';
 
 export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMenu, onToggleFav, goMix, displayName, avatar, email, setTab, startAiDj, onboardPrefs, setOnboardPrefs, backendDown }) {
   // Library store
   const favs = useLibraryStore((s) => s.favs);
   const recent = useLibraryStore((s) => s.recent);
-  const playlists = useLibraryStore((s) => s.playlists);
   const homeRows = useLibraryStore((s) => s.homeRows);
   const homeLoading = useLibraryStore((s) => s.homeLoading);
   const catVer = useLibraryStore((s) => s.catVer);
@@ -28,180 +28,31 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
   const [onboardSel, setOnboardSel] = useState([]);
   const [onboardStep, setOnboardStep] = useState(1); // 1=géneros, 2=artistas
   const [artistSel, setArtistSel] = useState([]);
-  const [artistSuggestions, setArtistSuggestions] = useState([]);
-  const [artistsLoading, setArtistsLoading] = useState(false);
+  const [artistFilter, setArtistFilter] = useState('');
+  const [editingPrefs, setEditingPrefs] = useState(false);
+  const showOnboarding = editingPrefs || (onboardPrefs === null && !recent.length && !favs.length);
+  const finishOnboarding = value => { setOnboardPrefs(value); setEditingPrefs(false); };
+  const editPrefs = () => {
+    setOnboardSel(Array.isArray(onboardPrefs) ? onboardPrefs : onboardPrefs?.genres || []);
+    setArtistSel(onboardPrefs?.artists || []);setArtistFilter('');setOnboardStep(1);setEditingPrefs(true);
+  };
   const [relatedArtists, setRelatedArtists] = useState([]);
-  const relatedArtistsRef = useRef([]);
-  useEffect(() => { relatedArtistsRef.current = relatedArtists; }, [relatedArtists]);
-
-  // Paso 2: cargar artistas sugeridos en base a los géneros elegidos.
-  // Estrategia: extraer artistas únicos de las canciones devueltas por cada
-  // búsqueda de género. searchArtists() de YouTube Music requiere un nombre
-  // concreto — no sirve para consultas de género — por eso usamos songs[].
-  useEffect(() => {
-    if (onboardStep !== 2) return;
-    setArtistsLoading(true);
-    setArtistSuggestions([]);
-    setRelatedArtists([]);
-    let cancelled = false;
-    const seeds = onboardSel.slice(0, 10);
-    // Helper: extraer artistas únicos de los resultados de searchAll
-    const extractArtists = (results, seenKey, limit = 36) => {
-      const artists = [];
-      for (const r of results) {
-        if (r.status !== 'fulfilled') continue;
-        const data = r.value || {};
-        // Primero los artists[] directos (a veces presentes para artistas concretos).
-        for (const a of (data.artists || [])) {
-          if (!a?.name) continue;
-          const key = a.artistId || a.name.toLowerCase().replace(/\s+/g, '');
-          if (seenKey.has(key)) continue;
-          seenKey.add(key);
-          artists.push({
-            artistId: a.artistId || null,
-            name: a.name,
-            thumbnail: a.thumbnail || null,
-            _key: key,
-          });
-        }
-        // Fuente principal: extraer artistas de las canciones del género.
-        for (const s of (data.songs || [])) {
-          if (!s?.artist) continue;
-          const key = s.artistId || s.artist.toLowerCase().replace(/\s+/g, '');
-          if (seenKey.has(key)) continue;
-          seenKey.add(key);
-          artists.push({
-            artistId: s.artistId || null,
-            name: s.artist,
-            thumbnail: s.artworkUrl || s.cover || null,
-            _key: key,
-          });
-          if (artists.length >= limit) break;
-        }
-        if (artists.length >= limit) break;
-      }
-      return artists;
-    };
-
-    const seenKey = new Set();
-
-    // Lote 1: primeros 3 géneros — publicar en cuanto lleguen (feedback rápido)
-    const batch1Seeds = seeds.slice(0, 3);
-    const batch2Seeds = seeds.slice(3);
-
-    Promise.allSettled(
-      batch1Seeds.map(g => api.searchAll(g.q).catch(() => ({ songs: [], albums: [], artists: [] })))
-    ).then(results => {
-      if (cancelled) return;
-      const artists = extractArtists(results, seenKey, 24);
-      if (artists.length > 0) {
-        setArtistSuggestions(prev => {
-          const existingKeys = new Set(prev.map(a => a._key || a.artistId || a.name.toLowerCase().replace(/\s+/g, '')));
-          const fresh = artists.filter(a => !existingKeys.has(a._key || a.artistId || a.name.toLowerCase().replace(/\s+/g, '')));
-          return [...prev, ...fresh].slice(0, 24);
-        });
-        setArtistsLoading(false); // ocultar spinner en cuanto llega el primer lote
-      }
-      // Si batch1 no produjo artistas y no hay batch2, cerrar el spinner aquí.
-      // Sin este guard, si todos los searchAll de batch1 devuelven vacío y
-      // batch2Seeds está vacío (≤3 géneros seleccionados), el spinner queda infinito.
-      if (artists.length === 0 && batch2Seeds.length === 0) setArtistsLoading(false);
-    });
-
-    // Lote 2: géneros restantes — añadir más artistas al grid ya visible
-    if (batch2Seeds.length > 0) {
-      Promise.allSettled(
-        batch2Seeds.map(g => api.searchAll(g.q).catch(() => ({ songs: [], albums: [], artists: [] })))
-      ).then(results => {
-        if (cancelled) return;
-        const moreArtists = extractArtists(results, seenKey, 24);
-        if (moreArtists.length > 0) {
-          setArtistSuggestions(prev => {
-            const existingKeys = new Set(prev.map(a => a._key || a.artistId || a.name.toLowerCase().replace(/\s+/g, '')));
-            const fresh = moreArtists.filter(a => !existingKeys.has(a._key || a.artistId || a.name.toLowerCase().replace(/\s+/g, '')));
-            return [...prev, ...fresh].slice(0, 36); // ampliar el grid con más artistas
-          });
-          setArtistsLoading(false); // por si el lote 1 no tuvo resultados
-        } else {
-          setArtistsLoading(false); // garantizar que el spinner siempre se oculta
-        }
-      });
-    }
-    return () => { cancelled = true; };
-  }, [onboardStep, onboardSel]);
-  // Carga artistas relacionados cuando el usuario selecciona uno en el onboarding.
-  // Si el artista tiene artistId usamos su perfil (topSongs). Si no, buscamos por
-  // nombre y extraemos artistas distintos del resultado — nunca lanzamos 400.
-  const fetchRelated = async (artist) => {
-    try {
-      let relatedSongs = [];
-      if (artist.artistId) {
-        // Tenemos artistId: perfil del artista → topSongs
-        const data = await api.artist(artist.artistId);
-        relatedSongs = data.topSongs || [];
-      } else {
-        // Sin artistId: buscar canciones del artista por nombre y extraer otros artistas.
-        const data = await api.searchAll(artist.name).catch(() => ({ songs: [] }));
-        const target = (artist.name || '').toLowerCase().replace(/\s+/g, '');
-        // Para búsqueda por nombre: incluir TODO (queremos artistas co-ocurrentes)
-        relatedSongs = data.songs || [];
-        // Excluir canciones del mismo artista que se seleccionó
-        relatedSongs = relatedSongs.filter(s => {
-          const a = (s.artist || '').toLowerCase().replace(/\s+/g, '');
-          return a !== target;
-        });
-      }
-      // seenAll: solo el artista seleccionado + los ya en relatedArtists (via ref para evitar stale closure)
-      // No excluir artistSuggestions — queremos que los relacionados puedan solapar con ellas
-      const seenAll = new Set([
-        artist.artistId || artist.name.toLowerCase().replace(/\s+/g, ''),
-        ...relatedArtistsRef.current.map(a => a.artistId || a.name.toLowerCase().replace(/\s+/g, '')),
-      ]);
-      const newRelated = [];
-      for (const s of relatedSongs) {
-        if (!s.artist) continue;
-        const key = s.artistId || s.artist.toLowerCase().replace(/\s+/g, '');
-        if (seenAll.has(key)) continue;
-        seenAll.add(key);
-        newRelated.push({
-          artistId: s.artistId || null,
-          name: s.artist,
-          thumbnail: s.artworkUrl || s.cover || null,
-          _key: key,
-        });
-        if (newRelated.length >= 8) break;
-      }
-      if (newRelated.length > 0) {
-        setRelatedArtists(prev => {
-          const existingKeys = new Set(prev.map(a => a._key || a.artistId || a.name.toLowerCase().replace(/\s+/g, '')));
-          const fresh = newRelated.filter(a => !existingKeys.has(a._key || a.artistId || a.name.toLowerCase().replace(/\s+/g, '')));
-          return [...prev, ...fresh].slice(0, 20);
-        });
-      }
-    } catch { /* ignorar — no romper el onboarding */ }
+  const { artists: artistSuggestions, loading: artistsLoading } = useOnboardingArtists(onboardStep, onboardSel);
+  // Similarity here means shared selected genre, not song-upload cooccurrence.
+  const fetchRelated = artist => {
+    const candidates = artistSuggestions.filter(a => a.genre && a.genre === artist.genre && a._key !== artist._key);
+    setRelatedArtists(candidates.slice(0,8));
   };
 
-  // Recientes: ids de historial → catálogo; si faltan metas, rellenar con pistas del feed.
-  const recentTracks = React.useMemo(() => {
-    const fromHist = dedupeByTitle((recent || []).map(trackById).filter(Boolean));
-    if (fromHist.length >= 3) return fromHist.slice(0, 30);
-    const fromFeed = [];
-    for (const sec of homeRows || []) {
-      for (const mix of sec.mixes || []) {
-        for (const t of mix.tracks || []) {
-          if (t?.id) fromFeed.push(t);
-        }
-      }
-    }
-    return dedupeByTitle([...fromHist, ...fromFeed]).slice(0, 30);
-  }, [recent, homeRows, catVer]);
+  // Listening history must never be fabricated from recommended tracks.
+  const recentTracks = React.useMemo(() => dedupeByTitle((recent || []).map(trackById).filter(Boolean)).slice(0,12), [recent, catVer]);
   const recentIds = recentTracks.map(t => t.id);
   const hour = new Date().getHours();
   const greet = hour < 6 ? 'Buenas noches' : hour < 12 ? 'Buenos días' : hour < 19 ? 'Buenas tardes' : 'Buenas noches';
 
   return (
     <div className="fade-up" style={{ paddingBottom:8 }}>
-      {onboardPrefs === null && !recent.length && !favs.length && (
+      {showOnboarding && (
         <div style={{ padding:'20px 0 30px', textAlign:'center' }}>
           {/* Indicador de paso */}
           <div style={{ display:'flex', gap:6, justifyContent:'center', marginBottom:16 }}>
@@ -236,6 +87,7 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
             <>
               <div style={{ fontSize:22, fontWeight:900, color:'var(--txt-0)', marginBottom:6 }}>¿Qué artistas te gustan?</div>
               <div style={{ fontSize:12.5, color:'var(--txt-2)', marginBottom:20 }}>Selecciona los que quieras — o sáltate este paso</div>
+              <input aria-label="Filtrar artistas sugeridos" placeholder="Encuentra tus artistas entre las sugerencias" value={artistFilter} onChange={e=>setArtistFilter(e.target.value)} style={{width:'min(100%, 420px)',boxSizing:'border-box',padding:'13px 16px',marginBottom:18,borderRadius:12,border:'1px solid var(--line)',background:'var(--surf-1)',color:'var(--txt-0)',fontSize:13}} />
 
               {artistsLoading && artistSuggestions.length === 0 && (
                 <div style={{ display:'flex', justifyContent:'center', alignItems:'center', gap:10, padding:'24px 0', color:'var(--txt-2)' }}>
@@ -259,9 +111,9 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
                         setArtistSel(prev => [...prev, a]);
                         fetchRelated(a);
                       }
-                    }} className="btn-tap press" style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:6, background:'none', border:'none', cursor:'pointer', padding:'4px 6px', width:80 }}>
+                    }} aria-pressed={active} className="btn-tap press" style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:6, background:'none', border:'none', cursor:'pointer', padding:'4px 6px', width:80 }}>
                       <div style={{ position:'relative' }}>
-                        <CoverImg src={a.thumbnail} alt={a.name} radius={999} size={56} style={{ width:56, height:56, boxShadow: active ? `0 0 0 2.5px ${T.accent}` : 'none', transition:'box-shadow .15s ease' }} />
+                        {a.thumbnail ? <CoverImg src={a.thumbnail} alt="" radius={999} size={56} style={{ width:56, height:56, boxShadow: active ? `0 0 0 2.5px ${T.accent}` : 'none' }} /> : <span aria-hidden="true" style={{width:56,height:56,borderRadius:'50%',display:'grid',placeItems:'center',background:active?T.accent:'var(--surf-2)',color:active?'#07170f':'var(--txt-0)',border:`1px solid ${active?T.accent:'var(--line)'}`,fontWeight:800,fontSize:18}}>{a.name.split(/\s+/).slice(0,2).map(n=>n[0]).join('')}</span>}
                         {active && (
                           <div style={{ position:'absolute', bottom:0, right:0, width:18, height:18, borderRadius:'50%', background:T.accent, display:'flex', alignItems:'center', justifyContent:'center' }}>
                             <Icon.Check c="#000" sz={11} />
@@ -275,7 +127,7 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
                 return (
                   <div style={{ marginBottom:24, maxHeight:'60vh', overflowY:'auto' }}>
                     <div style={{ display:'flex', flexWrap:'wrap', gap:14, justifyContent:'center' }}>
-                      {artistSuggestions.map(ArtistChip)}
+                      {artistSuggestions.filter(a=>a.name.toLocaleLowerCase().includes(artistFilter.toLocaleLowerCase())).map(ArtistChip)}
                     </div>
                     {relatedArtists.length > 0 && (
                       <>
@@ -297,15 +149,16 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
                 <button onClick={() => setOnboardStep(1)} className="btn-tap" style={{ padding:'12px 22px', borderRadius:99, border:'1.5px solid var(--line)', background:'var(--surf-1)', color:'var(--txt-1)', fontSize:14, fontWeight:700, cursor:'pointer' }}>
                   Atrás
                 </button>
-                <button onClick={() => setOnboardPrefs({ genres: onboardSel, artists: artistSel })} className="btn-tap" style={{ padding:'12px 36px', borderRadius:99, border:'none', background:T.accent, color:'#000', fontSize:14, fontWeight:800, cursor:'pointer' }}>
+                <button onClick={() => finishOnboarding({ genres: onboardSel, artists: artistSel })} className="btn-tap" style={{ padding:'12px 36px', borderRadius:99, border:'none', background:T.accent, color:'#000', fontSize:14, fontWeight:800, cursor:'pointer' }}>
                   Empezar
                 </button>
               </div>
-              <button onClick={() => setOnboardPrefs({ genres: onboardSel, artists: [] })} className="btn-tap" style={{ background:'transparent', border:`1px solid var(--line)`, borderRadius:99, padding:'7px 18px', color:'var(--txt-2)', fontSize:11.5, fontWeight:600, cursor:'pointer', marginTop:10, letterSpacing:.3 }}>
+              <button onClick={() => finishOnboarding({ genres: onboardSel, artists: [] })} className="btn-tap" style={{ background:'transparent', border:`1px solid var(--line)`, borderRadius:99, padding:'7px 18px', color:'var(--txt-2)', fontSize:11.5, fontWeight:600, cursor:'pointer', marginTop:10, letterSpacing:.3 }}>
                 Omitir este paso
               </button>
             </>
           )}
+          {editingPrefs && <button className="discovery-link" onClick={()=>setEditingPrefs(false)}>Cancelar</button>}
         </div>
       )}
 
@@ -322,44 +175,12 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
         </div>
       </div>
 
-      {track && (
-        <div onClick={() => play(track)} style={{ position:'relative', background:`linear-gradient(135deg, ${hex2rgba(T.accent,.22)}, ${hex2rgba(T.accent2,.06)}), var(--surf-0)`, border:`1px solid ${hex2rgba(T.accent,.28)}`, borderRadius:22, padding:'15px 17px', marginBottom:24, display:'flex', alignItems:'center', gap:14, overflow:'hidden', boxShadow:`0 12px 34px ${hex2rgba(T.accent,.14)}`, cursor:'pointer' }}>
-          <div style={{ position:'absolute', top:-30, right:-20, width:120, height:120, borderRadius:'50%', background:grad(T), filter:'blur(40px)', opacity:.35, pointerEvents:'none' }} />
-          <CoverImg src={track.cover} alt="" radius={14} size={128} style={{ width:56, height:56, boxShadow:`0 0 22px ${hex2rgba(T.accent,.5)}` }} />
-          <div style={{ flex:1, minWidth:0, position:'relative' }}>
-            <div style={{ fontSize:9, fontWeight:900, letterSpacing:2, color:T.accent, textTransform:'uppercase', marginBottom:5 }}>{playing ? '◉ Reproduciendo' : 'Última pista'}</div>
-            <div style={{ fontSize:15.5, fontWeight:800, color:'var(--txt-0)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title}</div>
-            <div style={{ fontSize:11, color:'var(--txt-1)', marginTop:2 }}>{track.artist}</div>
-          </div>
-          {playing && <EQViz color={T.accent} color2={T.accent2} playing={playing} bars={6} h={28} />}
-        </div>
-      )}
+      {track && <button className="home-resume" onClick={() => play(track)} aria-label={`Volver a ${track.title}`}>
+        <CoverImg src={track.cover} alt="" size={128} radius={8} style={{width:40,height:40}} />
+        <span><small>{playing ? 'SONANDO AHORA' : 'CONTINÚA ESCUCHANDO'}</small><strong>{track.title} · {track.artist}</strong></span>
+        {playing ? <EQViz color={T.accent} color2={T.accent2} playing bars={4} h={20}/> : <Icon.Play sz={20}/>}
+      </button>}
 
-      {recentTracks.length > 0 && (
-        <>
-          <SectionHeader label="Escuchado Recientemente" accent={T.accent} />
-          <div className="carousel" style={{ gap:15, paddingBottom:6, paddingTop:2, marginBottom:18 }}>
-            {recentTracks.map((t,i) => <MediaCard key={t.id+'_'+i} cover={t.cover} title={t.title} subtitle={t.artist} T={T} onClick={() => play(t, recentIds)} onPlay={() => play(t, recentIds)} onFav={() => toggleFav(t.id)} faved={favs.includes(t.id)} onMenu={() => onMenu(t.id)} />)}
-          </div>
-        </>
-      )}
-
-      {homeLoading && homeRows.length === 0 && !backendDown && (
-        <div style={{ opacity: 0.5 }}>
-          {[1,2,3].map(i => (
-            <div key={i} style={{ marginBottom: 24 }}>
-              <div style={{ height:14, width:160, borderRadius:7,
-                background:'var(--surf-2)', marginBottom:12 }} />
-              <div style={{ display:'flex', gap:12 }}>
-                {[1,2,3,4].map(j => (
-                  <div key={j} style={{ flexShrink:0, width:128, height:128,
-                    borderRadius:14, background:'var(--surf-2)' }} />
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
 
       {/* Modo sin conexión: mostrar biblioteca cacheada en vez del feed */}
       {backendDown && homeRows.length === 0 && (
@@ -397,18 +218,7 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
         </>
       )}
 
-      {homeRows.map(sec => (
-        <div key={sec.section}>
-          <SectionHeader label={sec.section} accent={T.accent} />
-          <div className="carousel" style={{ gap:15, paddingBottom:6, paddingTop:2, marginBottom:20 }}>
-            {(sec.mixes || []).map(mix => (
-              <MixCard key={mix.label} mix={mix} T={T}
-                onOpen={() => goMix(mix)}
-                onPlay={() => { const ids = mix.tracks.map(t => t.id); play(mix.tracks[0], ids, { mixLabel: mix.label }); }} />
-            ))}
-          </div>
-        </div>
-      ))}
+      {!showOnboarding && (onboardPrefs !== null || recent.length > 0 || favs.length > 0) && <HomeDiscovery onEditPrefs={editPrefs} rows={homeRows} prefs={onboardPrefs} play={play} goMix={goMix} onMenu={onMenu} onToggleFav={toggleFav} favs={favs} loading={homeLoading} retry={() => useLibraryStore.getState().setFeedNonce(useLibraryStore.getState().feedNonce + 1)} />}
     </div>
   );
 }

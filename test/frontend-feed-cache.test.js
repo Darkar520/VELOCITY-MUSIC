@@ -62,3 +62,10 @@ test('feed cache: secciones vacías no se guardan', () => {
   saveFeedCache([]);
   assert.equal(loadFeedCache(), null);
 });
+
+test('feed cache: another account or taste context cannot reuse the previous feed', () => {
+  saveFeedCache(sampleSections(2), 'account-a:metal');
+  assert.ok(loadFeedCache('account-a:metal'));
+  assert.equal(loadFeedCache('account-b:metal'), null);
+  assert.equal(loadFeedCache('account-a:edm'), null);
+});

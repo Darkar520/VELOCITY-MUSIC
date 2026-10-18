@@ -16,6 +16,7 @@ import { runAudioEffects, applyMediaSrc } from './audio/runAudioEffects.js';
 import { usePersisted, useViewport } from './hooks.js';
 import { useLibrarySync } from './hooks/useLibrarySync.js';
 import { useHomeFeed } from './hooks/useHomeFeed.js';
+import { useOnboardPreferences } from './hooks/useOnboardPreferences.js';
 import { useLibraryActions } from './hooks/useLibraryActions.js';
 import { useDownloads } from './hooks/useDownloads.js';
 import { usePlayerStoreBindings } from './hooks/usePlayerStoreBindings.js';
@@ -178,7 +179,6 @@ export default function App() {
   // Sesión de mezcla: al terminar una mezcla, saltar a otra mezcla relacionada.
   const mixSessionRef = useRef({ label: null, used: new Set() });
   const homeRowsRef = useRef([]);         // acceso al feed sin cierre obsoleto
-  const libReadyRef = useRef(false);      // biblioteca cargada → feed puede usar datos reales
   const persistRef = useRef({});
   const pendingRef = useRef(null);
   if (!pendingRef.current) { pendingRef.current = new Set(); try { JSON.parse(localStorage.getItem('velocity.pendingDl') || '[]').forEach(x => pendingRef.current.add(x)); } catch {} }
@@ -205,7 +205,7 @@ export default function App() {
   const [settings, setSettings] = usePersisted('velocity.settings', { autoplay:true, normalize:false });
   // Preferencias de onboarding: artistas/géneros elegidos al inicio para
   // arrancar con un feed 100% personalizado desde el día 1.
-  const [onboardPrefs, setOnboardPrefs] = usePersisted('velocity.onboard', null);
+  const [onboardPrefs, setOnboardPrefs] = useOnboardPreferences(email, authed);
 
   // Biblioteca — fuente de verdad: libraryStore (sin mirrors useState)
   const {
@@ -466,22 +466,7 @@ export default function App() {
   // NOTA: La hidratación y fetch de biblioteca los maneja useLibrarySync (hook).
   // Antes había un useEffect duplicado acá que competía con el hook, generando
   // race conditions. Se eliminó en el refactor de libraryStore.
-  // Marcamos libReadyRef cuando el store termina de hidratar (para el feed).
-  useEffect(() => {
-    if (!authed) return;
-    let cancelled = false;
-    const unsub = useLibraryStore.subscribe((s) => {
-      if (!cancelled && (s.favs.length || s.playlists.length || s.recent.length)) {
-        libReadyRef.current = true;
-      }
-    });
-    // Si el store ya tenía datos del cache, marcar listo inmediatamente
-    const s = useLibraryStore.getState();
-    if (s.favs.length || s.playlists.length || s.recent.length) {
-      libReadyRef.current = true;
-    }
-    return () => { cancelled = true; unsub(); };
-  }, [authed]);
+  // Feed starts from explicit preferences while the library hydrates separately.
 
   // La reproducción entre dispositivos no interviene en el reproductor local.
   // El backend conserva now-playing para compatibilidad con otros clientes.
@@ -490,8 +475,7 @@ export default function App() {
   // (antes había un useEffect acá que llamaba persistLibCache — eliminado por duplicación)
 
   // ── Feed personalizado: extraído a useHomeFeed (reduce ~190 líneas) ──
-  // libReadyRef se pasa como booleano en cada render (App re-renderiza al hidratar lib).
-  useHomeFeed({ authed, libReady: libReadyRef.current, downloaded, recentSearches, onboardPrefs, offline: backendDown });
+  useHomeFeed({ authed, downloaded, recentSearches, onboardPrefs, offline: backendDown });
 
   // Hydrate machine una vez (A12/A13) — App reabre en pause sin auto-play.
   useEffect(() => {

@@ -48,11 +48,11 @@ export function slimSections(sections) {
 }
 
 /** Persiste el feed (best-effort; ignora errores de cuota). */
-export function saveFeedCache(sections) {
+export function saveFeedCache(sections, context = '') {
   try {
     const slim = slimSections(sections);
     if (!slim.length) return;
-    localStorage.setItem(KEY, JSON.stringify({ ts: Date.now(), sections: slim }));
+    localStorage.setItem(KEY, JSON.stringify({ ts: Date.now(), sections: slim, context }));
   } catch {
     // Cuota excedida u otro fallo: descartar la caché para no dejarla corrupta.
     try { localStorage.removeItem(KEY); } catch { /* ignore */ }
@@ -60,11 +60,12 @@ export function saveFeedCache(sections) {
 }
 
 /** Devuelve las secciones cacheadas si existen y no han caducado; si no, null. */
-export function loadFeedCache() {
+export function loadFeedCache(context = '') {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
+    if ((parsed?.context || '') !== context) return null;
     if (!parsed || !Array.isArray(parsed.sections) || !parsed.sections.length) return null;
     if (Date.now() - (Number(parsed.ts) || 0) > MAX_AGE_MS) return null;
     return parsed.sections;
