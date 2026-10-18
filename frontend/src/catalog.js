@@ -95,7 +95,9 @@ export function loadMeta() {
 export function loadPlayerState() {
   try {
     const s = JSON.parse(localStorage.getItem('velocity.player') || 'null');
-    if (s && s.track && s.track.id) { cacheTrack(s.track); return s; }
+    // Reading position/queue must not re-publish an old metadata snapshot.
+    // The store explicitly caches the initial track once, before IDB hydration.
+    if (s && s.track && s.track.id) return s;
     if (s && s.trackId) { const t = trackById(s.trackId); if (t) return { ...s, track: t }; }
   } catch {}
   return null;
@@ -138,12 +140,13 @@ loadMeta();
 // Normaliza un TrackMetadata del backend a la forma del frontend (con url de streaming).
 export function normalizeTrack(t) {
   const rawCover = t.artworkUrl || t.cover || '';
+  const known = trackById(t.id);
   const n = {
     id: t.id,
-    title: t.title || 'Sin título',
-    artist: t.artist || 'Desconocido',
+    title: t.title || known?.title || 'Sin título',
+    artist: t.artist || known?.artist || 'Desconocido',
     artistId: t.artistId || null,
-    album: t.album || 'Sencillo',
+    album: t.album || known?.album || 'Sencillo',
     albumId: t.albumId || null,
     genre: t.genre || '',
     // Sin artwork → cadena vacía (CoverImg muestra el fallback al renderizar).

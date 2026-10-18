@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { api } from '../api.js';
 import * as offline from '../offline.js';
-import { cacheTrack, saveMeta, trackById } from '../catalog.js';
+import { cacheTrack, saveMeta, trackById, bestCoverFor, hasCover } from '../catalog.js';
 import { slimTrack } from '../helpers.js';
 import { usePlayerStore } from '../store/playerStore.js';
 import { scheduleLibraryOfflineSync } from '../offlineLibrary.js';
@@ -31,10 +31,25 @@ function backfillExtras(ids) {
   if (!ids.length) return;
   scheduleLibraryOfflineSync(ids);
   // Optional extras never delay committing a complete audio file.
-  offline.backfillCovers?.().then((metas) => { metas.forEach(cacheTrack); saveMeta(); }).catch(() => {});
+  offline.backfillCovers?.({ coverFor: bestCoverFor }).then((metas) => { metas.forEach(promoteCover); saveMeta(); }).catch(() => {});
+}
+
+function promoteCover(meta) {
+  // A repair changes artwork only; retain newer text already in the catalog.
+  cacheTrack({ ...(trackById(meta.id) || meta), cover: meta.cover });
 }
 
 export function useDownloads({ quality, showToast, pendingRef, savePending, authed = false, downloadsHydratedRef } = {}) {
+  const selected = usePlayerStore(s => s.track);
+  const selectedDownloaded = usePlayerStore(s => !!s.track?.id && s.downloaded.has(s.track.id));
+  useEffect(() => {
+    if (!selectedDownloaded || !selected?.id) return;
+    const cover = bestCoverFor(selected.id, selected.cover);
+    if (!hasCover(cover)) return;
+    // One metadata lookup, no library scan or audio resolution. Also persist
+    // images discovered after the original download or while the song plays.
+    offline.saveCover(selected.id, cover).then(meta => { if (meta) promoteCover(meta); }).catch(() => {});
+  }, [selectedDownloaded, selected?.id, selected?.cover]);
   const options = useRef({ showToast, pendingRef, savePending });
   options.current = { showToast, pendingRef, savePending };
   const runLatest = useRef(null);
@@ -67,7 +82,7 @@ export function useDownloads({ quality, showToast, pendingRef, savePending, auth
         current.savePending?.();
         if (!running.length) backfillExtras(newlySaved);
         if (!running.length && !newlySaved.length && navigator.onLine !== false) {
-          offline.backfillCovers?.().then(metas => metas.forEach(cacheTrack)).catch(() => {});
+          offline.backfillCovers?.({ coverFor: bestCoverFor }).then(metas => metas.forEach(promoteCover)).catch(() => {});
         }
       } catch { /* preserve last-known state on storage failure */ }
       finally { refreshing = false; }

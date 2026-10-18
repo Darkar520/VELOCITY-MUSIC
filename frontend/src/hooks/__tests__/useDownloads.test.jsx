@@ -30,6 +30,7 @@ const offlineMock = vi.hoisted(() => {
     downloadsInfo: vi.fn(async () => ({ count: 0, bytes: 0, items: [] })),
     ensurePersistentStorage: vi.fn(async () => true),
     backfillCovers: vi.fn(async () => []),
+    saveCover: vi.fn(async () => null),
     QuotaError,
   };
 });
@@ -40,7 +41,7 @@ vi.mock('../../offlineLibrary.js', () => ({ scheduleLibraryOfflineSync: vi.fn() 
 
 import { useDownloads } from '../useDownloads.js';
 import { usePlayerStore } from '../../store/playerStore.js';
-import { cacheTrack } from '../../catalog.js';
+import { cacheTrack, trackById } from '../../catalog.js';
 import { makeTrack } from '../../__tests__/uiFixtures.js';
 
 function setup() {
@@ -62,6 +63,30 @@ describe('useDownloads', () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, blob: async () => ({ size: 4096, type: 'audio/webm' }) })));
   });
   afterEach(() => { vi.restoreAllMocks(); });
+
+  it('persists a cover discovered later for the current downloaded song without downloading audio', async () => {
+    usePlayerStore.setState({ track: { id: 'late-art', title: 'Title', cover: '' }, downloaded: new Set(['late-art']) });
+    const { unmount } = setup();
+    await act(async () => {
+      usePlayerStore.setState({ track: { id: 'late-art', title: 'Title', cover: '/late-image.png' } });
+    });
+    expect(offlineMock.saveCover).toHaveBeenCalledWith('late-art', '/late-image.png');
+    expect(apiMock.ensureStreamUrl).not.toHaveBeenCalled();
+    expect(offlineMock.saveTrack).not.toHaveBeenCalled();
+    await act(async () => { for (let time = 1; time <= 20; time++) usePlayerStore.setState({ time }); });
+    expect(offlineMock.saveCover).toHaveBeenCalledTimes(1);
+    expect(offlineMock.backfillCovers).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it('a cover repair retains newer catalog text while promoting the saved image', async () => {
+    const track = { id: 'cover-with-newer-text', title: 'Current title', artist: 'Current artist', cover: '/actual-image.png' };
+    cacheTrack(track);
+    usePlayerStore.setState({ track, downloaded: new Set([track.id]) });
+    offlineMock.saveCover.mockResolvedValueOnce({ id: track.id, title: 'Older title', artist: 'Older artist', cover: 'data:image/png;base64,aGVsbG8=' });
+    await act(async () => { setup(); });
+    expect(trackById(track.id)).toMatchObject({ title: 'Current title', artist: 'Current artist', cover: 'data:image/png;base64,aGVsbG8=' });
+  });
 
   it('descarga una pista y la marca como descargada', async () => {
     const t = makeTrack({ id: 'x1', title: 'Toxicity', artist: 'SOAD' });
