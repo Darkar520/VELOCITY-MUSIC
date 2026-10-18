@@ -2,9 +2,28 @@ import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 import { cacheTrack, trackById, loadPlayerState, normalizeTrack } from '../../catalog.js';
 import { usePlayerStore } from '../../store/playerStore.js';
-import { usePlayerStoreBindings } from '../usePlayerStoreBindings.js';
+import { usePlayerStoreBindings, hydratePlayerStoreOnce } from '../usePlayerStoreBindings.js';
+import { isStreamUrlFresh } from '../../audioContinuity.js';
 
 afterEach(cleanup);
+
+it('restores a fresh signed URL as metadata, without mounting it before the local source is resolved', () => {
+  const previous = localStorage.getItem('velocity.player');
+  const hydrated = window.__velocityPlayerHydrated;
+  const state = usePlayerStore.getState();
+  const url = '/api/stream-proxy?artist=Artist&title=Song&id=local-first&exp=9999999999&sig=test';
+  expect(isStreamUrlFresh(url)).toBe(true);
+  try {
+    window.__velocityPlayerHydrated = false;
+    localStorage.setItem('velocity.player', JSON.stringify({ track: { id: 'local-first', title: 'Song', artist: 'Artist', url }, t: 42, queue: ['local-first'] }));
+    hydratePlayerStoreOnce();
+    expect(usePlayerStore.getState()).toMatchObject({ track: { id: 'local-first', url }, time: 42, playing: false, playSrc: null });
+  } finally {
+    window.__velocityPlayerHydrated = hydrated;
+    usePlayerStore.setState(state, true);
+    if (previous === null) localStorage.removeItem('velocity.player'); else localStorage.setItem('velocity.player', previous);
+  }
+});
 
 it('restoring position cannot replace downloaded metadata with an older player snapshot', () => {
   cacheTrack({ id: 'snapshot-metadata', title: 'Title', artist: 'Artist', album: 'xx', durationSeconds: 176, cover: 'data:image/png;base64,aGVsbG8=' });
