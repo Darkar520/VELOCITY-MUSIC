@@ -1,621 +1,146 @@
 /**
- * useHomeFeed — feed personal profundo con VARIOS mixes por sección.
+ * Inicio: preferences first, bounded work, progressive publication.
+ * Download availability is not a listening preference.
  */
-import { useEffect, useRef, useMemo } from 'react';
-import { api } from '../api.js';
-import { dedupeByTitle, capPerArtist } from '../helpers.js';
-import { SEED_ROWS, DISCOVERY, GENRES, MOODS, ERAS } from '../constants.js';
-import { trackById, normalizeTrack, cacheTrack } from '../catalog.js';
-import { shouldSkipFeedRegen } from '../feed/feedSig.js';
-import { loadFeedCache, saveFeedCache } from '../feed/feedCache.js';
-import {
-  shuffle, pick, artistKey, tracksFromIds, ensureManyMixes,
-  offlineMixes, favArtistMixes, recentSliceMixes,
-} from '../feed/mixBuilders.js';
-import { useLibraryStore } from '../store/libraryStore.js';
-import { usePlayerStore } from '../store/playerStore.js';
+import {useEffect,useMemo,useRef} from 'react';
+import {api,getToken} from '../api.js';
+import {cacheIdentity} from '../favoriteOutbox.js';
+import {dedupeByTitle,capPerArtist} from '../helpers.js';
+import {SEED_ROWS} from '../constants.js';
+import {trackById,normalizeTrack,cacheTrack} from '../catalog.js';
+import {loadFeedCache,saveFeedCache} from '../feed/feedCache.js';
+import {preferenceKey,starterQueries,genreArtists,artistIdentity} from '../feed/tasteProfile.js';
+import {offlineMixes,favArtistMixes,recentSliceMixes} from '../feed/mixBuilders.js';
+import {useLibraryStore} from '../store/libraryStore.js';
+import {usePlayerStore} from '../store/playerStore.js';
 
-const RADIO_CONCURRENCY = 4;
-const MIN_MIX = 3;
-// Bug fix: mínimo 50 pistas por mix (antes 35). El usuario quiere listas largas.
-const MIN_MIX_TRACKS = 50;
-const IDEAL_MIX_TRACKS = 50;
-
-async function mapPool(items, limit, fn) {
-  const out = new Array(items.length);
-  let i = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) || 0 }, async () => {
-    while (i < items.length) {
-      const idx = i++;
-      try { out[idx] = await fn(items[idx], idx); }
-      catch { out[idx] = null; }
-    }
-  });
-  await Promise.all(workers);
-  return out;
+async function pool(items,limit,fn){
+  let cursor=0;
+  await Promise.all(Array.from({length:Math.min(items.length,limit)},async()=>{
+    while(cursor<items.length){const item=items[cursor++];try{await fn(item);}catch{/* isolate a failed collection */}}
+  }));
 }
-
-function cap1(s) {
-  return (s || '').charAt(0).toUpperCase() + (s || '').slice(1);
-}
-
-export function useHomeFeed({ authed, libReady, downloaded, recentSearches, onboardPrefs, offline = false }) {
-  const feedSigRef = useRef('');
-  const feedTokenRef = useRef(0);
-  const prevFeedNonceRef = useRef(0);
-
-  const feedNonce = useLibraryStore((s) => s.feedNonce);
-  const setHomeRows = useLibraryStore((s) => s.setHomeRows);
-  const setHomeLoading = useLibraryStore((s) => s.setHomeLoading);
-  const setFeedNonce = useLibraryStore((s) => s.setFeedNonce);
-
-  const playerDownloaded = usePlayerStore((s) => s.downloaded);
-  const effectiveDownloaded = downloaded || playerDownloaded;
-  const downloadedRef = useRef(effectiveDownloaded);
-  downloadedRef.current = effectiveDownloaded;
-
-  const favs = useLibraryStore((s) => s.favs);
-  const recent = useLibraryStore((s) => s.recent);
-  const playlists = useLibraryStore((s) => s.playlists);
-  const savedPlaylists = useLibraryStore((s) => s.savedPlaylists);
-
-  const contentSig = useMemo(() => {
-    const pl = (playlists || []).map((p) => `${p.id}:${(p.trackIds || []).length}`).join(';');
-    const sp = (savedPlaylists || []).map((p) => p.playlistId || p.id || '').join(',');
-    const dl = [...(effectiveDownloaded || [])].slice(0, 40).join(',');
-    return [
-      (favs || []).slice(0, 40).join(','),
-      (recent || []).slice(0, 40).join(','),
-      pl, sp, dl,
-      (recentSearches || []).slice(0, 8).join('|'),
-      Array.isArray(onboardPrefs) ? onboardPrefs.map((p) => p.q).join(',') : Array.isArray(onboardPrefs?.genres) ? onboardPrefs.genres.map((p) => p.q).join(',') : '',
-    ].join('::');
-  }, [favs, recent, playlists, savedPlaylists, effectiveDownloaded, recentSearches, onboardPrefs]);
-
-  if (prevFeedNonceRef.current !== feedNonce) {
-    prevFeedNonceRef.current = feedNonce;
-    feedSigRef.current = '';
-  }
-
-  useEffect(() => {
-    if (!authed) return;
-    if (!libReady) {
-      const retry = setTimeout(() => setFeedNonce(useLibraryStore.getState().feedNonce + 1), 800);
-      return () => clearTimeout(retry);
-    }
-
-    const lib = useLibraryStore.getState();
-    const favIds = [...(lib.favs || [])];
-    const recentIds = [...(lib.recent || [])];
-    const pls = [...(lib.playlists || [])];
-    const savedPls = [...(lib.savedPlaylists || [])];
-    const dlIds = [...(downloadedRef.current || [])];
-    const searches = [...new Set((recentSearches || []).map((s) => (s || '').trim()).filter(Boolean))].slice(0, 8);
-    const prefs = Array.isArray(onboardPrefs) ? onboardPrefs : Array.isArray(onboardPrefs?.genres) ? onboardPrefs.genres : [];
-    const artistPrefs = Array.isArray(onboardPrefs?.artists) ? onboardPrefs.artists : [];
-
-    const score = {};
-    recentIds.forEach((id, i) => { score[id] = (score[id] || 0) + Math.max(1, 14 - i * 0.35); });
-    favIds.forEach((id) => { score[id] = (score[id] || 0) + 8; });
-    dlIds.forEach((id) => { score[id] = (score[id] || 0) + 5; });
-    pls.forEach((p) => {
-      (p.trackIds || []).slice(0, 40).forEach((id, i) => {
-        score[id] = (score[id] || 0) + Math.max(1, 4 - i * 0.05);
+export function useHomeFeed({authed,downloaded,recentSearches=[],onboardPrefs,offline=false}){
+  const account=cacheIdentity(localStorage.getItem('velocity.email')||'',getToken());
+  const lib=useLibraryStore(s=>s);
+  const storedDownloads=usePlayerStore(s=>s.downloaded);
+  const downloads=downloaded||storedDownloads;
+  const signature=useMemo(()=>JSON.stringify({
+    account,preferences:preferenceKey(onboardPrefs),favs:lib.favs,recent:lib.recent,
+    playlists:lib.playlists.map(p=>[p.id,p.trackIds]),saved:lib.savedPlaylists.map(p=>[p.playlistId,p.trackIds]),
+    downloads:offline?[...downloads]:[],nonce:lib.feedNonce,offline,
+  }),[account,onboardPrefs,lib.favs,lib.recent,lib.playlists,lib.savedPlaylists,downloads,recentSearches,lib.feedNonce,offline]);
+  const previousProfile=useRef(null);
+  useEffect(()=>{
+    if(!authed)return;
+    const store=useLibraryStore.getState();
+    const profile=account+':home2:'+preferenceKey(onboardPrefs);
+    if(previousProfile.current!==null && previousProfile.current!==profile)store.setHomeRows([]);
+    previousProfile.current=profile;
+    let cancelled=false,firstSaved=false;
+    const requests=new Map(),controllers=new Set(),rows=[];
+    const alive=()=>!cancelled;
+    const localOnly=offline||navigator.onLine===false;
+    const prefs=Array.isArray(onboardPrefs)?onboardPrefs:onboardPrefs?.genres||[];
+    const artists=onboardPrefs?.artists||[];
+    const allowed=new Set([...genreArtists(prefs).map(a=>a._key),...artists.map(a=>artistIdentity(a.name))]);
+    const publish=()=>{
+      if(!alive())return;
+      const visible=rows.filter(s=>s.mixes.length).map(s=>({...s,mixes:s.mixes.map(m=>({...m,tracks:[...m.tracks]}))}));
+      if(!visible.length)return;
+      store.setHomeRows(visible);store.setHomeLoading(false);
+      if(!firstSaved){saveFeedCache(visible,profile);firstSaved=true;}
+    };
+    const add=(section,mix)=>{
+      if(!alive()||!mix?.tracks?.length)return;
+      const tracks=dedupeByTitle(mix.tracks).filter(t=>t?.id&&t.title).slice(0,60);
+      if(!tracks.length)return;
+      tracks.forEach(cacheTrack);
+      let row=rows.find(s=>s.section===section);
+      if(!row){row={section,mixes:[]};rows.push(row);}
+      const existing=row.mixes.find(m=>m.label===mix.label);
+      if(existing)existing.tracks=dedupeByTitle([...existing.tracks,...tracks]).slice(0,60);
+      else row.mixes.push({...mix,tracks});
+      publish();
+    };
+    const request=(key,fn)=>{
+      if(requests.has(key))return requests.get(key);
+      const controller=new AbortController();controllers.add(controller);
+      const timer=setTimeout(()=>controller.abort(),10000);
+      const work=Promise.resolve().then(()=>alive()?fn(controller.signal):[]).catch(()=>[]).finally(()=>{
+        clearTimeout(timer);controllers.delete(controller);
       });
-    });
-
-    const ranked = Object.keys(score)
-      .map(trackById)
-      .filter(Boolean)
-      .sort((a, b) => score[b.id] - score[a.id]);
-
-    const seedPool = [];
-    const seenArtist = new Set();
-    for (const t of ranked) {
-      const a = artistKey(t);
-      if (!a || seenArtist.has(a)) continue;
-      seenArtist.add(a);
-      seedPool.push(t);
-      if (seedPool.length >= 14) break;
+      requests.set(key,work);return work;
+    };
+    const search=q=>request('search:'+q,signal=>api.search(q,signal));
+    const knownArtist=(track,name)=>{
+      const key=artistIdentity(track.artist);
+      return key===artistIdentity(name) || String(track.artist||'').split(/,| feat\.? | featuring | & /i).some(a=>artistIdentity(a)===artistIdentity(name));
+    };
+    store.setHomeLoading(true);
+    if(!store.homeRows.length){
+      const cached=loadFeedCache(profile);
+      if(cached){for(const row of cached)for(const m of row.mixes)for(const t of m.tracks)cacheTrack(t);store.setHomeRows(cached);store.setHomeLoading(false);}
     }
-    const seeds = pick(seedPool, 10);
-
-    const timeSlot = Math.floor(Date.now() / (6 * 3600 * 1000));
-    const sig = `${contentSig}#${feedNonce}@${timeSlot}`;
-    if (shouldSkipFeedRegen({ completedSig: feedSigRef.current, nextSig: sig })) return;
-
-    const myToken = ++feedTokenRef.current;
-    const alive = () => myToken === feedTokenRef.current;
-    setHomeLoading(true);
-
-    // Modo sin conexión: sin red no hay radio ni búsquedas; el feed se sirve
-    // solo con las secciones locales (biblioteca + descargas). Umbral relajado
-    // para que una biblioteca pequeña no desaparezca del feed.
-    const offlineMode = offline || (typeof navigator !== 'undefined' && navigator.onLine === false);
-    const MIN_SECTION_TRACKS = offlineMode ? 4 : 10;
-
-    // Pintado instantáneo desde la caché last-good (si no hay filas aún) mientras
-    // se regenera en background. Evita el spinner inicial en arranques en frío.
-    let paintedCacheCount = 0;
-    if (useLibraryStore.getState().homeRows.length === 0) {
-      const cached = loadFeedCache();
-      if (cached && cached.length) {
-        for (const sec of cached) for (const m of sec.mixes || []) for (const t of m.tracks || []) cacheTrack(t);
-        setHomeRows(cached);
-        setHomeLoading(false);
-        paintedCacheCount = cached.length;
-      }
+    // Local collections are real user actions, never synthetic history.
+    const recent=recentSliceMixes(store.recent);
+    recent.forEach(m=>add('Escuchado recientemente',m));
+    favArtistMixes(store.favs).forEach(m=>add('De tus Me gusta',m));
+    for(const p of [...store.playlists,...store.savedPlaylists].slice(0,8)){
+      const tracks=(p.trackIds||[]).map(trackById).filter(Boolean);
+      if(tracks.length)add('Tus playlists',{label:p.name||'Tu playlist',tracks});
     }
-
-    // Safety timeout: desbloquea el loading en ≤30s con lo que se haya pusheado,
-    // para que el feed nunca quede en spinner indefinido si una sección de red
-    // se cuelga en el túnel.
-    const safetyTimer = setTimeout(() => {
-      if (alive()) {
-        feedSigRef.current = sig;
-        setHomeLoading(false);
-      }
-    }, 30000);
-
-    (async () => {
-      try {
-      const clean = (arr) => (arr || []).filter(Boolean);
-      const vary = () => Math.floor(Date.now() / (6 * 3600 * 1000)) % 5;
-      const VARY_SFXS = ['', ' hits', ' top songs', ' best', ' popular'];
-      const vSfx = VARY_SFXS[vary()];
-
-      const mixFromSeed = async (seed, limit = IDEAL_MIX_TRACKS) => {
-        if (!seed?.id) return null;
-        try {
-          const rel = await api.radio(seed.id, 100);
-          let tracks = capPerArtist(
-            dedupeByTitle([seed, ...rel.map(normalizeTrack)]),
-            8,
-          ).filter((t) => t.id);
-          // Si quedan pocos tracks tras dedup/cap, pedir más radio para enriquecer.
-          // api.radio devuelve resultados distintos en cada llamada, así que la
-          // segunda pasada genuinamente puede aportar tracks nuevos.
-          if (tracks.length < 30) {
-            try {
-              const rel2 = await api.radio(seed.id, 100);
-              tracks = capPerArtist(
-                dedupeByTitle([seed, ...tracks, ...rel2.map(normalizeTrack)]),
-                8,
-              ).filter((t) => t.id);
-            } catch { /* ignorar — usar lo que ya tenemos */ }
-          }
-          tracks = tracks.slice(0, limit);
-          return tracks.length >= MIN_MIX
-            ? { label: seed.artist || seed.title || 'Mezcla', tracks }
-            : null;
-        } catch { return null; }
-      };
-
-      const mixFromSearch = async (label, q) => {
-        try {
-          const raw = await api.search((q || label) + vSfx, undefined, 50);
-          const tracks = dedupeByTitle(raw.map(normalizeTrack)).filter((t) => t.id).slice(0, IDEAL_MIX_TRACKS);
-          return tracks.length >= MIN_MIX ? { label, tracks } : null;
-        } catch { return null; }
-      };
-
-      const mixFromQueryDeep = async (label, q) => {
-        try {
-          const raw = await api.search(q + vSfx, undefined, 50);
-          const base = raw.map(normalizeTrack).find((t) => t.id);
-          if (!base) return null;
-          const m = await mixFromSeed(base, MIN_MIX_TRACKS);
-          return m ? { ...m, label } : null;
-        } catch { return null; }
-      };
-
-      // Expande una playlist a ≥50 canciones mezclando sus tracks propios + radio.
-      // Si ya tiene ≥ IDEAL_MIX_TRACKS no hace red extra (fast path).
-      const expandedPlaylistMix = async (pl) => {
-        const base = tracksFromIds(pl.trackIds || [], 120);
-        if (!base.length) return null;
-        const label = pl.name || 'Playlist';
-        // Fast-path: ya tiene suficientes canciones
-        if (base.length >= IDEAL_MIX_TRACKS) {
-          return { label, tracks: capPerArtist(dedupeByTitle(base), 10).slice(0, IDEAL_MIX_TRACKS) };
+    if(localOnly)offlineMixes([...downloads]).forEach(m=>add('Listas para offline',m));
+    const safety=setTimeout(()=>{if(alive())store.setHomeLoading(false);},30000);
+    (async()=>{
+      try{
+        if(localOnly)return;
+        let queries=starterQueries(onboardPrefs);
+        const hasHistory=store.recent.length||store.favs.length||store.playlists.some(p=>p.trackIds?.length);
+        if(!queries.length&&hasHistory){
+          const names=[...new Set([...store.recent,...store.favs].map(trackById).filter(Boolean).map(t=>t.artist))].slice(0,6);
+          queries=names.map(name=>({label:name,q:name,kind:'artist'}));
         }
-        // Elegir semillas diversas (máx 4, una por artista distinto)
-        const seeds4 = [];
-        const seenArt = new Set();
-        for (const t of base) {
-          const ak = artistKey(t);
-          if (!ak || seenArt.has(ak)) continue;
-          seenArt.add(ak);
-          seeds4.push(t);
-          if (seeds4.length >= 4) break;
+        if(!queries.length&&onboardPrefs!==null){
+          queries=SEED_ROWS.slice(0,4).map(g=>({label:g.label,q:g.q,kind:'genre'}));
         }
-        // Radio paralelo
-        const radioResults = await mapPool(seeds4, RADIO_CONCURRENCY, (s) =>
-          api.radio(s.id, 50).catch(() => []),
-        );
-        const expanded = capPerArtist(
-          dedupeByTitle([...base, ...radioResults.flat().map(normalizeTrack)]),
-          8,
-        ).filter((t) => t.id).slice(0, IDEAL_MIX_TRACKS);
-        return expanded.length >= MIN_MIX ? { label, tracks: expanded } : null;
-      };
-
-      const buildDiscoveryMixes = async (baseTracks, max = 6) => {
-        const bases = pick((baseTracks || []).filter(Boolean), max);
-        if (!bases.length) return [];
-        // Solo excluir las semillas propias, no todo el historial.
-        // El objetivo de Descubrimiento es variedad; filtrar recentIds/favIds dejaba
-        // muy pocos tracks cuando el usuario tiene mucho historial.
-        const known = new Set([...bases.map((s) => s.id)]);
-        const mixes = clean(await mapPool(bases, RADIO_CONCURRENCY, async (s) => {
-          try {
-            const rel = await api.radio(s.id, 50);
-            let tracks = capPerArtist(dedupeByTitle(rel.map(normalizeTrack)), 3)
-              .filter((t) => t.id && !known.has(t.id))
-              .slice(0, MIN_MIX_TRACKS);
-            if (tracks.length < MIN_MIX) return null;
-            return { label: `Como ${s.artist || s.title}`, tracks };
-          } catch { return null; }
-        }));
-        return ensureManyMixes(mixes, { min: 3, max: 10, prefix: 'Hallazgo' });
-      };
-
-      const sections = [];
-      // Conjunto global de IDs ya colocados, para evitar duplicados entre secciones.
-      const usedIDs = new Set();
-      const addUsed = (mixes) => {
-        for (const m of mixes) for (const t of m.tracks || []) usedIDs.add(t.id);
-      };
-
-      /** Solo publica si hay ≥1 mix; si hay 1, intenta expandir antes de añadir.
-       *  Aislado en try/catch: un fallo al construir UNA sección no tumba el resto. */
-      const pushRich = (section, mixes, { min = 1, prefix } = {}) => {
-        if (!alive()) return;
-        try {
-          let list = ensureManyMixes(clean(mixes), { min, max: 10, prefix: prefix || section, minTracks: MIN_SECTION_TRACKS });
-          // Filtrar tracks ya usados en secciones anteriores (dedup cross-section)
-          list = list.map((m) => ({
-            ...m,
-            tracks: m.tracks.filter((t) => !usedIDs.has(t.id)),
-          })).filter((m) => m.tracks.length >= MIN_SECTION_TRACKS);
-          if (!list.length) return;
-          addUsed(list);
-          sections.push({ section, mixes: list });
-          // Anti-parpadeo: si pintamos desde caché, no reducir el feed visible con
-          // resultados parciales; recién publicar cuando el feed nuevo alcanza el
-          // conteo cacheado. Sin caché, publicar progresivamente como antes.
-          if (paintedCacheCount === 0 || sections.length >= paintedCacheCount) {
-            setHomeRows([...sections]);
-          }
-          // Primer pintado real garantizado: desbloquear el loading en cuanto haya
-          // contenido, sin esperar al resto de secciones.
-          setHomeLoading(false);
-        } catch { /* aislar la sección fallida */ }
-      };
-
-      const hasHistory = seeds.length > 0 || searches.length > 0 || favIds.length > 0
-        || pls.some((p) => (p.trackIds || []).length >= MIN_MIX) || dlIds.length >= MIN_MIX;
-
-      // ═══ 1) RECIENTES (arriba del feed, varios mixes) ═══
-      {
-        const rMixes = recentSliceMixes(recentIds);
-        if (rMixes.length >= 2) pushRich('Escuchado recientemente', rMixes, { prefix: 'Reciente' });
-        else if (rMixes.length === 1 && (rMixes[0].tracks || []).length >= 8) {
-          pushRich('Escuchado recientemente', rMixes, { min: 2, prefix: 'Reciente' });
-        }
-      }
-
-      // ═══ 2) BIBLIOTECA LOCAL multi-mix ═══
-      // Cheap-first: las secciones locales (Me gusta, Descargas) van ANTES que las
-      // de red (playlists → radio), para garantizar un primer pintado < 3s sin
-      // depender de la latencia del túnel.
-      {
-        const favMix = favArtistMixes(favIds);
-        if (favMix.length) pushRich('De tus Me gusta', favMix, { min: 2, prefix: 'Like' });
-      }
-      {
-        const off = offlineMixes(dlIds);
-        if (off.length >= 2) pushRich('Listas para offline', off, { prefix: 'Offline' });
-        else if (off.length === 1) {
-          const expanded = ensureManyMixes(off, { min: 2, prefix: 'Offline' });
-          if (expanded.length >= 2) pushRich('Tus descargas por artista', expanded, { prefix: 'Offline' });
-        }
-      }
-      if (pls.length && alive()) {
-        const plm = clean(await mapPool(pls.slice(0, 12), RADIO_CONCURRENCY, expandedPlaylistMix));
-        if (plm.length >= 2) pushRich('Desde tus playlists', plm, { prefix: 'Playlist' });
-        else if (plm.length === 1) {
-          const ex = ensureManyMixes(plm, { min: 2, prefix: plm[0].label || 'Playlist' });
-          if (ex.length >= 2) pushRich('Desde tus playlists', ex, { prefix: 'Playlist' });
-        }
-      }
-      if (savedPls.length && alive()) {
-        const saved = clean(await mapPool(
-          (savedPls || []).slice(0, 12).map((p) => ({ name: p.name, trackIds: p.trackIds || [] })),
-          RADIO_CONCURRENCY,
-          expandedPlaylistMix,
-        ));
-        if (saved.length >= 2) pushRich('Playlists que guardaste', saved, { prefix: 'Guardada' });
-        else if (saved.length === 1) {
-          const ex = ensureManyMixes(saved, { min: 2, prefix: saved[0].label || 'Guardada' });
-          if (ex.length >= 2) pushRich('Playlists que guardaste', ex, { prefix: 'Guardada' });
-        }
-      }
-
-      // ── MODO SIN CONEXIÓN ─────────────────────────────────────────
-      // Las secciones 1 y 2 (Recientes, Me gusta, Descargas) ya se sirvieron
-      // desde el catálogo local. Sin red no hay radio ni búsquedas: se añaden
-      // las playlists propias/guardadas solo con tracks locales y se termina.
-      if (offlineMode) {
-        const localPlaylistMix = (pl) => {
-          const base = tracksFromIds(pl.trackIds || [], 120);
-          if (!base.length) return null;
-          return { label: pl.name || 'Playlist', tracks: capPerArtist(dedupeByTitle(base), 10).slice(0, IDEAL_MIX_TRACKS) };
-        };
-        const plm = clean((pls || []).slice(0, 12).map(localPlaylistMix));
-        if (plm.length >= 2) pushRich('Desde tus playlists', plm, { prefix: 'Playlist' });
-        else if (plm.length === 1) {
-          const ex = ensureManyMixes(plm, { min: 2, prefix: plm[0].label || 'Playlist', minTracks: MIN_SECTION_TRACKS });
-          if (ex.length >= 2) pushRich('Desde tus playlists', ex, { prefix: 'Playlist' });
-        }
-        const spm = clean((savedPls || []).slice(0, 12).map((p) => localPlaylistMix({ name: p.name, trackIds: p.trackIds || [] })));
-        if (spm.length >= 2) pushRich('Playlists que guardaste', spm, { prefix: 'Guardada' });
-        else if (spm.length === 1) {
-          const ex = ensureManyMixes(spm, { min: 2, prefix: spm[0].label || 'Guardada', minTracks: MIN_SECTION_TRACKS });
-          if (ex.length >= 2) pushRich('Playlists que guardaste', ex, { prefix: 'Guardada' });
-        }
-        if (alive()) {
-          feedSigRef.current = sig;
-          setHomeLoading(false);
-        }
-        clearTimeout(safetyTimer);
-        return;
-      }
-
-      // ═══ 3) HECHO PARA TI — varios radios de semillas ═══
-      if (hasHistory && seeds.length && alive()) {
-        const made = clean(await mapPool(seeds.slice(0, 10), RADIO_CONCURRENCY, (s) => mixFromSeed(s, MIN_MIX_TRACKS)));
-        pushRich('Hecho para ti', made, { min: sections.length < 3 ? 2 : 4, prefix: 'Para ti' });
-      }
-
-      // ═══ 4) BÚSQUEDAS ═══
-      if (searches.length && alive()) {
-        const used = new Set(seeds.map(artistKey));
-        const searchMixes = clean(await mapPool(searches.slice(0, 10), RADIO_CONCURRENCY, async (term) => {
-          try {
-            const raw = await api.search(term, undefined, 50);
-            const base = raw.map(normalizeTrack).find((t) => t.id);
-            if (!base) return null;
-            const ak = artistKey(base);
-            if (ak && used.has(ak)) return null;
-            if (ak) used.add(ak);
-            const m = await mixFromSeed(base, MIN_MIX_TRACKS);
-            return m ? { ...m, label: cap1(base.artist || term) } : null;
-          } catch { return null; }
-        }));
-        pushRich('Inspirado en tus búsquedas', searchMixes, { min: 4, prefix: 'Búsqueda' });
-      }
-
-      // ═══ 5) MOMENTO ACTUAL ═══
-      if (alive()) {
-        const fresh = [];
-        const seenA = new Set();
-        for (const id of recentIds) {
-          const t = trackById(id);
-          if (!t) continue;
-          const a = artistKey(t);
-          if (!a || seenA.has(a)) continue;
-          seenA.add(a);
-          fresh.push(t);
-          if (fresh.length >= 10) break;
-        }
-        if (fresh.length) {
-          const mixes = clean(await mapPool(fresh.slice(0, 8), RADIO_CONCURRENCY, (s) => mixFromSeed(s, MIN_MIX_TRACKS)));
-          pushRich('Tu momento actual', mixes, { min: sections.length < 3 ? 2 : 4, prefix: 'Ahora' });
-        }
-      }
-
-      // ═══ 6) PORQUE TE GUSTA ═══
-      if (seeds.length && alive()) {
-        const bs = pick(seeds, 8);
-        const mixes = clean(await mapPool(bs, RADIO_CONCURRENCY, (s) => mixFromSeed(s, MIN_MIX_TRACKS)));
-        pushRich('Porque te gusta', mixes, { min: sections.length < 3 ? 2 : 4, prefix: 'Porque' });
-      }
-
-      // ═══ 7) FAVORITOS EXPANDIDOS — un mix por fav seed ═══
-      if (favIds.length && alive()) {
-        const favSeeds = favIds.slice(0, 10).map(trackById).filter(Boolean);
-        const mixes = clean(await mapPool(favSeeds, RADIO_CONCURRENCY, async (t) => {
-          const m = await mixFromSeed(t, MIN_MIX_TRACKS);
-          return m ? { ...m, label: `Más ${t.artist || t.title}` } : null;
-        }));
-        // + locales por artista
-        const local = favArtistMixes(favIds);
-        pushRich('Tus favoritos expandidos', [...mixes, ...local], { min: 4, prefix: 'Favorito' });
-      }
-
-      // ═══ 8) MÁS COMO TUS PLAYLISTS ═══
-      if (pls.length && alive()) {
-        const plSeeds = pls
-          .map((p) => {
-            for (const id of p.trackIds || []) {
-              const t = trackById(id);
-              if (t) return { playlist: p, seed: t };
-            }
-            return null;
-          })
-          .filter(Boolean)
-          .slice(0, 8);
-        const mixes = clean(await mapPool(plSeeds, RADIO_CONCURRENCY, async ({ playlist, seed }) => {
-          const m = await mixFromSeed(seed, MIN_MIX_TRACKS);
-          return m ? { ...m, label: 'Como ' + (playlist.name || 'tu playlist') } : null;
-        }));
-        pushRich('Más como tus playlists', mixes, { min: 4, prefix: 'Playlist+' });
-      }
-
-      // ═══ 9) DESCUBRIMIENTO multi ═══
-      if (alive()) {
-        const discSeeds = pick(dedupeByTitle([
-          ...seeds,
-          ...favIds.slice(0, 12).map(trackById).filter(Boolean),
-          ...recentIds.slice(0, 12).map(trackById).filter(Boolean),
-        ]), 8);
-        const disc = await buildDiscoveryMixes(discSeeds, 12);
-        pushRich('Descubrimiento para ti', disc, { min: sections.length < 4 ? 2 : 4, prefix: 'Descubre' });
-      }
-
-      // ═══ 10) GÉNEROS a fondo (multi) ═══
-      if (prefs.length && alive() && sections.length >= 2) {
-        const genreMixes = clean(await mapPool(
-          prefs.slice(0, 10),
-          RADIO_CONCURRENCY,
-          (p) => mixFromQueryDeep(p.label, p.q),
-        ));
-        // Si hay artistas preferidos del onboarding, añadir mixes extra
-        if (artistPrefs.length) {
-          const artistMixesExtra = clean(await mapPool(
-            artistPrefs.slice(0, 6),
-            RADIO_CONCURRENCY,
-            (a) => mixFromSearch(a.name, a.name),
-          ));
-          genreMixes.push(...artistMixesExtra);
-        }
-        pushRich('Tus géneros a fondo', genreMixes, { prefix: 'Género' });
-      }
-
-      // ═══ 11) ARTISTAS DE TU UNIVERSO ═══
-      if (alive() && sections.length >= 2) {
-        const byArtist = new Map();
-        for (const t of ranked.slice(0, 100)) {
-          const k = artistKey(t);
-          if (!k) continue;
-          if (!byArtist.has(k)) byArtist.set(k, t);
-        }
-        const topArtists = [...byArtist.values()].slice(0, 10);
-        const artistMixes = clean(await mapPool(topArtists, RADIO_CONCURRENCY, (s) => mixFromSeed(s, MIN_MIX_TRACKS)));
-        pushRich('Artistas de tu universo', artistMixes, { min: 4, prefix: 'Artista' });
-      }
-
-      // ═══ 12) DNA musical — VARIOS clusters de semillas ═══
-      if (alive() && sections.length >= 2) {
-        const pool = dedupeByTitle([
-          ...seeds,
-          ...favIds.slice(0, 12).map(trackById).filter(Boolean),
-          ...pls.flatMap((p) => (p.trackIds || []).slice(0, 4).map(trackById).filter(Boolean)),
-          ...recentIds.slice(0, 10).map(trackById).filter(Boolean),
-        ]);
-        const clusters = [
-          pick(pool, 5),
-          pick(pool, 5),
-          pick(pool, 5),
-          pick(pool, 5),
-        ].filter((c) => c.length >= 2);
-        const dnaMixes = clean(await mapPool(clusters, 2, async (cluster, idx) => {
-          try {
-            const rels = await mapPool(cluster, 2, (s) =>
-              api.radio(s.id, 100).catch(() => []),
-            );
-            const tracks = capPerArtist(
-              dedupeByTitle([...cluster, ...rels.flat().map(normalizeTrack)]),
-              3,
-            ).filter((t) => t.id).slice(0, 80);
-            if (tracks.length < 8) return null;
-            const labels = ['Tu DNA musical', 'Tu firma sonora', 'Núcleo de gustos', 'Esencia personal'];
-            return { label: labels[idx] || `DNA ${idx + 1}`, tracks };
-          } catch { return null; }
-        }));
-        pushRich('Hecho solo para vos', dnaMixes, { min: 4, prefix: 'DNA' });
-      }
-
-      // ═══ 13) MÁS PROFUNDIDAD — varios ángulos ═══
-      if (alive() && sections.length >= 6) {
-        const altA = pick(ranked.slice(0, 50), 6);
-        const altB = pick(seeds, 6);
-        const altC = pick(favIds.map(trackById).filter(Boolean), 6);
-        const deepMixes = [];
-        for (const [label, group] of [
-          ['Nuevos hallazgos de tu onda', altA],
-          ['Ramas de tu gusto', altB],
-          ['Más allá de tus likes', altC],
-        ]) {
-          if (!group.length) continue;
-          const m = await buildDiscoveryMixes(group, 3);
-          if (m[0]) deepMixes.push({ ...m[0], label });
-          if (m[1]) deepMixes.push({ ...m[1], label: label + ' · extra' });
-        }
-        if (prefs.length) {
-          const more = clean(await mapPool(
-            pick(prefs, 5),
-            RADIO_CONCURRENCY,
-            (p) => mixFromQueryDeep('Más ' + p.label, p.q),
-          ));
-          deepMixes.push(...more);
-        }
-        pushRich('Más profundidad para ti', deepMixes, { prefix: 'Profundidad' });
-      }
-
-      // Sin historial: genérico solo como último recurso
-      if (!hasHistory && !prefs.length && alive() && sections.length < 2) {
-        pushRich('Éxitos del momento', clean(await mapPool(pick(SEED_ROWS, 6), RADIO_CONCURRENCY, (s) => mixFromSearch(s.label, s.q))), { prefix: 'Hit' });
-        pushRich('Explora géneros', clean(await mapPool(pick(GENRES, 8), RADIO_CONCURRENCY, (g) => mixFromSearch(g.label, g.q))), { prefix: 'Género' });
-        pushRich('Para descubrir', clean(await mapPool(pick(DISCOVERY, 6), RADIO_CONCURRENCY, (d) => mixFromSearch(d.label, d.q))), { prefix: 'Nuevo' });
-      }
-
-      // ═══ 14) MOODS — estados de ánimo ═══
-      if (alive() && sections.length >= 6) {
-        const moods = pick(MOODS, 6);
-        const moodMixes = clean(await mapPool(moods, RADIO_CONCURRENCY, (m) => mixFromSearch(m.label, m.q)));
-        pushRich('Por cómo te sentís', moodMixes, { prefix: 'Mood' });
-      }
-
-      // ═══ 15) VIAJA EN EL TIEMPO ═══
-      if (alive() && sections.length >= 6) {
-        const eras = pick(ERAS, 5);
-        const eraMixes = clean(await mapPool(eras, RADIO_CONCURRENCY, (e) => mixFromSearch(e.label, e.q)));
-        pushRich('Viaja en el tiempo', eraMixes, { prefix: 'Época' });
-      }
-
-      if (alive()) {
-        clearTimeout(safetyTimer);
-        feedSigRef.current = sig;
-        // Publicar el feed final autoritativo (por si la caché seguía visible) y
-        // guardarlo como last-good. Si la regeneración no produjo nada pero había
-        // caché pintada, se conserva la caché (no se vacía el feed visible).
-        if (sections.length > 0 || paintedCacheCount === 0) setHomeRows([...sections]);
-        setHomeLoading(false);
-        saveFeedCache(sections);
-      }
-      } catch (err) {
-        // Unexpected error — unlock loading with whatever sections were pushed.
-        if (alive()) {
-          feedSigRef.current = sig;
-          setHomeLoading(false);
-        }
-      } finally {
-        clearTimeout(safetyTimer);
+        await pool(queries,3,async query=>{
+          if(!alive())return;
+          let tracks=(await search(query.q)).map(normalizeTrack);
+          const name=query.artist || (query.kind==='artist'?query.q:null);
+          if(name)tracks=tracks.filter(t=>knownArtist(t,name));
+          tracks=capPerArtist(dedupeByTitle(tracks),query.kind==='genre'?20:60);
+          const section=query.kind==='artist'?'Tus artistas, desde el primer día':'El sonido que elegiste';
+          add(section,{label:query.label,tracks,reason:query.kind==='artist'?'Artista que elegiste':'Por tus géneros'});
+        });
+        // Separate discovery within the selected genres; do not derive tastes
+        // from unrelated files that happen to be downloaded on the device.
+        const discoveries=genreArtists(prefs).filter(a=>!queries.some(q=>artistIdentity(q.q)===a._key));
+        const usedGenres=new Set(),chosen=[];
+        for(const a of discoveries){if(!usedGenres.has(a.genre)){usedGenres.add(a.genre);chosen.push(a);}}
+        await pool(chosen.slice(0,6),3,async a=>{
+          if(!alive())return;
+          const tracks=(await search(a.name)).map(normalizeTrack).filter(t=>knownArtist(t,a.name));
+          add('Sigue descubriendo',{label:a.name,tracks,reason:'Más de '+a.genre});
+        });
+        // A few radio continuations from genuine listening history only.
+        const seeds=[...new Set([...store.recent,...store.favs])].map(trackById).filter(Boolean).slice(0,3);
+        await pool(seeds,2,async seed=>{
+          if(!alive())return;
+          const raw=await request('radio:'+seed.id,signal=>api.radio(seed.id,50,signal));
+          const tracks=capPerArtist(dedupeByTitle(raw.map(normalizeTrack)),4).filter(t=>!allowed.size||allowed.has(artistIdentity(t.artist)));
+          if(tracks.length>=3)add('A partir de lo que escuchas',{label:'Como '+seed.artist,tracks});
+        });
+      }finally{
+        clearTimeout(safety);
+        if(alive()){store.setHomeLoading(false);if(rows.length)saveFeedCache(rows,profile);}
       }
     })();
-  }, [authed, libReady, contentSig, feedNonce, offline, setHomeRows, setHomeLoading, setFeedNonce]);
-
-  useEffect(() => {
-    // Al volver la conexión, regenerar el feed (si estaba en modo offline).
-    const onOnline = () => setFeedNonce(useLibraryStore.getState().feedNonce + 1);
-    window.addEventListener('online', onOnline);
-    return () => window.removeEventListener('online', onOnline);
-  }, [setFeedNonce]);
-
-  useEffect(() => {
-    let h = 0;
-    const v = () => {
-      if (document.visibilityState === 'hidden') h = Date.now();
-      else if (h && Date.now() - h > 720000) {
-        h = 0;
-        setFeedNonce(useLibraryStore.getState().feedNonce + 1);
-      }
-    };
-    document.addEventListener('visibilitychange', v);
-    return () => document.removeEventListener('visibilitychange', v);
-  }, [setFeedNonce]);
+    return ()=>{cancelled=true;clearTimeout(safety);controllers.forEach(c=>c.abort());};
+  },[authed,signature]); // signature covers semantic values, not transient object identity
+  useEffect(()=>{
+    const refresh=()=>useLibraryStore.getState().setFeedNonce(useLibraryStore.getState().feedNonce+1);
+    window.addEventListener('online',refresh);return()=>window.removeEventListener('online',refresh);
+  },[]);
 }
-
 export default useHomeFeed;

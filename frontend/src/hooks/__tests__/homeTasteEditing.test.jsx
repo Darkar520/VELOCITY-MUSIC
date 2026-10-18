@@ -1,0 +1,23 @@
+import React from 'react';
+import {render,screen,fireEvent,cleanup} from '@testing-library/react';
+import {afterEach,it,expect,vi} from 'vitest';
+vi.mock('../../api.js',()=>({api:{searchAll:vi.fn(async()=>({artists:[],songs:[]}))}}));
+import {HomeTab} from '../../tabs/HomeTab.jsx';
+import {useLibraryStore} from '../../store/libraryStore.js';
+import {usePlayerStore} from '../../store/playerStore.js';
+import {THEMES} from '../../constants.js';
+afterEach(cleanup);
+it('edits and cancels tastes without losing the existing preferences',async()=>{
+ useLibraryStore.getState().reset();usePlayerStore.setState({track:null,downloaded:new Set()});
+ useLibraryStore.getState().setHomeRows([{section:'Para ti',mixes:[{label:'Deftones',tracks:[{id:'taste-song',title:'Rosemary',artist:'Deftones'}]}]}]);
+ const prefs={genres:['Rock','Metal','EDM'].map(label=>({label,q:label})),artists:[{name:'Deftones',_key:'deftones'}]};
+ const setOnboardPrefs=vi.fn();
+ render(<HomeTab T={THEMES.emerald} onboardPrefs={prefs} setOnboardPrefs={setOnboardPrefs} play={vi.fn()} goMix={vi.fn()} setTab={vi.fn()}/>);
+ fireEvent.click(screen.getByRole('button',{name:'Ajustar gustos'}));
+ expect(screen.getByText('¿Qué te gusta escuchar?')).toBeTruthy();
+ fireEvent.click(screen.getByRole('button',{name:'Cancelar'}));expect(setOnboardPrefs).not.toHaveBeenCalled();
+ fireEvent.click(screen.getByRole('button',{name:'Ajustar gustos'}));
+ fireEvent.click(screen.getByRole('button',{name:'Continuar'}));
+ fireEvent.click(await screen.findByRole('button',{name:'Empezar'}));
+ expect(setOnboardPrefs).toHaveBeenCalledWith(prefs);
+});
