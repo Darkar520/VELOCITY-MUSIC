@@ -25,9 +25,11 @@
           const expected = Number(response.headers.get('content-length'));
           if (!blob.size || (expected > 0 && blob.size !== expected)) throw new Error('incomplete_audio');
           if (!/^(audio\/|video\/webm)/i.test(blob.type)) throw new Error('invalid_audio');
+          const previous = await store.getSavedMeta?.(job.id);
+          const meta = root.VelocityOfflineArtwork ? await root.VelocityOfflineArtwork.prepare(job.meta, previous) : job.meta;
           const current = await store.get(job.id);
           if (current?.batchId !== registration.id || current.status !== 'background') continue;
-          const writing = store.saveAudio(job.meta, blob);
+          const writing = store.saveAudio(meta, blob);
           writes.add(writing);
           try { await writing; } finally { writes.delete(writing); }
           await store.remove(job.id);

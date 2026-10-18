@@ -6,6 +6,13 @@ import { api } from './api.js';
 import { FALLBACK_COVER } from './constants.js';
 
 const _catalog = new Map();
+const _listeners = new Map();
+export function subscribeTrack(id, listener) {
+  if (!_listeners.has(id)) _listeners.set(id, new Set());
+  const listeners = _listeners.get(id);
+  listeners.add(listener);
+  return () => { listeners.delete(listener); if (!listeners.size) _listeners.delete(id); };
+}
 
 export const hasCover = (c) => !!c && c !== FALLBACK_COVER;
 const isDataUrl = (c) => typeof c === 'string' && c.startsWith('data:');
@@ -40,6 +47,11 @@ export function cacheTrack(t) {
     if (resilientCover !== t.cover) t = { ...t, cover: resilientCover };
     const prev = _catalog.get(t.id);
     if (prev) {
+      const incoming = t;
+      t = { ...prev, ...t };
+      for (const key of ['title', 'artist', 'album', 'artistId', 'albumId', 'genre', 'durationSeconds']) {
+        if (!incoming[key] && prev[key]) t[key] = prev[key];
+      }
       // Prioridad de carátula (mayor → menor):
       //   data: URL (offline IDB) > HTTPS album cover > HTTPS video thumb > vacío.
       // 1. Entrante data: siempre gana a HTTPS/vacío (offline IDB).
@@ -59,6 +71,7 @@ export function cacheTrack(t) {
       }
     }
     _catalog.set(t.id, t);
+    _listeners.get(t.id)?.forEach(listener => listener(t));
   }
   return t;
 }

@@ -24,6 +24,7 @@ const offlineMock = vi.hoisted(() => {
   return {
     saveTrack: vi.fn(async () => {}),
     listIds: vi.fn(async () => []),
+    listMetas: vi.fn(async () => []),
     deleteTrack: vi.fn(async () => true),
     deleteAll: vi.fn(async () => true),
     downloadsInfo: vi.fn(async () => ({ count: 0, bytes: 0, items: [] })),

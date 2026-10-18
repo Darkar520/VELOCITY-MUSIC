@@ -11,6 +11,7 @@
  *      el auto-reanudado re-descargaba lo que ya estaba en disco.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { Blob as NativeBlob } from 'node:buffer';
 
 // ── Stub mínimo de IndexedDB con soporte de cursor ────────────────────────────
 function makeIDBStub(records) {
@@ -278,6 +279,38 @@ describe('cuota agotada', () => {
 
 describe('store de metadatos separado (v3)', () => {
   beforeEach(() => { vi.resetModules(); });
+
+  it('saves a proxied cover locally before acknowledging a new download', async () => {
+    const stub = makeIDBStubV3([]);
+    vi.stubGlobal('indexedDB', stub);
+    const fetchCover = vi.fn(async () => new Response(new NativeBlob(['image'], { type: 'image/png' })));
+    vi.stubGlobal('fetch', fetchCover);
+    const offline = await import('../offline.js');
+    const meta = { id: 'local-art', title: 'Title', artist: 'Artist', album: 'Album', durationSeconds: 123, cover: '/img?u=https%3A%2F%2Fcdn.test%2Fart.png&id=local-art' };
+    const saved = await offline.saveTrack(meta, new Blob(['audio'], { type: 'audio/mp4' }));
+    expect(fetchCover.mock.calls[0][0]).toContain('/img?u=https%3A%2F%2Fcdn.test%2Fart.png&id=local-art');
+    expect(fetchCover.mock.calls[0][0]).not.toContain('%2Fimg%3F');
+    expect(saved.cover).toMatch(/^data:image\/png;base64,/);
+    expect(stub.__meta.get(meta.id).meta).toEqual(saved);
+    expect(stub.__tracks.get(meta.id).meta).toEqual(saved);
+    expect(saved).toMatchObject({ title: 'Title', artist: 'Artist', album: 'Album', durationSeconds: 123 });
+  });
+
+  it('backfills legacy proxied artwork without nesting the proxy or touching audio bytes', async () => {
+    const blob = new Blob(['original-audio']);
+    const meta = { id: 'legacy-art', title: 'Old', cover: '/img?u=https%3A%2F%2Fcdn.test%2Fart.png&id=legacy-art' };
+    const record = { id: meta.id, meta, blob, size: blob.size, at: 1 };
+    const stub = makeIDBStubV3([record], [record]);
+    vi.stubGlobal('indexedDB', stub);
+    const fetchCover = vi.fn(async () => new Response(new NativeBlob(['image'], { type: 'image/png' })));
+    vi.stubGlobal('fetch', fetchCover);
+    const offline = await import('../offline.js');
+    const fixed = await offline.backfillCovers();
+    expect(fetchCover.mock.calls[0][0]).not.toContain('%2Fimg%3F');
+    expect(fixed[0].cover).toMatch(/^data:image\/png;base64,/);
+    expect(stub.__tracks.get(meta.id).blob).toBe(blob);
+    expect(stub.__meta.get(meta.id).meta.cover).toBe(fixed[0].cover);
+  });
 
   it('listMetas usa el store ligero cuando ya está poblado', async () => {
     const metaRecs = [{ id: 'm1', meta: { id: 'm1', title: 'Rápido' }, at: 1, size: 10, type: '' }];

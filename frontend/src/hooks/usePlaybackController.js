@@ -486,6 +486,8 @@ export function usePlaybackController(deps) {
     // TRACK_SET: live/session=0, clearSrc (hardStop), ensureStream. Seek 0.
     // No volver a bumpAudioEpoch aquí: STREAM_READY del peek/sign debe
     // schedulePlay con el epoch del clearSrc.
+    const metadataDuration = trackById(t.id)?.durationSeconds;
+    usePlayerStore.getState().setDuration(Number.isFinite(metadataDuration) && metadataDuration > 0 ? metadataDuration : 0);
     dispatchAudio({ type: 'TRACK_SET', trackId: t.id, intent: 'play' });
     setTime(0);
 

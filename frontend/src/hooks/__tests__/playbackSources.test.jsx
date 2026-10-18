@@ -89,3 +89,10 @@ it('keeps an incompatible downloaded file and uses the online compatible source'
   expect(mocks.ensure).toHaveBeenCalledOnce();
   expect(audio.getAttribute('src')).toContain('stream-proxy');
 });
+
+it.each([0, 201])('a new selection replaces the previous duration with its own metadata (%s seconds)', async durationSeconds => {
+  const { result, track } = setup();
+  usePlayerStore.setState({ duration: 127.941 });
+  await act(async () => { result.current.play({ ...track, id: 'new-duration-' + durationSeconds, durationSeconds }); });
+  expect(usePlayerStore.getState().duration).toBe(durationSeconds);
+});

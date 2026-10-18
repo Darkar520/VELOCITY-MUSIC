@@ -92,3 +92,29 @@ it('retains offline blob artwork through pause/play and releases it on unmount',
   unmount();
   expect(revoke).toHaveBeenCalledWith('blob:offline-cover');
 });
+
+it('publishes a persistent local artwork URL when the active worker serves its saved image', async () => {
+  vi.stubGlobal('navigator', { mediaSession: session, serviceWorker: { controller: {} } });
+  const fetchArt = vi.fn(async () => new Response('image', { headers: { 'content-type': 'image/png' } }));
+  vi.stubGlobal('fetch', fetchArt);
+  const { props, rerender } = setup({ id: 'persistent-art', title: 'Offline', artist: 'Artist', album: 'Album', cover: 'data:image/png;base64,aGVsbG8=' });
+  await act(async () => { await Promise.resolve(); });
+  expect(new URL(session.metadata.artwork[0].src).pathname).toBe('/offline-artwork/persistent-art');
+  expect(session.metadata).toMatchObject({ title: 'Offline', artist: 'Artist', album: 'Album' });
+  const metadata = session.metadata;
+  rerender({ ...props, playing: false });
+  expect(session.metadata).toBe(metadata);
+  expect(fetchArt).toHaveBeenCalledTimes(1);
+});
+
+it('an old worker returning the SPA shell uses local data instead of a false image URL', async () => {
+  vi.stubGlobal('navigator', { mediaSession: session, serviceWorker: { controller: {} } });
+  const create = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:local-fallback');
+  vi.stubGlobal('fetch', vi.fn(async (url) => url.includes('/offline-artwork/')
+    ? new Response('<html></html>', { headers: { 'content-type': 'text/html' } })
+    : { ok: true, blob: async () => ({ size: 5, type: 'image/png' }) }));
+  setup({ id: 'old-worker-art', title: 'Offline', cover: 'data:image/png;base64,aGVsbG8=' });
+  await act(async () => { await Promise.resolve(); });
+  expect(session.metadata.artwork[0].src).toBe('blob:local-fallback');
+  expect(create).toHaveBeenCalledOnce();
+});

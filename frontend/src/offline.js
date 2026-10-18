@@ -2,6 +2,7 @@
 // Guarda el audio (blob) + metadatos dentro del propio navegador/app,
 // sin diálogo de "guardar como". Persiste entre sesiones.
 
+import '../public/offline-artwork.js';
 const DB_NAME = 'velocity-offline';
 const STORE = 'tracks';
 const LYRICS_STORE = 'lyrics';
@@ -169,11 +170,8 @@ export async function saveTrack(meta, blob, { cacheCover = true } = {}) {
   if (!blob || !blob.size) throw new Error('blob vacío');
   // Cachear la carátula como data URL (vía proxy mismo-origen) para verla sin
   // conexión. Best-effort: si falla, se guarda la meta con su URL original.
-  let m = meta;
-  try {
-    const dataUrl = cacheCover ? await coverToDataUrl(meta && meta.cover) : null;
-    if (dataUrl && dataUrl.startsWith('data:')) m = { ...meta, cover: dataUrl };
-  } catch {}
+  const previous = await getMeta(meta?.id);
+  const m = cacheCover ? await globalThis.VelocityOfflineArtwork.prepare(meta, previous) : { ...previous, ...meta };
   const at = Date.now();
   // `size`/`type` quedan registrados para poder VERIFICAR la integridad después:
   // sin ellos una descarga truncada (blob a medias) es indistinguible de una
@@ -199,52 +197,35 @@ export async function saveTrack(meta, blob, { cacheCover = true } = {}) {
   return m;
 }
 
-// Descarga la carátula (a través del proxy /img del mismo origen, que evita
-// problemas de CORS) y la convierte a data URL a resolución media.
+// El helper compartido conserva proxies existentes y sus parámetros de fallback.
 async function coverToDataUrl(coverUrl) {
-  if (!coverUrl || typeof coverUrl !== 'string' || coverUrl.startsWith('data:')) return coverUrl || null;
-  try {
-    const medium = coverUrl
-      .replace(/=w\d+-h\d+/, '=w544-h544')
-      .replace(/=s\d+/, '=s544')
-      .replace(/(\d+)x(\d+)bb\.(jpg|png)/i, '544x544bb.$3');
-    const r = await fetch('/img?u=' + encodeURIComponent(medium));
-    if (!r.ok) return null;
-    const blob = await r.blob();
-    if (!blob.type.startsWith('image/')) return null;
-    return await new Promise((resolve) => {
-      const fr = new FileReader();
-      fr.onload = () => resolve(fr.result);
-      fr.onerror = () => resolve(null);
-      fr.readAsDataURL(blob);
-    });
-  } catch { return null; }
+  return globalThis.VelocityOfflineArtwork.toDataUrl(coverUrl);
 }
 
 // Rellena las carátulas (data URL) de descargas antiguas que aún tengan URL
 // remota. Se ejecuta una vez al iniciar con conexión. Devuelve las metas
 // actualizadas para refrescar la interfaz. Secuencial para no saturar la red.
-export async function backfillCovers() {
+let _backfill = null;
+export function backfillCovers() {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return Promise.resolve([]);
+  if (!_backfill) _backfill = fillCovers().finally(() => { _backfill = null; });
+  return _backfill;
+}
+async function fillCovers() {
   const db = await openDB();
-  // Primero recolectar SOLO los ids/covers que faltan (cursor: sin cargar los
-  // blobs de toda la biblioteca en memoria). El registro completo se lee
+  // Primero recolectar SOLO metadatos (sin cargar los blobs de la biblioteca).
+  // El registro completo se lee
   // individualmente y solo para los pocos que hay que reescribir.
-  const pend = [];
-  await eachRecord(db, (r) => {
-    const cover = r && r.meta && r.meta.cover;
-    if (r && r.id && typeof cover === 'string' && cover && !cover.startsWith('data:')) {
-      pend.push({ id: r.id, cover });
-    }
-  });
+  const pend = (await listMetas()).filter(m => m?.id && typeof m.cover === 'string' && m.cover && !m.cover.startsWith('data:'));
   const updated = [];
   for (const { id, cover } of pend) {
     const dataUrl = await coverToDataUrl(cover);
     if (!dataUrl || !dataUrl.startsWith('data:')) continue;
     const rec = await getRecord(id);
     if (!rec || !rec.meta) continue;
-    rec.meta = { ...rec.meta, cover: dataUrl };
+    rec.meta = { ...rec.meta, cover: dataUrl, artworkStatus: 'ready' };
     const stores = db.objectStoreNames.contains(META_STORE) ? [STORE, META_STORE] : [STORE];
-    await new Promise((resolve) => {
+    const saved = await new Promise((resolve) => {
       // Mantener `meta` en sync: si solo se actualizara `tracks`, el camino
       // rápido seguiría devolviendo la carátula vieja.
       const tx = db.transaction(stores, 'readwrite');
@@ -252,10 +233,10 @@ export async function backfillCovers() {
       if (stores.length > 1) {
         tx.objectStore(META_STORE).put({ id: rec.id, meta: rec.meta, at: rec.at || 0, size: rec.size ?? (rec.blob && rec.blob.size) ?? 0, type: rec.type ?? '' });
       }
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => resolve();
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = tx.onabort = () => resolve(false);
     });
-    updated.push(rec.meta);
+    if (saved) updated.push(rec.meta);
   }
   return updated;
 }
@@ -267,6 +248,18 @@ export async function getRecord(id) {
     const rq = tx.objectStore(STORE).get(id);
     rq.onsuccess = () => resolve(rq.result || null);
     rq.onerror = () => resolve(null);
+  });
+}
+
+/** Read metadata without deserializing the audio blob. */
+export async function getMeta(id) {
+  if (!id) return null;
+  const db = await openDB();
+  if (!db.objectStoreNames.contains(META_STORE)) return (await getRecord(id))?.meta || null;
+  return new Promise((resolve, reject) => {
+    const request = db.transaction(META_STORE, 'readonly').objectStore(META_STORE).get(id);
+    request.onsuccess = () => resolve(request.result?.meta || null);
+    request.onerror = () => reject(request.error);
   });
 }
 
