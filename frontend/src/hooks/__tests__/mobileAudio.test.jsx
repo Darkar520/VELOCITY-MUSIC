@@ -21,6 +21,7 @@ function handlers() {
   const deps = { audioRef: { current: audio }, getMachine: () => machine,
     selfPauseRef: { current: false }, pendingFadeRef: { current: false },
     playingRef: { current: true }, trackRef: { current: { id: 'a' } },
+    systemPausedRef: { current: false }, setTime: vi.fn(),
     dispatchAudio: vi.fn(), setLoadingAudio: vi.fn() };
   return { ...renderHook(() => useAudioElement(deps)), machine, audio, deps };
 }
@@ -118,6 +119,48 @@ describe('mobile audio races and power policy', () => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
     await act(() => vi.advanceTimersByTimeAsync(350));
     expect(deps.dispatchAudio).not.toHaveBeenCalled();
+  });
+
+  it('does not yield or carry the old position when a notification next queues an internal pause', () => {
+    const { result, machine, audio, deps } = handlers();
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    let src = '/audio/a';
+    audio.getAttribute = () => src;
+    audio.removeAttribute = () => { src = null; };
+    audio.paused = false;
+    audio.pause = () => { audio.paused = true; }; // native pause event arrives in a later task
+    const transition = reduce(machine, { type: 'TRACK_SET', trackId: 'b', intent: 'play' });
+    Object.assign(machine, transition.state);
+    runAudioEffects(transition.effects, { audioRef: deps.audioRef, selfPauseRef: deps.selfPauseRef });
+    act(() => result.current.onPause());
+    expect(deps.dispatchAudio).not.toHaveBeenCalled();
+    const ready = reduce(machine, { type: 'STREAM_READY', trackId: 'b', url: '/audio/b' });
+    expect(ready.state.focus).toBe('own');
+    expect(ready.effects).toContainEqual({ type: 'seek', position: 0 });
+    expect(ready.effects).toContainEqual({ type: 'play' });
+  });
+
+  it('ignores the old resource clock while a new track is resolving', () => {
+    const { result, machine, deps } = handlers();
+    Object.assign(machine, reduce(machine, { type: 'TRACK_SET', trackId: 'b', intent: 'play' }).state);
+    act(() => result.current.onTimeUpdate());
+    expect(deps.setTime).not.toHaveBeenCalled();
+  });
+
+  it.each(['empty', 'loading', 'previous-source'])('ignores a queued pause from a %s resource without suppressing a real interruption', mode => {
+    const { result, audio, deps } = handlers();
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    audio.readyState = 4;
+    audio.getAttribute = () => mode.includes('empty') ? null : '/audio/b';
+    audio.readyState = mode.includes('loading') ? 0 : 4;
+    audio.currentSrc = mode.includes('previous-source') ? new URL('/audio/a', location.href).href : '';
+    act(() => result.current.onPause());
+    expect(deps.dispatchAudio).not.toHaveBeenCalled();
+    audio.getAttribute = () => '/audio/b';
+    audio.currentSrc = new URL('/audio/b', location.href).href;
+    audio.readyState = 4;
+    act(() => result.current.onPause());
+    expect(deps.dispatchAudio).toHaveBeenCalledWith(expect.objectContaining({ type: 'EXTERNAL_PAUSE', hidden: true }));
   });
 
   it('discards an old-track pause and cancels pending pause work on unmount', async () => {

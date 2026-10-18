@@ -44,8 +44,18 @@ export function useAudioElement({
     clearTimeout(pauseTimerRef.current);
     clearTimeout(sustainedTimerRef.current);
   }, []);
+  // The element is reused across tracks. Its currentSrc/currentTime can still
+  // describe the previous resource after TRACK_SET removed the src attribute.
+  // Only the selected, loaded resource may publish native events to policy/UI.
+  const ownsResource = a => {
+    if (!a || getMachine().srcStatus !== 'ready') return false;
+    const src = a.getAttribute('src');
+    if (!src || a.readyState === 0) return false;
+    return !a.currentSrc || a.currentSrc === new URL(src, location.href).href;
+  };
   const onTimeUpdate = () => {
     const a = audioRef.current; if (!a) return;
+    if (!ownsResource(a)) return;
     // Solo congelar reloj si la interrupción por vídeo está CONFIRMADA y sigue pausado.
     if ((systemPausedRef.current || mediaInterrupted) && a.paused) return;
     const ct = a.currentTime || 0; setTime(ct);
@@ -90,12 +100,14 @@ export function useAudioElement({
   };
 
   const onLoadedMetadata = () => {
+    if (!ownsResource(audioRef.current)) return;
     setDur(audioRef.current?.duration || 0);
     flushPendingSeek(effectCtxRef.current);
     applySessionResume(audioRef.current);
   };
 
   const onCanPlay = () => {
+    if (!ownsResource(audioRef.current)) return;
     // canplay solo indica que hay datos suficientes; play() todavía puede
     // estar pendiente o ser rechazado. El spinner se apaga en onPlay/
     // onPlaying o cuando el reloj empieza a avanzar.
@@ -104,6 +116,7 @@ export function useAudioElement({
   };
 
   const onPlay = () => {
+    if (!ownsResource(audioRef.current)) return;
     clearTimeout(pauseTimerRef.current);
     selfPauseRef.current = false;
     const el = audioRef.current;
@@ -124,6 +137,7 @@ export function useAudioElement({
   };
 
   const onPlaying = () => {
+    if (!ownsResource(audioRef.current)) return;
     clearTimeout(pauseTimerRef.current);
     selfPauseRef.current = false;
     bgLastProgressRef.current = Date.now();
@@ -168,6 +182,9 @@ export function useAudioElement({
     clearTimeout(pauseTimerRef.current);
     const a = audioRef.current;
     if (!a) return;
+    // pause() queues its event; selfPauseRef is already false by delivery.
+    // A transition pause cannot interrupt the next source or save its old clock.
+    if (!ownsResource(a) || !a.paused) return;
     if (getMachine().intent !== 'play') {
       setLoadingAudio(false);
       return;
@@ -223,6 +240,7 @@ export function useAudioElement({
   };
 
   const onEnded = () => {
+    if (!ownsResource(audioRef.current) || !audioRef.current.ended) return;
     dispatchAudio({ type: 'ENDED' });
     onTrackEnded();
   };
