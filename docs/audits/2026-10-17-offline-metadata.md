@@ -16,6 +16,11 @@ certifica que todos los sistemas operativos pinten siempre una notificación.
    misma pista. Una portada nueva podía permanecer invisible hasta otro render.
 4. El catálogo reemplazaba metadatos completos por objetos parciales; valores
    vacíos podían borrar texto o duración conocidos.
+5. En el ensayo de transición offline, la siguiente canción no descargada
+   conservaba la duración nativa de Intro (127,941 s). Dos regresiones, con
+   duración conocida y desconocida, fallaron antes de corregir. Una selección
+   nueva publica su propia duración conocida o cero hasta recibir metadata
+   nativa; seleccionar la pista ya activa conserva la posición y duración.
 
 ## Implementación
 
@@ -42,6 +47,8 @@ certifica que todos los sistemas operativos pinten siempre una notificación.
 
 - npm run verify: 455 pruebas Node, cero fallos y build correcto.
 - Frontend completo: 533 pruebas, 47 archivos, cero fallos.
+- Ajuste posterior de duración: dos casos adicionales; se repite la suite
+  dirigida y el CI final debe incluir las 535 pruebas.
 - Lints backend/frontend y diff-check sin errores.
 - Casos negativos: proveedor 404/HTML/imagen demasiado grande, metadatos
   parciales, worker antiguo con shell HTML, cancelación/cuota de descargas,
