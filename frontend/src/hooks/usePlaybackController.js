@@ -543,8 +543,10 @@ export function usePlaybackController(deps) {
   const orderIds = queue.length ? queue : (track ? [track.id] : []);
 
   const next = useCallback(() => {
-    const cur = trackRef.current || track;
-    const ids = (queueRef.current && queueRef.current.length)
+    // Media Session actions can precede React's passive ref mirrors in background.
+    const current = usePlayerStore.getState();
+    const cur = current.track || trackRef.current || track;
+    const ids = current.queue.length ? current.queue : (queueRef.current && queueRef.current.length)
       ? queueRef.current
       : (orderIds.length ? orderIds : (cur ? [cur.id] : []));
     if (!cur || !ids.length) return;
@@ -560,8 +562,9 @@ export function usePlaybackController(deps) {
   }, [track, orderIds, shuffle, trackRef, queueRef, play]);
 
   const prev = useCallback(() => {
-    const cur = trackRef.current || track;
-    const ids = (queueRef.current && queueRef.current.length)
+    const current = usePlayerStore.getState();
+    const cur = current.track || trackRef.current || track;
+    const ids = current.queue.length ? current.queue : (queueRef.current && queueRef.current.length)
       ? queueRef.current
       : (orderIds.length ? orderIds : (cur ? [cur.id] : []));
     if (!cur || !ids.length) return;
