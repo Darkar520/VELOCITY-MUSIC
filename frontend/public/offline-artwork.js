@@ -2,6 +2,49 @@
 // independently of the disposable HTTP cache. No audio is read or converted.
 (function (root) {
   const MAX_BYTES = 1024 * 1024;
+  const CACHE = 'velocity-artwork-v1';
+  const isImage = response => response?.ok && /^image\//i.test(response.headers.get('content-type') || '');
+  // Compare the image resource, not the display size. Keep all non-size
+  // parameters and the explicit video fallback id: unrelated artwork must not
+  // be substituted just because two requests belong to one song.
+  function identity(value) {
+    try {
+      const url = new URL(value, root.location?.origin || 'https://velocity.invalid');
+      if (url.pathname !== '/img') return null;
+      const image = new URL(url.searchParams.get('u'));
+      if (!['http:', 'https:'].includes(image.protocol)) return null;
+      if (/(^|\.)(googleusercontent\.com|ggpht\.com)$/i.test(image.hostname)) {
+        image.pathname = image.pathname.replace(/=w\d+-h\d+/, '=wSIZE-hSIZE').replace(/=s\d+/, '=sSIZE');
+      } else if (/(^|\.)mzstatic\.com$/i.test(image.hostname)) {
+        image.pathname = image.pathname.replace(/\d+x\d+bb\.(jpg|png)/i, 'SIZExSIZEbb.$1');
+      }
+      url.searchParams.set('u', image.href);
+      const id = url.searchParams.get('id');
+      url.searchParams.delete('id');
+      url.searchParams.sort();
+      return { resource: url.origin + url.pathname + '?' + url.searchParams, id };
+    } catch { return null; }
+  }
+  async function cached(value) {
+    if (!root.caches) return null;
+    const key = identity(value);
+    if (!key) return null;
+    try {
+      const names = (await root.caches.keys()).filter(name => name === CACHE || /^velocity-v\d+$/.test(name));
+      for (const name of names) {
+        const cache = await root.caches.open(name);
+        const exact = await cache.match(new URL(value, root.location?.origin || 'https://velocity.invalid').href);
+        if (isImage(exact)) return exact;
+        for (const request of await cache.keys()) {
+          const candidate = identity(request.url);
+          if (!candidate || candidate.resource !== key.resource || (candidate.id && key.id && candidate.id !== key.id)) continue;
+          const response = await cache.match(request);
+          if (isImage(response)) return response;
+        }
+      }
+    } catch { /* private mode/quota/storage errors must not break playback */ }
+    return null;
+  }
   const pending = new Map();
   let active = 0;
   const waiting = [];
@@ -37,7 +80,9 @@
       try {
         return await Promise.race([
           (async () => {
-            const response = await root.fetch(url, { signal: controller.signal });
+            const local = await cached(url);
+            if (!local && root.navigator?.onLine === false) return null;
+            const response = local || await root.fetch(url, { signal: controller.signal });
             if (!response.ok || Number(response.headers?.get('content-length')) > MAX_BYTES) return null;
             const blob = await response.blob();
             if (!blob.size || blob.size > MAX_BYTES || !/^image\//i.test(blob.type)) return null;
@@ -74,5 +119,5 @@
       return new Response(await image.blob(), { headers: { 'Content-Type': image.headers.get('content-type'), 'Cache-Control': 'no-store' } });
     } catch { return new Response(null, { status: 404 }); }
   }
-  root.VelocityOfflineArtwork = { source, toDataUrl, prepare, respond };
+  root.VelocityOfflineArtwork = { CACHE, source, cached, toDataUrl, prepare, respond };
 })(globalThis);

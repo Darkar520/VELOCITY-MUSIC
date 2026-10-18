@@ -429,19 +429,17 @@ export default function App() {
             setDownloaded(prev => { const n = new Set(prev); bad.forEach(id => n.delete(id)); return n; });
           }
         } catch {}
-        // Rellenar covers de descargas antiguas (solo con red).
+        // Recover from local image variants even without a network connection.
         try {
-          if (navigator.onLine !== false) {
-            const filled = await offline.backfillCovers({ coverFor: bestCoverFor });
-            if (filled && filled.length) {
-              filled.forEach(m => cacheTrack({ ...(trackById(m.id) || m), cover: m.cover }));
-              setTrack(prev => {
-                if (!prev || !prev.id) return prev;
-                const m = filled.find(x => x && x.id === prev.id);
-                if (m && m.cover) return { ...prev, cover: m.cover };
-                return prev;
-              });
-            }
+          const filled = await offline.backfillCovers({ coverFor: bestCoverFor });
+          if (filled && filled.length) {
+            filled.forEach(m => cacheTrack({ ...(trackById(m.id) || m), cover: m.cover }));
+            setTrack(prev => {
+              if (!prev || !prev.id) return prev;
+              const m = filled.find(x => x && x.id === prev.id);
+              if (m && m.cover) return { ...prev, cover: m.cover };
+              return prev;
+            });
           }
         } catch {}
       } catch {}

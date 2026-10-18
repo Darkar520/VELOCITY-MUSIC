@@ -11,7 +11,8 @@
 
 self.importScripts('/offline-artwork.js', '/downloads-db.js', '/downloads-worker.js');
 
-const CACHE = 'velocity-v91';
+const CACHE = 'velocity-v92';
+const ARTWORK_CACHE = self.VelocityOfflineArtwork.CACHE;
 const APP_SHELL = ['/', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'];
 
 self.addEventListener('install', (event) => {
@@ -25,7 +26,23 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then(async (keys) => {
+        // Shell versions are disposable; album images are not. Preserve old
+        // list-size images before removing their shell, including libraries
+        // whose IDB records still contain remote URLs after a failed fetch.
+        const artwork = await caches.open(ARTWORK_CACHE);
+        for (const key of keys.filter(k => /^velocity-v\d+$/.test(k) && k !== CACHE)) {
+          const old = await caches.open(key);
+          try {
+            for (const request of await old.keys()) {
+              if (new URL(request.url).pathname !== '/img') continue;
+              const response = await old.match(request);
+              if (response?.ok && /^image\//i.test(response.headers.get('content-type') || '')) await artwork.put(request, response);
+            }
+            await caches.delete(key);
+          } catch { /* retain the old cache if copying failed; retry on update */ }
+        }
+      })
       .then(() => self.clients.claim())
       .then(() => self.clients.matchAll({ type: 'window' }))
       .then((clients) => {
@@ -49,6 +66,26 @@ self.addEventListener('fetch', (event) => {
       Promise.resolve().then(() => self.VelocityOfflineArtwork.respond(decodeURIComponent(url.pathname.slice('/offline-artwork/'.length)), self.VelocityDownloadDB.createStore()))
         .catch(() => new Response(null, { status: 404 }))
     );
+    return;
+  }
+  if (url.pathname === '/img') {
+    const image = (async () => {
+      // A cached 512px album cover can satisfy 96px/900px views without a
+      // server. This is also used by metadata repair before any network work.
+      const cached = await self.VelocityOfflineArtwork.cached(request.url);
+      if (cached) return cached;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 8000);
+      try { return await fetch(request, { signal: controller.signal }); }
+      finally { clearTimeout(timer); }
+    })();
+    event.respondWith(image.catch(() => new Response(null, { status: 503 })));
+    event.waitUntil(image.then(async response => {
+      if (response?.ok && /^image\//i.test(response.headers.get('content-type') || '')) {
+        const cache = await caches.open(ARTWORK_CACHE);
+        await cache.put(request, response.clone());
+      }
+    }).catch(() => {}));
     return;
   }
 

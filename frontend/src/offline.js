@@ -237,11 +237,10 @@ export async function saveCover(id, cover) {
 }
 
 // Rellena las carátulas (data URL) de descargas antiguas que aún tengan URL
-// remota. Se ejecuta una vez al iniciar con conexión. Devuelve las metas
+// remota. También recupera variantes del caché sin red. Devuelve las metas
 // actualizadas para refrescar la interfaz. Secuencial para no saturar la red.
 let _backfill = null;
 export function backfillCovers({ coverFor } = {}) {
-  if (typeof navigator !== 'undefined' && navigator.onLine === false) return Promise.resolve([]);
   if (!_backfill) _backfill = fillCovers(coverFor).finally(() => { _backfill = null; });
   return _backfill;
 }
