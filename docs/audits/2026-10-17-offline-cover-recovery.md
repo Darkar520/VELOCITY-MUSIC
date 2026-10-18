@@ -21,11 +21,20 @@ carátulas ausentes del teléfono tengan estas causas.
   descarga borrada mientras llegaba la imagen. Un commit fallido devuelve null;
   no anuncia una reparación. Promover una portada no revierte texto más reciente
   que ya estuviera en el catálogo.
+- La reapertura real mostró VCR con álbum Sencillo mientras IndexedDB conservaba
+  xx. loadPlayerState volvía a cachear el snapshot viejo después de hidratar las
+  descargas. Ahora lee posición/cola/URL sin publicar metadata; solo el primer
+  arranque del store cachea explícitamente el snapshot, antes de hidratar IDB.
+  normalizeTrack usa datos conocidos antes de aplicar defaults
+  a campos ausentes; un valor explícito llamado Sencillo sigue siendo legítimo.
+  Ambas regresiones fallaron antes del cambio.
 
 ## Verificación
 
 - npm run verify: 455 pruebas Node, cero fallos y compilación correcta.
 - Frontend completo: 541 pruebas en 47 archivos, cero fallos.
+- Ajuste posterior de restauración/normalización: dos casos más; se repite el
+  gate y el CI del head final debe incluir las 543 pruebas.
 - Lints backend/frontend y diff-check sin errores.
 - Casos: registro vacío con imagen conocida, portada posterior a la descarga,
   placeholder, borrado durante fetch, cuota/commit fallido, texto más reciente,
@@ -42,6 +51,10 @@ Brave, staging aislado localhost:3001, con IndexedDB nativa:
    bytes) y antes de permitir su commit. No se recrea ni audio ni metadata. El
    wrapper temporal de fetch se retira al terminar. No se prueba este caso
    provocando fallos de red; la respuesta de imagen fue exitosa.
+3. Con el bundle final DqG7Y_qs se fuerza un snapshot antiguo de VCR con álbum
+   Sencillo al cerrar la página. La reapertura sin red publica xx desde IDB,
+   mantiene la portada local y reproduce el audio; el control deja constancia
+   del snapshot inyectado y del álbum publicado, no solo del dato guardado.
 
 Artefactos locales: test-results/offline-cover-recovery/. La prueba física de
 carátulas en notificación/pantalla bloqueada de Samsung/Brave e iPhone continúa

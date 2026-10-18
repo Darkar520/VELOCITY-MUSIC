@@ -10,7 +10,7 @@
  */
 import { useCallback, useEffect, useRef } from 'react';
 import { usePlayerStore } from '../store/playerStore.js';
-import { loadPlayerState, trackById, bestCoverFor, subscribeTrack } from '../catalog.js';
+import { loadPlayerState, trackById, bestCoverFor, subscribeTrack, cacheTrack } from '../catalog.js';
 import { isStreamUrlFresh } from '../audioContinuity.js';
 
 function makeSetter(key) {
@@ -29,6 +29,7 @@ export function hydratePlayerStoreOnce() {
 
   const s = loadPlayerState();
   if (!s?.track) return;
+  cacheTrack(s.track);
   const cached = trackById(s.track.id);
   let track = s.track;
   if (cached?.cover && !track.cover) track = { ...track, cover: cached.cover };
