@@ -9,9 +9,9 @@
 //  - Background Fetch guarda el audio en la misma IndexedDB que offline.js.
 // ═══════════════════════════════════════════════════════════════
 
-self.importScripts('/downloads-db.js', '/downloads-worker.js');
+self.importScripts('/offline-artwork.js', '/downloads-db.js', '/downloads-worker.js');
 
-const CACHE = 'velocity-v89';
+const CACHE = 'velocity-v90';
 const APP_SHELL = ['/', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'];
 
 self.addEventListener('install', (event) => {
@@ -44,6 +44,13 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
   // Nunca interceptamos la API (streaming, auth, catálogo, letras).
   if (url.pathname.startsWith('/api/')) return;
+  if (url.pathname.startsWith('/offline-artwork/')) {
+    event.respondWith(
+      Promise.resolve().then(() => self.VelocityOfflineArtwork.respond(decodeURIComponent(url.pathname.slice('/offline-artwork/'.length)), self.VelocityDownloadDB.createStore()))
+        .catch(() => new Response(null, { status: 404 }))
+    );
+    return;
+  }
 
   // Navegación (cargar la app): network-first, con fallback al shell cacheado.
   if (request.mode === 'navigate') {

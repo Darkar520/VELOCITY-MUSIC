@@ -42,7 +42,21 @@ export function useMediaSession({
       timer = setTimeout(() => controller.abort(), 8000);
       (async () => {
         try {
-          const response = await fetch(cover, { signal: controller.signal });
+          // Prefer an IDB-backed URL that the OS can request independently of
+          // this document. Validate the route: old/uncontrolled workers fall
+          // back to the local blob, with no dependency on the network.
+          const localArt = new URL('/offline-artwork/' + encodeURIComponent(track.id), location.href).href;
+          if (navigator.serviceWorker?.controller && track.id) {
+            try {
+              const local = await fetch(localArt, { signal: controller.signal, cache: 'no-store' });
+              if (local.ok && /^image\//i.test(local.headers?.get('content-type') || '')) {
+                apply([{ src: localArt, type: local.headers.get('content-type') }]);
+                return;
+              }
+            } catch { /* data/blob cover remains available */ }
+          }
+          if (cancelled) return;
+          const response = await fetch(cover, { signal: controller.signal.aborted ? undefined : controller.signal });
           if (!response.ok) return;
           const blob = await response.blob();
           if (cancelled || !blob.size || !blob.type.startsWith('image/')) return;

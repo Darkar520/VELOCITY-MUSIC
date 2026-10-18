@@ -51,6 +51,11 @@ export function useDownloads({ quality, showToast, pendingRef, savePending, auth
         const saved = new Set(ids);
         const state = usePlayerStore.getState();
         const newlySaved = ids.filter((id) => !state.downloaded.has(id));
+        if (newlySaved.length) {
+          const metas = await offline.listMetas();
+          if (stopped) return;
+          metas.forEach(cacheTrack);
+        }
         const running = jobs.filter((job) => ['queued', 'background'].includes(job.status));
         state.setDownloaded(saved);
         state.setDownloading(new Set([...downloadSession.preparing, ...activeDownloads.keys(), ...running.map((job) => job.id)]));
@@ -61,6 +66,9 @@ export function useDownloads({ quality, showToast, pendingRef, savePending, auth
         }
         current.savePending?.();
         if (!running.length) backfillExtras(newlySaved);
+        if (!running.length && !newlySaved.length && navigator.onLine !== false) {
+          offline.backfillCovers?.().then(metas => metas.forEach(cacheTrack)).catch(() => {});
+        }
       } catch { /* preserve last-known state on storage failure */ }
       finally { refreshing = false; }
     };
@@ -157,7 +165,8 @@ export function useDownloads({ quality, showToast, pendingRef, savePending, auth
             }
           }
           if (job.cancelled) return;
-          await offline.saveTrack(track, blob, { cacheCover: false });
+          const savedMeta = await offline.saveTrack(track, blob);
+          if (savedMeta) cacheTrack(savedMeta);
           if (job.cancelled) { await offline.deleteTrack(id); return; }
           state.addDownloaded(id);
           pendingRef?.current?.delete(id); savePending?.();

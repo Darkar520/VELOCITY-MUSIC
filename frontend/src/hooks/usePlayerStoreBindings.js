@@ -10,7 +10,7 @@
  */
 import { useCallback, useEffect, useRef } from 'react';
 import { usePlayerStore } from '../store/playerStore.js';
-import { loadPlayerState, trackById, bestCoverFor } from '../catalog.js';
+import { loadPlayerState, trackById, bestCoverFor, subscribeTrack } from '../catalog.js';
 import { isStreamUrlFresh } from '../audioContinuity.js';
 
 function makeSetter(key) {
@@ -117,6 +117,24 @@ export function usePlayerStoreBindings() {
       setTrack((prev) => (prev && prev.id === track.id ? { ...prev, cover: best } : prev));
     }
   }, [track?.id, track?.cover, setTrack]);
+
+  // An IDB repair or worker completion can enrich the current song without
+  // changing its id. Update metadata only; never replace the mounted audio URL.
+  useEffect(() => {
+    if (!track?.id) return;
+    const update = (meta) => setTrack(prev => {
+      if (prev?.id !== meta.id) return prev;
+      const patch = {};
+      for (const key of ['title', 'artist', 'album', 'artistId', 'albumId', 'genre', 'durationSeconds', 'cover']) {
+        if (meta[key] && meta[key] !== prev[key]) patch[key] = meta[key];
+      }
+      return Object.keys(patch).length ? { ...prev, ...patch } : prev;
+    });
+    const off = subscribeTrack(track.id, update);
+    const meta = trackById(track.id);
+    if (meta) update(meta);
+    return off;
+  }, [track?.id, setTrack]);
 
   return {
     track, setTrack,

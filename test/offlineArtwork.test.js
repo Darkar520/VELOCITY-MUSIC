@@ -1,0 +1,59 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import '../frontend/public/offline-artwork.js';
+const art = globalThis.VelocityOfflineArtwork;
+const image = 'data:image/png;base64,aGVsbG8=';
+
+test('offline artwork preserves proxy ids, wraps external URLs once and rejects non-image schemes', () => {
+  assert.equal(art.source('/img?u=https%3A%2F%2Fcdn.test%2Fa&id=track', 'track'), '/img?u=https%3A%2F%2Fcdn.test%2Fa&id=track');
+  const url = new URL(art.source('https://cdn.test/a', 'track'), 'https://velocity.test');
+  assert.equal(url.searchParams.get('u'), 'https://cdn.test/a');
+  assert.equal(url.searchParams.get('id'), 'track');
+  assert.equal(art.source('javascript:alert(1)'), null);
+});
+
+test('missing/broken/oversized artwork does not prevent audio metadata from being saved', async () => {
+  const fetcher = globalThis.fetch;
+  try {
+    for (const response of [new Response('bad', { status: 404 }), new Response('html'), new Response('x', { headers: { 'content-type': 'image/png', 'content-length': '2000000' } })]) {
+      globalThis.fetch = async () => response;
+      const meta = await art.prepare({ id: 'track', title: 'Title', cover: 'https://cdn.test/bad' });
+      assert.equal(meta.artworkStatus, 'pending');
+      assert.equal(meta.title, 'Title');
+      assert.equal(meta.cover, 'https://cdn.test/bad');
+    }
+  } finally { globalThis.fetch = fetcher; }
+});
+
+test('concurrent copies of one cover share a request and keep original image bytes', async () => {
+  const fetcher = globalThis.fetch;
+  let count = 0;
+  try {
+    globalThis.fetch = async () => { count++; return new Response(Buffer.from('hello'), { headers: { 'content-type': 'image/png' } }); };
+    const metas = await Promise.all(Array.from({ length: 8 }, (_, i) => art.prepare({ id: 'same-' + i, cover: '/shared-art.png' })));
+    assert.equal(count, 1);
+    assert.ok(metas.every(meta => meta.cover === image && meta.artworkStatus === 'ready'));
+  } finally { globalThis.fetch = fetcher; }
+});
+
+test('the offline image route works without remote fetch and returns 404 for absent artwork', async () => {
+  const store = { getSavedMeta: async id => id === 'saved' ? { cover: image } : null };
+  const response = await art.respond('saved', store);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-type'), 'image/png');
+  assert.equal(await response.text(), 'hello');
+  assert.equal((await art.respond('missing', store)).status, 404);
+});
+
+test('a partial replacement preserves already saved artwork and known text without network work', async () => {
+  const fetcher = globalThis.fetch;
+  try {
+    globalThis.fetch = () => { throw new Error('offline'); };
+    const meta = await art.prepare({ id: 'saved', title: '', cover: 'https://cdn.test/other' }, { id: 'saved', title: 'Known', artist: 'Artist', album: 'Album', durationSeconds: 123, cover: image });
+    assert.equal(meta.cover, image);
+    assert.equal(meta.title, 'Known');
+    assert.equal(meta.artist, 'Artist');
+    assert.equal(meta.durationSeconds, 123);
+    assert.equal(meta.artworkStatus, 'ready');
+  } finally { globalThis.fetch = fetcher; }
+});

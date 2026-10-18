@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import '../frontend/public/downloads-worker.js';
+import '../frontend/public/offline-artwork.js';
 
 const { createWorker } = globalThis.VelocityDownloadWorker;
 const origin = 'https://velocity.test', batchId = 'velocity-download-test';
@@ -38,6 +39,34 @@ test('350 browser-owned songs are committed by a new worker without a page or re
   assert.equal(f.jobs.size, 0);
   const expected = await sha(new Blob(['original-audio']));
   for (const { blob } of f.audio.values()) assert.equal(await sha(blob), expected);
+});
+
+test('a worker persists downloaded artwork and complete metadata before acknowledging the song', async () => {
+  const f = fixture();
+  const meta = { id: 'song-0', title: 'Song', artist: 'Artist', album: 'Album', durationSeconds: 123, cover: 'data:image/png;base64,aGVsbG8=' };
+  f.jobs.get('song-0').meta = meta;
+  await f.worker().finish(f.event());
+  assert.deepEqual(f.audio.get('song-0').meta, { ...meta, artworkStatus: 'ready' });
+  assert.equal(f.jobs.size, 0);
+});
+
+test('a worker resolves a remote cover locally and preserves audio when the image provider fails', async () => {
+  const fetcher = globalThis.fetch;
+  try {
+    for (const ok of [true, false]) {
+      const f = fixture();
+      f.jobs.get('song-0').meta.cover = '/img?u=https%3A%2F%2Fcdn.test%2Fa&id=song-0';
+      globalThis.fetch = async url => {
+        assert.equal(url, '/img?u=https%3A%2F%2Fcdn.test%2Fa&id=song-0');
+        return ok ? new Response('image', { headers: { 'content-type': 'image/png' } }) : new Response(null, { status: 404 });
+      };
+      await f.worker().finish(f.event());
+      const record = f.audio.get('song-0');
+      assert.ok(record.blob.size > 0);
+      assert.equal(record.meta.artworkStatus, ok ? 'ready' : 'pending');
+      if (ok) assert.match(record.meta.cover, /^data:image\/png;base64,/);
+    }
+  } finally { globalThis.fetch = fetcher; }
 });
 
 test('a failed playlist keeps successes and retains only failed songs for retry', async () => {

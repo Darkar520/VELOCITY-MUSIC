@@ -43,6 +43,11 @@
         try { return await request(db.transaction('tracks').objectStore('tracks').getAllKeys()); }
         finally { db.close(); }
       },
+      async getSavedMeta(id) {
+        const db = await open('velocity-offline', 3, ['tracks', 'meta', 'lyrics']);
+        try { return (await request(db.transaction('meta').objectStore('meta').get(id)))?.meta || null; }
+        finally { db.close(); }
+      },
       async saveAudio(meta, blob) {
         if (!meta?.id || !blob?.size) throw new Error('empty audio');
         const db = await open('velocity-offline', 3, ['tracks', 'meta', 'lyrics']);
