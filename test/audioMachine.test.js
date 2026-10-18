@@ -392,6 +392,21 @@ test('A4/A7: DOC_VISIBLE con yield + intent play → clear yield, seek ancla, pl
 
 // ── USER_PAUSE ──
 
+test('A34: clearing the previous track cannot yield or transfer its clock to the next', () => {
+  let state = { ...initialState(), intent: 'play', trackId: 'old', srcStatus: 'ready', livePosition: 142 };
+  state = reduce(state, { type: 'TRACK_SET', trackId: 'next', intent: 'play' }).state;
+  for (const event of [
+    { type: 'EXTERNAL_PAUSE', hidden: true, position: 142 },
+    { type: 'DOC_HIDDEN', position: 142 },
+  ]) state = reduce(state, event).state;
+  assert.equal(state.focus, 'own');
+  assert.equal(state.livePosition, 0);
+  assert.equal(state.yieldPosition, null);
+  const ready = reduce(state, { type: 'STREAM_READY', trackId: 'next', url: 'blob:next' });
+  assert.ok(ready.effects.some(e => e.type === 'play'));
+  assert.deepEqual(effectsOfType(ready.effects, 'seek'), [{ type: 'seek', position: 0 }]);
+});
+
 test('USER_PAUSE: intent pause, focus own, pause effect, no yield anchors', () => {
   const base = {
     ...initialState(),

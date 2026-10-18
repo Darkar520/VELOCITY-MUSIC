@@ -27,6 +27,23 @@ import { initialState, reduce, canStartPlayback } from '../frontend/src/audio/au
 
 const scenarios = [
   {
+    id: 'A34-next-transition-versus-real-interruption', ids: ['A7', 'A10', 'A11', 'A34'],
+    check() {
+      const loading = { ...initialState(), intent: 'play', trackId: 'next' };
+      const pause = { type: 'EXTERNAL_PAUSE', hidden: true, position: 125 };
+      assert.equal(reduce(loading, pause).state.focus, 'own');
+      const ready = reduce(loading, { type: 'STREAM_READY', trackId: 'next', url: 'blob:next' });
+      assert.ok(ready.effects.some(e => e.type === 'play'));
+      const external = reduce(ready.state, pause);
+      assert.equal(external.state.focus, 'yielded');
+      assert.equal(canStartPlayback(external.state), false);
+      assert.equal(selectHidden(external.state), 'noop');
+      function selectHidden(state) {
+        return playSyncStrategy({ playing: state.intent === 'play', hasSrc: true, yieldedFocus: state.focus === 'yielded', visible: false });
+      }
+    },
+  },
+  {
     id: 'A29-no-replay-of-active-native-element', ids: ['A7', 'A11', 'A29'],
     check() {
       const state = { playing: true, hasSrc: true, yieldedFocus: false, visible: false };

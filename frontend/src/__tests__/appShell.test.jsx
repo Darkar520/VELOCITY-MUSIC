@@ -469,6 +469,10 @@ describe('App shell — flujos críticos', () => {
     apiMock.radio.mockImplementation(() => new Promise(() => {}));
     apiMock.search.mockImplementation(() => new Promise(() => {}));
 
+    Object.defineProperties(mainAudio(container), {
+      readyState: { value: 4, configurable: true },
+      ended: { value: true, configurable: true },
+    });
     await act(async () => { fireEvent.ended(mainAudio(container)); });
 
     await waitFor(() => expect(usePlayerStore.getState().track?.id).toBe(b.id));
@@ -483,6 +487,10 @@ describe('App shell — flujos críticos', () => {
     });
     await waitFor(() => expect(mainAudio(container).getAttribute('src')).toBeTruthy());
 
+    Object.defineProperties(mainAudio(container), {
+      readyState: { value: 4, configurable: true },
+      ended: { value: true, configurable: true },
+    });
     await act(async () => { fireEvent.ended(mainAudio(container)); });
     await waitFor(() => expect(usePlayerStore.getState().playing).toBe(false));
   });

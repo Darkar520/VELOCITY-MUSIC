@@ -112,6 +112,16 @@ actualiza la tabla si introduces un cambio.
   sobrescribir la selección del usuario: comprobar trackId, intención, epoch
   y fuente ya montada. Mantener el presupuesto de fallos entre avances de
   cola; reiniciarlo solo en selección explícita o reproducción sostenida.
+- A34 (2026-10-18): next de Media Session pausaba la pista anterior, pero el
+  evento nativo pause llegaba después de limpiar selfPauseRef. Oculto, el
+  handler lo interpretaba como EXTERNAL_PAUSE de la pista nueva y guardaba
+  currentTime de la anterior. STREAM_READY no reproducía por focus=yielded;
+  DOC_VISIBLE podía restaurar ese ancla ajena. Aceptar eventos solo si la
+  máquina tiene fuente ready, atributo src presente, metadata disponible y
+  currentSrc coincide con el atributo; pause además exige elemento pausado.
+  La máquina ignora EXTERNAL_PAUSE y DOC_HIDDEN con fuente none. No bloquear
+  interrupciones reales sobre una fuente cargada ni hacer play tras yield.
+  Control nativo antes/después y límites: audits/2026-10-18-notification-next.md.
 
 | Capa | Archivo | Rol |
 |------|---------|-----|

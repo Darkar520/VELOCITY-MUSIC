@@ -228,6 +228,9 @@ export function reduce(state, event) {
     }
 
     case 'EXTERNAL_PAUSE': {
+      // No active resource exists during TRACK_SET resolution. Native pause
+      // from clearing the previous source must not yield the new track (A34).
+      if (state.srcStatus === 'none') break;
       const hidden = event.hidden === true;
       const selfPause = event.selfPause === true;
       const position = Number.isFinite(event.position) ? event.position : state.livePosition;
@@ -348,7 +351,7 @@ export function reduce(state, event) {
 
     case 'DOC_HIDDEN': {
       // no soft-recover; only update live position if provided
-      if (Number.isFinite(event.position)) {
+      if (state.srcStatus === 'ready' && Number.isFinite(event.position)) {
         next = { ...state, livePosition: event.position };
       }
       break;
