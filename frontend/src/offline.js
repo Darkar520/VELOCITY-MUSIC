@@ -3,6 +3,7 @@
 // sin diálogo de "guardar como". Persiste entre sesiones.
 
 import '../public/offline-artwork.js';
+import { FALLBACK_COVER } from './constants.js';
 const DB_NAME = 'velocity-offline';
 const STORE = 'tracks';
 const LYRICS_STORE = 'lyrics';
@@ -198,45 +199,61 @@ export async function saveTrack(meta, blob, { cacheCover = true } = {}) {
 }
 
 // El helper compartido conserva proxies existentes y sus parámetros de fallback.
-async function coverToDataUrl(coverUrl) {
-  return globalThis.VelocityOfflineArtwork.toDataUrl(coverUrl);
+async function coverToDataUrl(coverUrl, id) {
+  return globalThis.VelocityOfflineArtwork.toDataUrl(coverUrl, id);
+}
+const isSavedCover = cover => typeof cover === 'string' && /^data:image\//i.test(cover) && cover !== FALLBACK_COVER;
+
+/** Persist a discovered image without fetching or replacing downloaded audio. */
+export async function saveCover(id, cover) {
+  if (!id || !cover || cover === FALLBACK_COVER) return null;
+  const meta = await getMeta(id);
+  if (!meta) return null;
+  if (isSavedCover(meta.cover)) return meta;
+  const dataUrl = await coverToDataUrl(cover, id);
+  if (!dataUrl) return null;
+  const db = await openDB();
+  const stores = db.objectStoreNames.contains(META_STORE) ? [STORE, META_STORE] : [STORE];
+  return new Promise((resolve) => {
+    let updated = null;
+    const tx = db.transaction(stores, 'readwrite');
+    // Read and write under the same lock. A deletion or newer metadata while
+    // the image was downloading must never be resurrected or overwritten.
+    const request = tx.objectStore(STORE).get(id);
+    request.onsuccess = () => {
+      const rec = request.result;
+      if (!rec?.meta) return;
+      if (isSavedCover(rec.meta.cover)) { updated = rec.meta; return; }
+      updated = { ...rec.meta, cover: dataUrl, artworkStatus: 'ready' };
+      tx.objectStore(STORE).put({ ...rec, meta: updated });
+      if (stores.length > 1) tx.objectStore(META_STORE).put({
+        id, meta: updated, at: rec.at || 0,
+        size: rec.size ?? rec.blob?.size ?? 0, type: rec.type ?? rec.blob?.type ?? '',
+      });
+    };
+    tx.oncomplete = () => resolve(updated);
+    tx.onerror = tx.onabort = () => resolve(null);
+  });
 }
 
 // Rellena las carátulas (data URL) de descargas antiguas que aún tengan URL
 // remota. Se ejecuta una vez al iniciar con conexión. Devuelve las metas
 // actualizadas para refrescar la interfaz. Secuencial para no saturar la red.
 let _backfill = null;
-export function backfillCovers() {
+export function backfillCovers({ coverFor } = {}) {
   if (typeof navigator !== 'undefined' && navigator.onLine === false) return Promise.resolve([]);
-  if (!_backfill) _backfill = fillCovers().finally(() => { _backfill = null; });
+  if (!_backfill) _backfill = fillCovers(coverFor).finally(() => { _backfill = null; });
   return _backfill;
 }
-async function fillCovers() {
-  const db = await openDB();
+async function fillCovers(coverFor) {
   // Primero recolectar SOLO metadatos (sin cargar los blobs de la biblioteca).
   // El registro completo se lee
   // individualmente y solo para los pocos que hay que reescribir.
-  const pend = (await listMetas()).filter(m => m?.id && typeof m.cover === 'string' && m.cover && !m.cover.startsWith('data:'));
+  const pend = (await listMetas()).filter(m => m?.id && !isSavedCover(m.cover));
   const updated = [];
   for (const { id, cover } of pend) {
-    const dataUrl = await coverToDataUrl(cover);
-    if (!dataUrl || !dataUrl.startsWith('data:')) continue;
-    const rec = await getRecord(id);
-    if (!rec || !rec.meta) continue;
-    rec.meta = { ...rec.meta, cover: dataUrl, artworkStatus: 'ready' };
-    const stores = db.objectStoreNames.contains(META_STORE) ? [STORE, META_STORE] : [STORE];
-    const saved = await new Promise((resolve) => {
-      // Mantener `meta` en sync: si solo se actualizara `tracks`, el camino
-      // rápido seguiría devolviendo la carátula vieja.
-      const tx = db.transaction(stores, 'readwrite');
-      tx.objectStore(STORE).put(rec);
-      if (stores.length > 1) {
-        tx.objectStore(META_STORE).put({ id: rec.id, meta: rec.meta, at: rec.at || 0, size: rec.size ?? (rec.blob && rec.blob.size) ?? 0, type: rec.type ?? '' });
-      }
-      tx.oncomplete = () => resolve(true);
-      tx.onerror = tx.onabort = () => resolve(false);
-    });
-    if (saved) updated.push(rec.meta);
+    const saved = await saveCover(id, coverFor?.(id, cover) || cover);
+    if (saved) updated.push(saved);
   }
   return updated;
 }

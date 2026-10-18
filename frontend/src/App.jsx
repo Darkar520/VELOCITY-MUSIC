@@ -4,7 +4,7 @@ import * as offline from './offline.js';
 
 import { CSS, THEMES, BASE_VARS } from './constants.js';
 import { hex2rgba, grad, dedupeByTitle, capPerArtist, tintedVars } from './helpers.js';
-import { cacheTrack, trackById, loadPlayerState, normalizeTrack } from './catalog.js';
+import { cacheTrack, trackById, loadPlayerState, normalizeTrack, bestCoverFor } from './catalog.js';
 import {
   isDocumentVisible,
   shouldPreExtendQueue,
@@ -432,9 +432,9 @@ export default function App() {
         // Rellenar covers de descargas antiguas (solo con red).
         try {
           if (navigator.onLine !== false) {
-            const filled = await offline.backfillCovers();
+            const filled = await offline.backfillCovers({ coverFor: bestCoverFor });
             if (filled && filled.length) {
-              filled.forEach(cacheTrack);
+              filled.forEach(m => cacheTrack({ ...(trackById(m.id) || m), cover: m.cover }));
               setTrack(prev => {
                 if (!prev || !prev.id) return prev;
                 const m = filled.find(x => x && x.id === prev.id);

@@ -12,6 +12,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Blob as NativeBlob } from 'node:buffer';
+import { FALLBACK_COVER } from '../constants.js';
 
 // ── Stub mínimo de IndexedDB con soporte de cursor ────────────────────────────
 function makeIDBStub(records) {
@@ -175,18 +176,22 @@ function makeIDBStubV3(records, metaRecords = [], opts = {}) {
   const tracks = new Map(records.map((r) => [r.id, r]));
   const meta = new Map(metaRecords.map((r) => [r.id, r]));
   const maps = { tracks, meta };
-  const req = (resultFn) => {
+  const req = (resultFn, tx) => {
+    if (tx) tx.pending++;
     const r = { onsuccess: null, onerror: null, result: undefined };
-    setTimeout(() => { r.result = resultFn(); r.onsuccess?.(); }, 0);
+    setTimeout(() => {
+      r.result = resultFn(); r.onsuccess?.();
+      if (tx) { tx.pending--; tx.finish(); }
+    }, 0);
     return r;
   };
-  const mkStore = (name) => ({
-    getAll: () => req(() => [...maps[name].values()]),
-    getAllKeys: () => req(() => [...maps[name].keys()]),
-    get: (id) => req(() => maps[name].get(id)),
-    put: (rec) => { if (!opts.quota) maps[name].set(rec.id, rec); return req(() => true); },
-    delete: (id) => { maps[name].delete(id); return req(() => true); },
-    clear: () => { maps[name].clear(); return req(() => true); },
+  const mkStore = (name, tx) => ({
+    getAll: () => req(() => [...maps[name].values()], tx),
+    getAllKeys: () => req(() => [...maps[name].keys()], tx),
+    get: (id) => req(() => maps[name].get(id), tx),
+    put: (rec) => { if (!opts.quota) maps[name].set(rec.id, rec); return req(() => true, tx); },
+    delete: (id) => { maps[name].delete(id); return req(() => true, tx); },
+    clear: () => { maps[name].clear(); return req(() => true, tx); },
     openCursor: () => {
       const entries = [...maps[name].values()];
       let i = 0;
@@ -204,8 +209,17 @@ function makeIDBStubV3(records, metaRecords = [], opts = {}) {
   const db = {
     objectStoreNames: { contains: (n) => n === 'tracks' || n === 'meta' || n === 'lyrics' },
     transaction: () => {
-      const tx = { objectStore: (n) => mkStore(n), oncomplete: null, onerror: null, onabort: null, error: opts.quota ? { name: 'QuotaExceededError' } : null };
-      setTimeout(() => { if (opts.quota) tx.onerror?.(); else tx.oncomplete?.(); }, 0);
+      let timer;
+      const tx = { pending: 0, objectStore: (n) => mkStore(n, tx), oncomplete: null, onerror: null, onabort: null, error: opts.quota ? { name: 'QuotaExceededError' } : null,
+        finish() {
+          clearTimeout(timer);
+          timer = setTimeout(() => {
+            if (tx.pending) return;
+            if (opts.quota) tx.onerror?.(); else tx.oncomplete?.();
+          }, 0);
+        },
+      };
+      tx.finish();
       return tx;
     },
   };
@@ -279,6 +293,63 @@ describe('cuota agotada', () => {
 
 describe('store de metadatos separado (v3)', () => {
   beforeEach(() => { vi.resetModules(); });
+
+  it('repairs an empty legacy cover when the catalog knows the image', async () => {
+    const blob = new Blob(['original-audio']);
+    const meta = { id: 'empty-legacy-cover', title: 'Title', artist: 'Artist', cover: '' };
+    const record = { id: meta.id, meta, blob, size: blob.size, at: 1 };
+    const stub = makeIDBStubV3([record], [record]);
+    vi.stubGlobal('indexedDB', stub);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new NativeBlob(['image'], { type: 'image/png' }))));
+    const offline = await import('../offline.js');
+    const repaired = await offline.backfillCovers({ coverFor: id => id === meta.id ? '/known-image.png' : '' });
+    expect(repaired).toHaveLength(1);
+    expect(stub.__meta.get(meta.id).meta.cover).toMatch(/^data:image\/png;base64,/);
+    expect(stub.__tracks.get(meta.id).blob).toBe(blob);
+  });
+
+  it('replaces the built-in placeholder when real artwork becomes known', async () => {
+    const meta = { id: 'placeholder-cover', title: 'Title', cover: FALLBACK_COVER };
+    const rec = { id: meta.id, meta, blob: new Blob(['audio']), at: 1 };
+    const stub = makeIDBStubV3([rec], [rec]);
+    vi.stubGlobal('indexedDB', stub);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new NativeBlob(['image'], { type: 'image/png' }))));
+    const offline = await import('../offline.js');
+    const saved = await offline.saveCover(meta.id, '/actual-image.png');
+    expect(saved.cover).toMatch(/^data:image\/png;base64,/);
+    expect(stub.__meta.get(meta.id).meta.cover).toBe(saved.cover);
+  });
+
+  it('never recreates audio deleted while its cover request is in flight', async () => {
+    const meta = { id: 'deleted-during-cover', title: 'Title', cover: '' };
+    const rec = { id: meta.id, meta, blob: new Blob(['audio']), at: 1 };
+    const stub = makeIDBStubV3([rec], [rec]);
+    vi.stubGlobal('indexedDB', stub);
+    let release, started;
+    const fetching = new Promise(resolve => { started = resolve; });
+    vi.stubGlobal('fetch', vi.fn(() => { started(); return new Promise(resolve => { release = resolve; }); }));
+    const offline = await import('../offline.js');
+    const saving = offline.saveCover(meta.id, '/actual-image.png');
+    await fetching;
+    await offline.deleteTrack(meta.id);
+    release(new Response(new NativeBlob(['image'], { type: 'image/png' })));
+    await expect(saving).resolves.toBeNull();
+    expect(stub.__tracks.has(meta.id)).toBe(false);
+    expect(stub.__meta.has(meta.id)).toBe(false);
+  });
+
+  it('a failed cover commit reports no repair and preserves existing metadata', async () => {
+    const meta = { id: 'cover-quota', title: 'Title', cover: '' };
+    const rec = { id: meta.id, meta, blob: new Blob(['audio']), at: 1 };
+    const options = { quota: false };
+    const stub = makeIDBStubV3([rec], [rec], options);
+    vi.stubGlobal('indexedDB', stub);
+    vi.stubGlobal('fetch', vi.fn(async () => { options.quota = true; return new Response(new NativeBlob(['image'], { type: 'image/png' })); }));
+    const offline = await import('../offline.js');
+    await expect(offline.saveCover(meta.id, '/actual-image.png')).resolves.toBeNull();
+    expect(stub.__meta.get(meta.id).meta).toEqual(meta);
+    expect(stub.__tracks.get(meta.id).blob).toBe(rec.blob);
+  });
 
   it('saves a proxied cover locally before acknowledging a new download', async () => {
     const stub = makeIDBStubV3([]);

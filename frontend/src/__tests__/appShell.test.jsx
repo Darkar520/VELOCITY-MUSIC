@@ -70,6 +70,7 @@ vi.mock('../api.js', () => ({
 }));
 
 vi.mock('../offline.js', () => ({
+  saveCover: vi.fn(async () => null),
   getBlob: vi.fn(async () => null),
   saveBlob: vi.fn(async () => {}),
   removeBlob: vi.fn(async () => {}),
