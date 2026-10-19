@@ -81,6 +81,11 @@ export function bestCoverFor(id, fallback) {
   const c = trackById(id);
   if (c && hasCover(c.cover)) return c.cover;
   if (fallback && hasCover(fallback)) return fallback;
+  // Display-only fallback for an exact YouTube recording, never a title search.
+  // Keep metadata.cover empty so an official album image can still replace it.
+  if (c?.source !== 'soundcloud' && /^[A-Za-z0-9_-]{11}$/.test(String(id || ''))) {
+    return '/img?' + new URLSearchParams({u: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`, id: String(id)});
+  }
   return (c && c.cover) || fallback || '';
 }
 export function cacheTracks(arr) { (arr || []).forEach(cacheTrack); return arr || []; }

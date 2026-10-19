@@ -6,6 +6,12 @@ import {DiscoverySongs} from './DiscoverySongs.jsx';
 import {useFeedLoop} from '../hooks/useFeedLoop.js';
 import {preferenceKey} from '../feed/tasteProfile.js';
 import {PersonalizedShelves} from './PersonalizedShelves.jsx';
+import {bestCoverFor} from '../catalog.js';
+
+const mixArtwork = tracks => {
+  const track = tracks.find(t => t.cover) || tracks[0];
+  return bestCoverFor(track?.id, track?.cover);
+};
 
 export function HomeDiscovery({rows,prefs,personalShelves=[],shelfKey='',play,goMix,onMenu,onToggleFav,favs=[],loading,retry,onEditPrefs,offline=false}) {
   const {firstRef,repeatRef}=useFeedLoop(rows.length);
@@ -77,7 +83,7 @@ export function HomeDiscovery({rows,prefs,personalShelves=[],shelfKey='',play,go
         <div className="discovery-hero-actions"><button className="discovery-play" onClick={()=>start(featured)}><Icon.Play sz={18}/> Reproducir selección</button><button className="discovery-link" onClick={()=>goMix(featured)}>Explorar mix <span aria-hidden="true">↗</span></button></div>
       </div>
       <button className={`discovery-mosaic ${heroArt.length===1?'discovery-mosaic-single':''}`} onClick={()=>goMix(featured)} aria-label={`Explorar ${featured.label}`}>
-        {heroArt.map((t,i)=><CoverImg key={t.id+i} src={t.cover} alt="" size={256} eager priority="high" radius={0}/>) }
+        {heroArt.map((t,i)=><CoverImg key={t.id+i} src={bestCoverFor(t.id,t.cover)} alt="" size={256} eager priority="high" radius={0}/>) }
         <span className="discovery-mosaic-caption"><small>SELECCIÓN PARA TI</small><strong>{featured.label}</strong><span>{featured.tracks.length} canciones</span></span>
       </button>
     </section>
@@ -85,7 +91,7 @@ export function HomeDiscovery({rows,prefs,personalShelves=[],shelfKey='',play,go
     {readyRows.filter(s=>!s.mixes.every(m=>m.featured)).map(section=><section className="discovery-section" key={section.section}>
       <header><div><span className="discovery-eyebrow">EXPLORA TU SONIDO</span><h2>{section.section}</h2></div><span className="discovery-detail">{section.mixes.length} selecciones</span></header>
       <div className="discovery-mixes">{section.mixes.map((mix,i)=><article className="discovery-mix" key={mix.label+i}>
-        <div className="discovery-mix-art"><button onClick={()=>goMix(mix)} aria-label={`Abrir ${mix.label}`}><CoverImg src={mix.tracks.find(t=>t.cover)?.cover} alt="" size={256} radius={0}/></button><button className="discovery-mix-play" aria-label={`Reproducir mix ${mix.label}`} onClick={()=>start(mix)}><Icon.Play sz={20}/></button></div>
+        <div className="discovery-mix-art"><button onClick={()=>goMix(mix)} aria-label={`Abrir ${mix.label}`}><CoverImg src={mixArtwork(mix.tracks)} alt="" size={256} radius={0}/></button><button className="discovery-mix-play" aria-label={`Reproducir mix ${mix.label}`} onClick={()=>start(mix)}><Icon.Play sz={20}/></button></div>
         <button className="discovery-mix-title" onClick={()=>goMix(mix)}>{mix.label}</button><p>{[...new Set(mix.tracks.map(t=>t.artist))].slice(0,3).join(' · ')}</p>
       </article>)}</div>
     </section>)}
