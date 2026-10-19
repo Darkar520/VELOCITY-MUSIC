@@ -11,7 +11,7 @@
 
 self.importScripts('/offline-artwork.js', '/downloads-db.js', '/downloads-worker.js');
 
-const CACHE = 'velocity-v103';
+const CACHE = 'velocity-v104';
 const ARTWORK_CACHE = self.VelocityOfflineArtwork.CACHE;
 const APP_SHELL = ['/', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'];
 
@@ -82,8 +82,12 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(image.catch(() => new Response(null, { status: 503 })));
     event.waitUntil(image.then(async response => {
       if (response?.ok && /^image\//i.test(response.headers.get('content-type') || '')) {
+        // Clone before yielding: respondWith may start consuming the original
+        // body while CacheStorage.open awaits disk. Cloning after that await
+        // throws and silently leaves every successfully displayed image uncached.
+        const copy = response.clone();
         const cache = await caches.open(ARTWORK_CACHE);
-        await cache.put(request, response.clone());
+        await cache.put(request, copy);
         await self.VelocityOfflineArtwork.remember(ARTWORK_CACHE,request.url);
       }
     }).catch(() => {}));
