@@ -10,6 +10,7 @@ import {SEED_ROWS} from '../constants.js';
 import {trackById,normalizeTrack,cacheTrack} from '../catalog.js';
 import {loadFeedCache,saveFeedCache} from '../feed/feedCache.js';
 import {preferenceKey,starterQueries,genreArtists,artistIdentity} from '../feed/tasteProfile.js';
+import {balancedMix,deepRecommendationRows,MIX_TARGET} from '../feed/deepMixes.js';
 import {offlineMixes,favArtistMixes,recentSliceMixes} from '../feed/mixBuilders.js';
 import {useLibraryStore} from '../store/libraryStore.js';
 import {usePlayerStore} from '../store/playerStore.js';
@@ -34,7 +35,8 @@ export function useHomeFeed({authed,downloaded,recentSearches=[],onboardPrefs,of
   useEffect(()=>{
     if(!authed)return;
     const store=useLibraryStore.getState();
-    const profile=account+':home2:'+preferenceKey(onboardPrefs);
+    const profile=account+':home3:'+preferenceKey(onboardPrefs);
+    const savedExtra=(loadFeedCache(profile)||[]).filter(s=>/^Más por descubrir \d+$/.test(s.section));
     if(previousProfile.current!==null && previousProfile.current!==profile)store.setHomeRows([]);
     previousProfile.current=profile;
     let cancelled=false,firstSaved=false;
@@ -53,13 +55,13 @@ export function useHomeFeed({authed,downloaded,recentSearches=[],onboardPrefs,of
     };
     const add=(section,mix)=>{
       if(!alive()||!mix?.tracks?.length)return;
-      const tracks=dedupeByTitle(mix.tracks).filter(t=>t?.id&&t.title).slice(0,60);
+      const tracks=dedupeByTitle(mix.tracks).filter(t=>t?.id&&t.title).slice(0,200);
       if(!tracks.length)return;
       tracks.forEach(cacheTrack);
       let row=rows.find(s=>s.section===section);
       if(!row){row={section,mixes:[]};rows.push(row);}
       const existing=row.mixes.find(m=>m.label===mix.label);
-      if(existing)existing.tracks=dedupeByTitle([...existing.tracks,...tracks]).slice(0,60);
+      if(existing)existing.tracks=dedupeByTitle([...existing.tracks,...tracks]).slice(0,200);
       else row.mixes.push({...mix,tracks});
       publish();
     };
@@ -78,7 +80,7 @@ export function useHomeFeed({authed,downloaded,recentSearches=[],onboardPrefs,of
       return key===artistIdentity(name) || String(track.artist||'').split(/,| feat\.? | featuring | & /i).some(a=>artistIdentity(a)===artistIdentity(name));
     };
     store.setHomeLoading(true);
-    if(!store.homeRows.length){
+    if(!store.homeRows.length && !store.feedNonce){
       const cached=loadFeedCache(profile);
       if(cached){for(const row of cached)for(const m of row.mixes)for(const t of m.tracks)cacheTrack(t);store.setHomeRows(cached);store.setHomeLoading(false);}
     }
@@ -113,6 +115,17 @@ export function useHomeFeed({authed,downloaded,recentSearches=[],onboardPrefs,of
           const section=query.kind==='artist'?'Tus artistas, desde el primer día':'El sonido que elegiste';
           add(section,{label:query.label,tracks,reason:query.kind==='artist'?'Artista que elegiste':'Por tus géneros'});
         });
+        // A genre needs many recording artists; three seed searches can only
+        // produce a long playlist made of repeated blocks from those artists.
+        const genreGroups=prefs.map(g=>genreArtists([g]).slice(0,10).map(a=>({...a,label:g.label})));
+        const genreSeeds=[];
+        for(let i=0;i<10;i++)for(const group of genreGroups)if(group[i])genreSeeds.push(group[i]);
+        const extraSeeds=genreSeeds.filter(a=>!queries.some(q=>artistIdentity(q.q)===a._key)).slice(0,40);
+        await pool(extraSeeds,4,async a=>{
+          if(!alive())return;
+          const tracks=capPerArtist(dedupeByTitle((await search(a.name)).map(normalizeTrack).filter(t=>knownArtist(t,a.name))),10);
+          if(tracks.length)add('El sonido que elegiste',{label:a.label,tracks,reason:'Por tus géneros'});
+        });
         // Separate discovery within the selected genres; do not derive tastes
         // from unrelated files that happen to be downloaded on the device.
         const discoveries=genreArtists(prefs).filter(a=>!queries.some(q=>artistIdentity(q.q)===a._key));
@@ -131,6 +144,14 @@ export function useHomeFeed({authed,downloaded,recentSearches=[],onboardPrefs,of
           const tracks=capPerArtist(dedupeByTitle(raw.map(normalizeTrack)),4).filter(t=>!allowed.size||allowed.has(artistIdentity(t.artist)));
           if(tracks.length>=3)add('A partir de lo que escuchas',{label:'Como '+seed.artist,tracks});
         });
+        if(alive()){
+          const catalog=dedupeByTitle(rows.filter(s=>!['Tus playlists','Escuchado recientemente','De tus Me gusta'].includes(s.section)).flatMap(s=>s.mixes).flatMap(m=>m.tracks));
+          const expanded=deepRecommendationRows(catalog,onboardPrefs,store.feedNonce);
+          if(expanded.length){
+            const local=rows.filter(s=>['Tus playlists','Escuchado recientemente','De tus Me gusta'].includes(s.section));
+            rows.splice(0,rows.length,...local,...expanded,...savedExtra);publish();
+          }
+        }
       }finally{
         clearTimeout(safety);
         if(alive()){store.setHomeLoading(false);if(rows.length)saveFeedCache(rows,profile);}
@@ -142,5 +163,65 @@ export function useHomeFeed({authed,downloaded,recentSearches=[],onboardPrefs,of
     const refresh=()=>useLibraryStore.getState().setFeedNonce(useLibraryStore.getState().feedNonce+1);
     window.addEventListener('online',refresh);return()=>window.removeEventListener('online',refresh);
   },[]);
+  useEffect(()=>{
+    if(!authed||offline)return;
+    const genres=Array.isArray(onboardPrefs)?onboardPrefs:onboardPrefs?.genres||[];
+    const initialNames=new Set(starterQueries(onboardPrefs).map(q=>artistIdentity(q.q)));
+    const later=genres.flatMap(g=>genreArtists([g]).slice(10).filter(a=>!initialNames.has(a._key)).map(a=>({...a,genre:g.label})));
+    const savedPages=useLibraryStore.getState().homeRows.reduce((max,row)=>{
+      const match=/^Más por descubrir (\d+)$/.exec(row.section);
+      return match?Math.max(max,Number(match[1])):max;
+    },0);
+    let cursor=Math.min(later.length,savedPages*12),page=savedPages,busy=false,disposed=false;
+    const controllers=new Set();
+    const loadMore=async()=>{
+      if(busy||disposed)return;
+      busy=true;
+      let added=false;
+      const batch=later.slice(cursor,cursor+12);cursor+=batch.length;
+      const fresh=[];
+      await pool(batch,4,async artist=>{
+        const controller=new AbortController();controllers.add(controller);
+        try{
+          const result=await api.search(artist.name,controller.signal);
+          const key=artistIdentity(artist.name);
+          const tracks=dedupeByTitle(result.map(normalizeTrack).filter(t=>artistIdentity(t.artist)===key)).slice(0,10);
+          fresh.push(...tracks);
+        }catch{/* partial catalog failure */}finally{controllers.delete(controller);}
+      });
+      const current=useLibraryStore.getState().homeRows;
+      const radioPool=dedupeByTitle(current.filter(r=>r.section==='El sonido que elegiste').flatMap(r=>r.mixes).flatMap(m=>m.tracks));
+      if(!disposed&&fresh.length<80&&radioPool.length){
+        const seeds=Array.from({length:4},(_,i)=>radioPool[(page*17+i*Math.max(1,Math.floor(radioPool.length/4)))%radioPool.length]);
+        await pool(seeds,2,async seed=>{
+          const controller=new AbortController();controllers.add(controller);
+          try{fresh.push(...(await api.radio(seed.id,50,controller.signal)).map(normalizeTrack).filter(t=>t?.id&&t.title));}
+          catch{/* a failed radio source does not erase search results */}
+          finally{controllers.delete(controller);}
+        });
+      }
+      page++;
+      if(!disposed&&fresh.length){
+        const existing=new Set(current.flatMap(r=>r.mixes).flatMap(m=>m.tracks).map(t=>t.id));
+        const novel=dedupeByTitle(fresh).filter(t=>!existing.has(t.id));
+        const catalog=dedupeByTitle([...novel,...current.flatMap(r=>r.mixes).flatMap(m=>m.tracks)]);
+        const names=[...new Set(novel.map(t=>t.artist))];
+        const mixes=names.map((name,i)=>({label:'Descubre '+name,tracks:balancedMix(catalog,name,i+cursor)}))
+          .filter(m=>m.tracks.length===MIX_TARGET&&m.tracks.filter(t=>novel.some(n=>n.id===t.id)).length>=5).slice(0,10);
+        if(mixes.length>=8){
+          mixes.flatMap(m=>m.tracks).forEach(cacheTrack);
+          const sectionNo=current.filter(r=>/^Más por descubrir \d+$/.test(r.section)).length+1;
+          const next=[...current,{section:'Más por descubrir '+sectionNo,mixes}];
+          useLibraryStore.getState().setHomeRows(next);
+          if(current.length<8)saveFeedCache(next,account+':home3:'+preferenceKey(onboardPrefs));
+          added=true;
+        }
+      }
+      busy=false;
+      if(!disposed)window.dispatchEvent(new CustomEvent('velocity:feed-more-result',{detail:{added}}));
+    };
+    window.addEventListener('velocity:feed-more',loadMore);
+    return()=>{disposed=true;controllers.forEach(c=>c.abort());window.removeEventListener('velocity:feed-more',loadMore);};
+  },[authed,account,preferenceKey(onboardPrefs),offline]);
 }
 export default useHomeFeed;

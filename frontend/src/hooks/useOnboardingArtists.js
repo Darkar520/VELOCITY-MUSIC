@@ -18,7 +18,7 @@ export function useOnboardingArtists(step,genres) {
       for(let i=0;i<16;i++)for(const group of batches){
         const a=group[i];if(!a)continue;
         const key=artistIdentity(a.name),prev=merged.get(key);
-        merged.set(key,{...prev,...a,_key:key});
+        merged.set(key,{...prev,...a,_key:key,thumbnail:a.thumbnail||prev?.thumbnail||null,artistId:a.artistId||prev?.artistId||null});
       }
       if(!cancelled)setArtists([...merged.values()].slice(0,120));
     };
@@ -31,7 +31,7 @@ export function useOnboardingArtists(step,genres) {
         try {
           const data=await api.searchAll(genres[index].q.replace(/\b20\d\d\b/g,'').trim(),controller.signal);
           const known=new Set(base.map(a=>a._key));
-          const named=(data.artists||[]).filter(a=>a?.name && a.artistId && !/\bhits\b|greatest|mejor m[uú]sica|audio library|mixing|rttwlr/i.test(a.name)).map(a=>({...a,genre:genres[index].label}));
+          const named=(data.artists||[]).filter(a=>a?.name && a.artistId && !/\bhits\b|greatest|mejor m[uú]sica|audio library|mixing|festival|\brave\b|\bremix\b|rttwlr/i.test(a.name)).map(a=>({...a,genre:genres[index].label}));
           // Song uploaders are not necessarily recording artists. Use song
           // names only to enrich an already known editorial artist, never to
           // recommend compilation channels as artists.

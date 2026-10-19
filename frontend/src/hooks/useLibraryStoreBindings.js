@@ -1,7 +1,7 @@
 /**
  * useLibraryStoreBindings — App usa libraryStore sin mirrors useState.
  */
-import { useCallback, useEffect } from 'react';
+import { useCallback } from 'react';
 import { useLibraryStore } from '../store/libraryStore.js';
 
 function asArray(v) {
@@ -44,20 +44,8 @@ export function useLibraryStoreBindings() {
     }
   }, []);
 
-  // Persist homeRows → localStorage; seed from cache once.
-  useEffect(() => {
-    try {
-      const cached = JSON.parse(localStorage.getItem('velocity.home') || 'null');
-      if (Array.isArray(cached) && cached.length && !useLibraryStore.getState().homeRows.length) {
-        useLibraryStore.getState().setHomeRows(cached);
-      }
-    } catch { /* ignore */ }
-    return useLibraryStore.subscribe((s, prev) => {
-      if (s.homeRows !== prev?.homeRows) {
-        try { localStorage.setItem('velocity.home', JSON.stringify(s.homeRows || [])); } catch { /* ignore */ }
-      }
-    });
-  }, []);
+  // Contextual feed persistence belongs to useHomeFeed/feedCache. Do not
+  // serialize an unscoped copy synchronously on every store publication.
 
   return {
     favs, setFavs,

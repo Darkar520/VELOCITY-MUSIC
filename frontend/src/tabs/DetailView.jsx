@@ -106,7 +106,7 @@ export function DetailView({ view, T, play, addToTarget, onMenu, onToggleFav, go
         <Back />
         <div style={{ display:'flex', alignItems:'flex-end', gap:18, marginBottom:24 }}>
           <div style={{ width:'var(--card-w)', aspectRatio:'1', borderRadius:18, overflow:'hidden', flexShrink:0, boxShadow:`0 16px 40px ${hex2rgba(T.accent,.3)}`, display:'grid', gridTemplateColumns:'1fr 1fr', gridTemplateRows:'1fr 1fr', gap:1, background:'var(--surf-2)' }}>
-            {covers.map((c, i) => <CoverImg key={i} src={c} alt="" radius={0} style={{ width:'100%', height:'100%' }} />)}
+            {covers.map((c, i) => <CoverImg key={i} src={c} alt="" radius={0} size={256} eager priority="high" style={{ width:'100%', height:'100%' }} />)}
           </div>
           <div style={{ minWidth:0 }}>
             <div style={{ fontSize:9, fontWeight:900, letterSpacing:2.5, color:T.accent, textTransform:'uppercase' }}>Mezcla</div>
@@ -221,7 +221,7 @@ export function DetailView({ view, T, play, addToTarget, onMenu, onToggleFav, go
     <div className="fade-up" style={{ paddingBottom:8 }}>
       <Back />
       <div style={{ display:'flex', alignItems:'flex-end', gap:18, marginBottom:24 }}>
-        <CoverImg src={cover} alt={name} radius={18} style={{ width:'var(--card-w)', aspectRatio:'1', flexShrink:0, boxShadow:`0 16px 40px ${hex2rgba(T.accent,.3)}` }} />
+        <CoverImg src={cover} alt={name} radius={18} size={512} eager priority="high" style={{ width:'var(--card-w)', aspectRatio:'1', flexShrink:0, boxShadow:`0 16px 40px ${hex2rgba(T.accent,.3)}` }} />
         <div style={{ minWidth:0 }}>
           <div style={{ display:'flex', alignItems:'center', gap:8 }}>
             <div style={{ fontSize:9, fontWeight:900, letterSpacing:2.5, color:T.accent, textTransform:'uppercase' }}>Álbum{d?.year ? ` · ${d.year}` : ''}</div>

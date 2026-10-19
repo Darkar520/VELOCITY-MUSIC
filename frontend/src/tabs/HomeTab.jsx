@@ -9,6 +9,7 @@ import { useLibraryStore } from '../store/libraryStore.js';
 import { usePlayerStore } from '../store/playerStore.js';
 import { useOnboardingArtists } from '../hooks/useOnboardingArtists.js';
 import { HomeDiscovery } from '../components/HomeDiscovery.jsx';
+import { ArtistPortrait } from '../components/ArtistPortrait.jsx';
 
 export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMenu, onToggleFav, goMix, displayName, avatar, email, setTab, startAiDj, onboardPrefs, setOnboardPrefs, backendDown }) {
   // Library store
@@ -31,7 +32,11 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
   const [artistFilter, setArtistFilter] = useState('');
   const [editingPrefs, setEditingPrefs] = useState(false);
   const showOnboarding = editingPrefs || (onboardPrefs === null && !recent.length && !favs.length);
-  const finishOnboarding = value => { setOnboardPrefs(value); setEditingPrefs(false); };
+  const finishOnboarding = value => {
+    setOnboardPrefs(value);
+    useLibraryStore.setState(s=>({homeRows:[],homeLoading:true,feedNonce:s.feedNonce+1}));
+    setEditingPrefs(false);
+  };
   const editPrefs = () => {
     setOnboardSel(Array.isArray(onboardPrefs) ? onboardPrefs : onboardPrefs?.genres || []);
     setArtistSel(onboardPrefs?.artists || []);setArtistFilter('');setOnboardStep(1);setEditingPrefs(true);
@@ -113,7 +118,7 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
                       }
                     }} aria-pressed={active} className="btn-tap press" style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:6, background:'none', border:'none', cursor:'pointer', padding:'4px 6px', width:80 }}>
                       <div style={{ position:'relative' }}>
-                        {a.thumbnail ? <CoverImg src={a.thumbnail} alt="" radius={999} size={56} style={{ width:56, height:56, boxShadow: active ? `0 0 0 2.5px ${T.accent}` : 'none' }} /> : <span aria-hidden="true" style={{width:56,height:56,borderRadius:'50%',display:'grid',placeItems:'center',background:active?T.accent:'var(--surf-2)',color:active?'#07170f':'var(--txt-0)',border:`1px solid ${active?T.accent:'var(--line)'}`,fontWeight:800,fontSize:18}}>{a.name.split(/\s+/).slice(0,2).map(n=>n[0]).join('')}</span>}
+                        <ArtistPortrait artist={a} active={active} accent={T.accent}/>
                         {active && (
                           <div style={{ position:'absolute', bottom:0, right:0, width:18, height:18, borderRadius:'50%', background:T.accent, display:'flex', alignItems:'center', justifyContent:'center' }}>
                             <Icon.Check c="#000" sz={11} />
@@ -218,7 +223,7 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
         </>
       )}
 
-      {!showOnboarding && (onboardPrefs !== null || recent.length > 0 || favs.length > 0) && <HomeDiscovery onEditPrefs={editPrefs} rows={homeRows} prefs={onboardPrefs} play={play} goMix={goMix} onMenu={onMenu} onToggleFav={toggleFav} favs={favs} loading={homeLoading} retry={() => useLibraryStore.getState().setFeedNonce(useLibraryStore.getState().feedNonce + 1)} />}
+      {!showOnboarding && (onboardPrefs !== null || recent.length > 0 || favs.length > 0) && <HomeDiscovery onEditPrefs={editPrefs} rows={homeRows} prefs={onboardPrefs} play={play} goMix={goMix} onMenu={onMenu} onToggleFav={toggleFav} favs={favs} loading={homeLoading} offline={backendDown} retry={() => useLibraryStore.getState().setFeedNonce(useLibraryStore.getState().feedNonce + 1)} />}
     </div>
   );
 }

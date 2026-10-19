@@ -2,7 +2,23 @@ import React from 'react';
 import {render,screen,fireEvent,cleanup} from '@testing-library/react';
 import {afterEach,it,expect,vi} from 'vitest';
 import {HomeDiscovery} from '../../components/HomeDiscovery.jsx';
-afterEach(cleanup);
+afterEach(()=>{cleanup();vi.unstubAllGlobals();});
+it('observes scrolling when content arrives after the empty state and requests one page per entry',()=>{
+ const observe=vi.fn(),disconnect=vi.fn();let callback;
+ vi.stubGlobal('IntersectionObserver',class {constructor(cb){callback=cb;}observe=observe;disconnect=disconnect;});
+ const dispatch=vi.spyOn(window,'dispatchEvent');
+ const props={play:vi.fn(),goMix:vi.fn(),prefs:{genres:[]},loading:false};
+ const {rerender}=render(<HomeDiscovery {...props} rows={[]}/>);
+ expect(observe).not.toHaveBeenCalled();
+ const row={section:'Discover',mixes:[{label:'Mix',tracks:[{id:'one',title:'One',artist:'Artist'}]}]};
+ rerender(<HomeDiscovery {...props} rows={[row]}/>);
+ expect(observe).toHaveBeenCalledOnce();
+ callback([{isIntersecting:true}]);
+ rerender(<HomeDiscovery {...props} rows={[row,{...row,section:'More'}]}/>);
+ callback([{isIntersecting:true}]);
+ expect(dispatch.mock.calls.filter(([event])=>event.type==='velocity:feed-more')).toHaveLength(1);
+ dispatch.mockRestore();
+});
 it('renders real recommendations and connects playback, mix navigation, favorites and menus',()=>{
  const play=vi.fn(),goMix=vi.fn(),onToggleFav=vi.fn(),onMenu=vi.fn();
  const tracks=[{id:'a',title:'Rosemary',artist:'Deftones',cover:''},{id:'b',title:'Entombed',artist:'Deftones',cover:''}];
