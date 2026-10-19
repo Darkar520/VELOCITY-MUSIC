@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../api.js';
-import { hex2rgba, grad, hiResCover, dedupeByTitle, capPerArtist } from '../helpers.js';
+import { hex2rgba, grad, hiResCover } from '../helpers.js';
 import { GENRES, FALLBACK_COVER } from '../constants.js';
 import { cacheTrack, trackById, normalizeTrack } from '../catalog.js';
 import { Icon } from '../Icons.jsx';
@@ -11,6 +11,7 @@ import { useLibraryStore } from '../store/libraryStore.js';
 import { usePlayerStore } from '../store/playerStore.js';
 import { enrichTracksInBackground } from '../coverEnrich.js';
 import { dedupeByRelevance } from '../searchRanking.js';
+import {buildSeedMix, selectSearchSeed} from '../feed/seededMix.js';
 
 export function SearchTab({ T, play, addToTarget, onMenu, onToggleFav, recentSearches, addSearch, removeSearch, goArtist, goAlbum, goMix, selecting, selection, toggleSelect, startSelection, addToQueue, removeFromQueue, backendDown, setTab }) {
   // Library store
@@ -24,6 +25,7 @@ export function SearchTab({ T, play, addToTarget, onMenu, onToggleFav, recentSea
   const [q, setQ] = useState('');
   const [res, setRes] = useState({ songs: [], albums: [], artists: [] });
   const [relatedMixes, setRelatedMixes] = useState([]);
+  const [chosenSeed,setChosenSeed] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
   const [slowWarning, setSlowWarning] = useState(false);
@@ -98,44 +100,28 @@ export function SearchTab({ T, play, addToTarget, onMenu, onToggleFav, recentSea
   const empty = !res.songs.length && !res.albums.length && !res.artists.length;
 
   // Generar mixes relacionados en background cuando hay resultados de canciones.
-  // Toma la canción top + artistas del resultado → radio de cada uno → mixes únicos.
+  // Resolve one recording; other text-search homonyms are not radio seeds.
   useEffect(() => {
     setRelatedMixes([]);
     const songs = res.songs;
-    if (!songs.length) return;
+    if (!songs.length || loading) return;
     let cancelled = false;
+    const controller = new AbortController();
+    const timer = setTimeout(()=>controller.abort(),45000);
     (async () => {
-      const mixes = [];
-      const usedArtists = new Set();
-      // Hasta 4 mixes: la pista top + los 3 artistas más representados.
-      const candidates = [];
-      // Pista top del resultado
-      if (songs[0]) candidates.push(songs[0]);
-      // Artistas distintos del resultado (top 3)
-      for (const t of songs) {
-        const ak = (t.artist || '').toLowerCase().replace(/\s+/g, '');
-        if (!ak || usedArtists.has(ak)) continue;
-        if (!candidates.find(c => (c.artist||'').toLowerCase().replace(/\s+/g,'') === ak)) candidates.push(t);
-        if (candidates.length >= 4) break;
-      }
-      for (const base of candidates) {
-        if (cancelled) break;
-        const ak = (base.artist || '').toLowerCase().replace(/\s+/g, '');
-        if (usedArtists.has(ak)) continue;
-        usedArtists.add(ak);
-        try {
-          const rel = await api.radio(base.id, 50);
-          if (cancelled) break;
-          const tracks = capPerArtist(dedupeByTitle([base, ...rel.map(normalizeTrack)]), 6).filter(t => t.id).slice(0, 50);
-          if (tracks.length >= 6) {
-            mixes.push({ label: base.artist || base.title || 'Mix', tracks });
-            if (!cancelled) setRelatedMixes([...mixes]);
-          }
-        } catch {}
-      }
+      const base=selectSearchSeed(q,songs,{explicit:chosenSeed?.query===q.trim()?chosenSeed.track:null,recentTracks:useLibraryStore.getState().recent.map(trackById).filter(Boolean)});
+      if(!base)return;
+      const normalize=raw=>(raw||[]).map(normalizeTrack);
+      try{
+        const result=await buildSeedMix(base,{signal:controller.signal,
+          radio:(...args)=>api.radio(...args).then(normalize),
+          artist:(...args)=>api.artist(...args).then(d=>({...d,topSongs:normalize(d.topSongs)})),
+          search:(...args)=>api.search(...args).then(normalize)});
+        if(!cancelled&&result.tracks.length===50)setRelatedMixes([{label:`Desde ${base.title} · ${base.artist}`,tracks:result.tracks,seedId:base.id}]);
+      }catch{/* keep search results usable when recommendations are unavailable */}
     })();
-    return () => { cancelled = true; };
-  }, [res.songs]);
+    return () => { cancelled = true; clearTimeout(timer);controller.abort(); };
+  }, [res.songs,q,loading,chosenSeed]);
 
   return (
     <div className="fade-up" style={{ paddingBottom:8 }}>
@@ -205,7 +191,7 @@ export function SearchTab({ T, play, addToTarget, onMenu, onToggleFav, recentSea
           {res.songs.length > 0 && (<>
             <SectionHeader label="Canciones" accent={T.accent} action={!selecting && <button onClick={() => startSelection()} className="press" style={{ background:'none', border:'none', cursor:'pointer', color:T.accent, fontSize:11.5, fontWeight:800 }}>Seleccionar</button>} />
             <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-              {res.songs.map(t => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => { play(t, [t.id], { radio: true }); addSearch(q.trim()); }} onSwipeRemove={removeFromQueue} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
+              {res.songs.map(t => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => { setChosenSeed({query:q.trim(),track:t}); play(t, [t.id], { radio: true }); addSearch(q.trim(),t); }} onSwipeRemove={removeFromQueue} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
             </div>
           </>)}
 
@@ -213,7 +199,7 @@ export function SearchTab({ T, play, addToTarget, onMenu, onToggleFav, recentSea
           {relatedMixes.length > 0 && (<>
             <SectionHeader label="Mixes relacionados" accent={T.accent} />
             <div className="carousel" style={{ gap:15, paddingBottom:6, paddingTop:2, marginBottom:18 }}>
-              {relatedMixes.map(m => <MixCard key={m.label} mix={m} T={T} onPlay={() => { play(m.tracks[0], m.tracks.map(t=>t.id)); addSearch(q.trim()); }} onOpen={() => { goMix(m); addSearch(q.trim()); }} />)}
+              {relatedMixes.map(m => <MixCard key={m.label} mix={m} T={T} onPlay={() => { play(m.tracks[0], m.tracks.map(t=>t.id)); addSearch(q.trim(),m.tracks[0]); }} onOpen={() => { goMix(m); addSearch(q.trim(),m.tracks[0]); }} />)}
             </div>
           </>)}
         </>

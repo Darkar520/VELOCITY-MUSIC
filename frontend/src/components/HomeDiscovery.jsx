@@ -7,6 +7,7 @@ import {useFeedLoop} from '../hooks/useFeedLoop.js';
 import {preferenceKey} from '../feed/tasteProfile.js';
 import {PersonalizedShelves} from './PersonalizedShelves.jsx';
 import {bestCoverFor} from '../catalog.js';
+import {settlePendingShelves} from '../feed/personalizedShelves.js';
 
 const mixArtwork = tracks => {
   const track = tracks.find(t => t.cover) || tracks[0];
@@ -56,7 +57,7 @@ export function HomeDiscovery({rows,prefs,personalShelves=[],shelfKey='',play,go
   }
   const profile=preferenceKey(prefs);
   const shelfProfile=profile+shelfKey;
-  const tailShelves=shelfSnapshot.current?.profile===shelfProfile?shelfSnapshot.current.shelves:personalShelves;
+  const tailShelves=shelfSnapshot.current?.profile===shelfProfile?settlePendingShelves(shelfSnapshot.current.shelves,personalShelves):personalShelves;
   const lockShelves=()=>{shelfSnapshot.current={profile:shelfProfile,shelves:tailShelves};};
   const songs=songSnapshot.current?.profile===profile?songSnapshot.current.tracks:candidates;
   const lockSongs=()=>{songSnapshot.current={profile,tracks:songs};lockShelves();};
