@@ -476,6 +476,31 @@ describe('App shell — flujos críticos', () => {
     await act(async () => { fireEvent.ended(mainAudio(container)); });
 
     await waitFor(() => expect(usePlayerStore.getState().track?.id).toBe(b.id));
+    await waitFor(() => expect(usePlayerStore.getState().getMachineState()).toMatchObject({trackId:b.id,intent:'play',srcStatus:'ready'}));
+    expect(apiMock.ensureStreamUrl.mock.calls.some(([params])=>params.id===b.id)).toBe(true);
+    await waitFor(() => expect(playSpy.mock.calls.length).toBeGreaterThan(0));
+  });
+
+  it('onEnded en segundo plano firma la segunda pista y vuelve a intención play', async () => {
+    const {a,b}=seedTracks();
+    const {container}=render(<App/>);
+    await act(async()=>{
+      usePlayerStore.setState({queue:[a.id,b.id]});
+      usePlayerStore.getState().dispatchPolicy({type:'TRACK_SET',trackId:a.id,intent:'play'});
+    });
+    const audio=mainAudio(container);
+    await waitFor(()=>expect(audio.getAttribute('src')).toBeTruthy());
+    Object.defineProperties(audio,{
+      readyState:{value:4,configurable:true},
+      ended:{value:true,configurable:true},
+    });
+    Object.defineProperty(document,'visibilityState',{configurable:true,value:'hidden'});
+    try{
+      await act(async()=>{fireEvent.ended(audio);});
+      await waitFor(()=>expect(usePlayerStore.getState().getMachineState()).toMatchObject({trackId:b.id,intent:'play',srcStatus:'ready',focus:'own'}));
+      expect(apiMock.ensureStreamUrl.mock.calls.some(([params])=>params.id===b.id)).toBe(true);
+      expect(audio.getAttribute('src')).toContain('stream-proxy');
+    }finally{delete document.visibilityState;}
   });
 
   it('onEnded al final de la cola sin continuación preparada detiene honestamente', async () => {

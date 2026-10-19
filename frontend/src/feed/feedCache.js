@@ -14,8 +14,8 @@
 const KEY = 'velocity.feedCache';
 const MAX_AGE_MS = 24 * 3600 * 1000; // 24 h
 const MAX_SECTIONS = 8;
-const MAX_MIXES = 8;
-const MAX_TRACKS = 40;
+const MAX_MIXES = 10;
+const MAX_TRACKS = 60;
 
 function slimTrack(t) {
   if (!t || !t.id) return null;
@@ -41,6 +41,7 @@ export function slimSections(sections) {
       section: sec.section,
       mixes: (sec.mixes || []).slice(0, MAX_MIXES).map((m) => ({
         label: m.label,
+        featured: m.featured === true,
         tracks: (m.tracks || []).slice(0, MAX_TRACKS).map(slimTrack).filter(Boolean),
       })).filter((m) => m.tracks.length > 0),
     }))
@@ -52,7 +53,12 @@ export function saveFeedCache(sections, context = '') {
   try {
     const slim = slimSections(sections);
     if (!slim.length) return;
-    localStorage.setItem(KEY, JSON.stringify({ ts: Date.now(), sections: slim, context }));
+    const tracksById = {};
+    const compact = slim.map(sec=>({...sec,mixes:sec.mixes.map(m=>({...m,tracks:m.tracks.map(t=>{
+      tracksById[t.id]=t;
+      return t.id;
+    })}))}));
+    localStorage.setItem(KEY, JSON.stringify({ ts: Date.now(), sections: compact, tracksById, format: 2, context }));
   } catch {
     // Cuota excedida u otro fallo: descartar la caché para no dejarla corrupta.
     try { localStorage.removeItem(KEY); } catch { /* ignore */ }
@@ -68,6 +74,12 @@ export function loadFeedCache(context = '') {
     if ((parsed?.context || '') !== context) return null;
     if (!parsed || !Array.isArray(parsed.sections) || !parsed.sections.length) return null;
     if (Date.now() - (Number(parsed.ts) || 0) > MAX_AGE_MS) return null;
+    if(parsed.format===2){
+      if(!parsed.tracksById || typeof parsed.tracksById!=='object')return null;
+      return parsed.sections.map(sec=>({...sec,mixes:(sec.mixes||[]).map(m=>({
+        ...m,tracks:(m.tracks||[]).map(id=>parsed.tracksById[id]).filter(Boolean),
+      })).filter(m=>m.tracks.length)})).filter(sec=>sec.mixes.length);
+    }
     return parsed.sections;
   } catch {
     return null;

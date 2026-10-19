@@ -24,6 +24,7 @@ import { useLibraryStore } from '../../store/libraryStore.js';
 import { cacheTrack } from '../../catalog.js';
 import { api } from '../../api.js';
 import { clearFeedCache } from '../../feed/feedCache.js';
+import {genreArtists} from '../../feed/tasteProfile.js';
 
 function seedRecent(n) {
   const ids = [];
@@ -38,6 +39,38 @@ function seedRecent(n) {
 const PROPS = { authed: true, libReady: true, downloaded: new Set(), recentSearches: [], onboardPrefs: [] };
 
 describe('useHomeFeed', () => {
+  it('scroll demand fetches new artists and appends a 50-song section with new IDs', async () => {
+    api.search.mockImplementation(q=>Promise.resolve(Array.from({length:10},(_,i)=>({id:`${q}-${i}`,title:`${q} song ${i}`,artist:q,cover:''}))));
+    api.radio.mockImplementation(()=>Promise.resolve(Array.from({length:8},(_,artist)=>Array.from({length:10},(_,i)=>({id:`more-${artist}-${i}`,title:`more ${artist} ${i}`,artist:`More ${artist}`}))).flat()));
+    const rock={label:'Rock',q:'rock'};
+    const props={...PROPS,onboardPrefs:{genres:[rock],artists:[]}};
+    const first=renderHook(()=>useHomeFeed(props));
+    await waitFor(()=>expect(useLibraryStore.getState().homeLoading).toBe(false),{timeout:10000});
+    const before=useLibraryStore.getState().homeRows;
+    const rockMix=before.find(r=>r.section==='El sonido que elegiste')?.mixes[0];
+    expect(rockMix?.tracks).toHaveLength(50);
+    expect(new Set(rockMix.tracks.map(t=>t.artist)).size).toBeGreaterThanOrEqual(10);
+    const oldIds=new Set(before.flatMap(r=>r.mixes).flatMap(m=>m.tracks).map(t=>t.id));
+    const later=genreArtists([rock])[11].name;
+    expect(api.search.mock.calls.some(([q])=>q===later)).toBe(false);
+    act(()=>window.dispatchEvent(new Event('velocity:feed-more')));
+    await waitFor(()=>expect(useLibraryStore.getState().homeRows.some(r=>r.section.startsWith('Más por descubrir'))).toBe(true),{timeout:10000});
+    const added=useLibraryStore.getState().homeRows.at(-1);
+    expect(api.search.mock.calls.some(([q])=>q===later)).toBe(true);
+    expect(added.mixes.every(m=>m.tracks.length===50)).toBe(true);
+    expect(added.mixes.some(m=>m.tracks.some(t=>!oldIds.has(t.id)))).toBe(true);
+    first.unmount();
+    const priorCalls=api.search.mock.calls.filter(([q])=>q===later).length;
+    const reopened=renderHook(()=>useHomeFeed(props));
+    await waitFor(()=>expect(useLibraryStore.getState().homeLoading).toBe(false),{timeout:10000});
+    expect(useLibraryStore.getState().homeRows.filter(r=>r.section==='Más por descubrir 1')).toHaveLength(1);
+    api.radio.mockImplementation(()=>Promise.resolve(Array.from({length:12},(_,artist)=>Array.from({length:10},(_,i)=>({id:`radio-${artist}-${i}`,title:`radio ${artist} ${i}`,artist:`Related ${artist}`}))).flat()));
+    act(()=>window.dispatchEvent(new Event('velocity:feed-more')));
+    expect(api.search.mock.calls.filter(([q])=>q===later)).toHaveLength(priorCalls);
+    await waitFor(()=>expect(useLibraryStore.getState().homeRows.some(r=>r.section==='Más por descubrir 2')).toBe(true),{timeout:10000});
+    expect(useLibraryStore.getState().homeRows.at(-1).mixes.every(m=>m.tracks.length===50)).toBe(true);
+    reopened.unmount();
+  });
   it('unrelated downloaded files do not become a new account taste signal', async () => {
     cacheTrack({id:'unrelated',title:'An unrelated download',artist:'Bad Bunny'});
     api.search.mockImplementation(q=>Promise.resolve([{id:q,title:q,artist:q}]));

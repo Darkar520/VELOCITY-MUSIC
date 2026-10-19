@@ -38,11 +38,22 @@ test('feed cache: guarda y rehidrata las secciones', () => {
   assert.equal(out[0].mixes[0].tracks[0].id, 't0');
 });
 
+test('feed cache: una pista compartida se guarda una vez y se reconstruye en cada mix',()=>{
+  clearFeedCache();
+  const track={id:'shared',title:'Song',artist:'Artist',cover:'cover'};
+  saveFeedCache([{section:'Discover',mixes:[{label:'One',tracks:[track]},{label:'Two',tracks:[track]}]}]);
+  const raw=JSON.parse(localStorage.getItem('velocity.feedCache'));
+  assert.equal(raw.format,2);
+  assert.equal(Object.keys(raw.tracksById).length,1);
+  assert.deepEqual(raw.sections[0].mixes.map(m=>m.tracks),[['shared'],['shared']]);
+  assert.deepEqual(loadFeedCache()[0].mixes.map(m=>m.tracks[0].title),['Song','Song']);
+});
+
 test('feed cache: adelgaza (descarta campos no esenciales) y acota', () => {
   const slim = slimSections(sampleSections(1));
   assert.equal(slim[0].mixes[0].tracks[0].extra, undefined, 'no persiste campos ajenos');
-  // > MAX_SECTIONS (8) se recorta
-  assert.ok(slimSections(sampleSections(20)).length <= 8);
+  // Mantiene dos páginas de descubrimiento y sigue acotado.
+  assert.equal(slimSections(sampleSections(20)).length, 8);
 });
 
 test('feed cache: caduca por antigüedad (>24h) → null', () => {

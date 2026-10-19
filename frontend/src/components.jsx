@@ -71,16 +71,10 @@ export function DownloadAllButton({ ids, downloaded, downloading, onClick, T }) 
   );
 }
 
-// Imagen de carátula robusta: carga anticipada (eager) con prioridad baja,
-// estado de carga y fallback al fallar.
-//
-// eager=true por defecto: las carátulas se cargan de inmediato (no al hacer
-// scroll), para que al recorrer listas/feed ya estén presentes en vez de
-// aparecer con retraso. Como el proxy /img viaja por el túnel del backend
-// (mismo canal que el audio), se marca fetchPriority="low": el navegador las
-// descarga sin robar ancho de banda a la resolución/streaming del audio, y el
-// SW/navegador las cachean (immutable) para el resto de la sesión.
-export function CoverImg({ src, alt = '', radius = 12, className = '', style = {}, size = 512, eager = true, priority = 'low' }) {
+// Las carátulas fuera de pantalla se cargan al acercarse al viewport.
+// El destacado puede pedir eager y prioridad alta explícitamente. La prioridad
+// baja por defecto evita que listas largas compitan con el stream de audio.
+export function CoverImg({ src, alt = '', radius = 12, className = '', style = {}, size = 512, eager = false, priority = 'low' }) {
   const [loaded, setLoaded] = useState(false);
   const [step, setStep] = useState(0); // 0 hiRes · 1 original · 2 fallback
   const imgRef = useRef(null);
@@ -171,7 +165,7 @@ export function TrackRow({ track, active, playing, T, onClick, onFav, faved, onA
         </div>
       )}
       <div style={{ position:'relative', flexShrink:0 }}>
-        <CoverImg src={track.cover} alt="" radius={12} style={{ width:'var(--thumb)', height:'var(--thumb)' }} />
+        <CoverImg src={track.cover} alt="" radius={12} size={128} eager={false} style={{ width:'var(--thumb)', height:'var(--thumb)' }} />
         {active && playing && (
           <div className="glass" style={{ position:'absolute', inset:0, background:'#00000066', borderRadius:12, display:'flex', alignItems:'center', justifyContent:'center' }}>
             <EQViz color={T.accent} color2={T.accent2} playing={playing} bars={5} h={18} gap={2} />
@@ -197,7 +191,7 @@ export function MediaCard({ cover, title, subtitle, T, onClick, onPlay, onFav, o
   return (
     <div className="card-hover media-card" style={{ flexShrink:0, width:'var(--card-w)' }}>
       <div onClick={onClick} style={{ position:'relative', width:'100%', aspectRatio:'1', borderRadius:18, marginBottom:9, cursor:'pointer', boxShadow:'0 8px 22px #0007' }}>
-        <CoverImg src={cover} alt={title} radius={18} style={{ width:'100%', height:'100%' }} />
+        <CoverImg src={cover} alt={title} radius={18} size={256} style={{ width:'100%', height:'100%' }} />
         <div style={{ position:'absolute', inset:0, borderRadius:18, background:'linear-gradient(180deg, transparent 45%, #000b)', pointerEvents:'none' }} />
         <div className="media-actions" style={{ position:'absolute', inset:0, borderRadius:18 }}>
           {(onFav || onMenu) && (
@@ -227,7 +221,7 @@ export function MixCard({ mix, T, onPlay, onOpen }) {
     <div className="card-hover media-card" style={{ flexShrink:0, width:'var(--mix-w)' }}>
       <div onClick={onOpen} style={{ position:'relative', width:'100%', aspectRatio:'1', borderRadius:16, overflow:'hidden', marginBottom:9, cursor:'pointer', boxShadow:'0 8px 22px #0007' }}>
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gridTemplateRows:'1fr 1fr', width:'100%', height:'100%', gap:1 }}>
-          {covers.map((c, i) => <CoverImg key={i} src={c} alt="" radius={0} style={{ width:'100%', height:'100%' }} />)}
+          {covers.map((c, i) => <CoverImg key={i} src={c} alt="" radius={0} size={128} style={{ width:'100%', height:'100%' }} />)}
         </div>
         <div style={{ position:'absolute', inset:0, background:'linear-gradient(180deg, transparent 40%, #000c)', pointerEvents:'none' }} />
         <div style={{ position:'absolute', top:8, left:10, fontSize:8.5, fontWeight:900, letterSpacing:1.5, color:'#fff', textTransform:'uppercase', opacity:.9, textShadow:'0 1px 3px #000' }}>Mezcla</div>
