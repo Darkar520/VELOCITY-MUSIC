@@ -10,8 +10,11 @@ import { usePlayerStore } from '../store/playerStore.js';
 import { useOnboardingArtists } from '../hooks/useOnboardingArtists.js';
 import { HomeDiscovery } from '../components/HomeDiscovery.jsx';
 import { ArtistPortrait } from '../components/ArtistPortrait.jsx';
+import { usePersonalizedShelves } from '../hooks/usePersonalizedShelves.js';
+import { cacheIdentity } from '../favoriteOutbox.js';
+import { getToken } from '../api.js';
 
-export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMenu, onToggleFav, goMix, displayName, avatar, email, setTab, startAiDj, onboardPrefs, setOnboardPrefs, backendDown }) {
+export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMenu, onToggleFav, goMix, displayName, avatar, email, setTab, startAiDj, onboardPrefs, setOnboardPrefs, recentSearches = [], backendDown }) {
   // Library store
   const favs = useLibraryStore((s) => s.favs);
   const recent = useLibraryStore((s) => s.recent);
@@ -25,6 +28,8 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
   const track = trackProp ?? storeTrack;
   const playing = playingProp ?? storePlaying;
   const toggleFav = onToggleFav || (() => {});
+  const personalAccount = cacheIdentity(email || '', getToken());
+  const personalShelves = usePersonalizedShelves({rows: homeRows, prefs: onboardPrefs, recent, favs, searches: recentSearches, account: personalAccount, loading: homeLoading, offline: backendDown});
   const [djBusy, setDjBusy] = useState(false);
   const [onboardSel, setOnboardSel] = useState([]);
   const [onboardStep, setOnboardStep] = useState(1); // 1=géneros, 2=artistas
@@ -223,7 +228,7 @@ export function HomeTab({ T, play, track: trackProp, playing: playingProp, onMen
         </>
       )}
 
-      {!showOnboarding && (onboardPrefs !== null || recent.length > 0 || favs.length > 0) && <HomeDiscovery onEditPrefs={editPrefs} rows={homeRows} prefs={onboardPrefs} play={play} goMix={goMix} onMenu={onMenu} onToggleFav={toggleFav} favs={favs} loading={homeLoading} offline={backendDown} retry={() => useLibraryStore.getState().setFeedNonce(useLibraryStore.getState().feedNonce + 1)} />}
+      {!showOnboarding && (onboardPrefs !== null || recent.length > 0 || favs.length > 0) && <HomeDiscovery onEditPrefs={editPrefs} rows={homeRows} prefs={onboardPrefs} personalShelves={personalShelves} shelfKey={JSON.stringify([personalAccount,recentSearches])} play={play} goMix={goMix} onMenu={onMenu} onToggleFav={toggleFav} favs={favs} loading={homeLoading} offline={backendDown} retry={() => useLibraryStore.getState().setFeedNonce(useLibraryStore.getState().feedNonce + 1)} />}
     </div>
   );
 }

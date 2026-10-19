@@ -1,7 +1,7 @@
 import React from 'react';
 import {render,screen,fireEvent,cleanup} from '@testing-library/react';
 import {afterEach,it,expect,vi} from 'vitest';
-vi.mock('../../api.js',()=>({api:{searchAll:vi.fn(async()=>({artists:[],songs:[]}))}}));
+vi.mock('../../api.js',()=>({getToken:()=>null,api:{searchAll:vi.fn(async()=>({artists:[],songs:[]}))}}));
 import {HomeTab} from '../../tabs/HomeTab.jsx';
 import {useLibraryStore} from '../../store/libraryStore.js';
 import {usePlayerStore} from '../../store/playerStore.js';

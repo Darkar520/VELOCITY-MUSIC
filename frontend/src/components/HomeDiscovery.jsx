@@ -5,10 +5,12 @@ import './homeDiscovery.css';
 import {DiscoverySongs} from './DiscoverySongs.jsx';
 import {useFeedLoop} from '../hooks/useFeedLoop.js';
 import {preferenceKey} from '../feed/tasteProfile.js';
+import {PersonalizedShelves} from './PersonalizedShelves.jsx';
 
-export function HomeDiscovery({rows,prefs,play,goMix,onMenu,onToggleFav,favs=[],loading,retry,onEditPrefs,offline=false}) {
+export function HomeDiscovery({rows,prefs,personalShelves=[],shelfKey='',play,goMix,onMenu,onToggleFav,favs=[],loading,retry,onEditPrefs,offline=false}) {
   const {firstRef,repeatRef}=useFeedLoop(rows.length);
   const songSnapshot=useRef(null);
+  const shelfSnapshot=useRef(null);
   const moreRef=useRef(null);
   const observedCount=useRef(-1);
   const rowCountRef=useRef(rows.length);
@@ -47,8 +49,11 @@ export function HomeDiscovery({rows,prefs,play,goMix,onMenu,onToggleFav,favs=[],
     if(candidates.length===72)break;
   }
   const profile=preferenceKey(prefs);
+  const shelfProfile=profile+shelfKey;
+  const tailShelves=shelfSnapshot.current?.profile===shelfProfile?shelfSnapshot.current.shelves:personalShelves;
+  const lockShelves=()=>{shelfSnapshot.current={profile:shelfProfile,shelves:tailShelves};};
   const songs=songSnapshot.current?.profile===profile?songSnapshot.current.tracks:candidates;
-  const lockSongs=()=>{songSnapshot.current={profile,tracks:songs};};
+  const lockSongs=()=>{songSnapshot.current={profile,tracks:songs};lockShelves();};
   const playSong=(...args)=>{lockSongs();play(...args);};
   const toggleSongFav=id=>{lockSongs();onToggleFav?.(id);};
   const songMenu=id=>{lockSongs();onMenu?.(id);};
@@ -85,6 +90,7 @@ export function HomeDiscovery({rows,prefs,play,goMix,onMenu,onToggleFav,favs=[],
       </article>)}</div>
     </section>)}
     <DiscoverySongs tracks={songs.slice(36,72)} title="Más canciones para ti" eyebrow="SIGUE ESCUCHANDO" play={playSong} onMenu={songMenu} onToggleFav={toggleSongFav} favs={favs}/>
+    <PersonalizedShelves shelves={tailShelves} play={playSong} goMix={goMix} onInteract={lockShelves}/>
   </>;
   return <div className="discovery">
     <div className="discovery-cycle" ref={firstRef}>
