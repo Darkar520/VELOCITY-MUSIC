@@ -17,7 +17,7 @@ function runner() {
 
 function handlers() {
   const machine = { ...initialState(), intent: 'play', trackId: 'a', srcStatus: 'ready' };
-  const audio = { paused: true, ended: false, currentTime: 42, getAttribute: () => '/audio/a' };
+  const audio = { paused: true, ended: false, readyState: 4, currentTime: 42, getAttribute: () => '/audio/a' };
   const deps = { audioRef: { current: audio }, getMachine: () => machine,
     selfPauseRef: { current: false }, pendingFadeRef: { current: false },
     playingRef: { current: true }, trackRef: { current: { id: 'a' } },
