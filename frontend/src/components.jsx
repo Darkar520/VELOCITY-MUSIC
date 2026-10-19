@@ -5,6 +5,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Icon } from './Icons.jsx';
 import { hex2rgba, grad, hiResCover } from './helpers.js';
 import { FALLBACK_COVER } from './constants.js';
+import { bestCoverFor } from './catalog.js';
 
 // Ecualizador visual (barras animadas).
 export function EQViz({ color, color2, playing, bars = 10, h = 24, gap = 2.5 }) {
@@ -192,7 +193,7 @@ export function TrackRow({ track, active, playing, T, onClick, onFav, faved, onA
         </div>
       )}
       <div style={{ position:'relative', flexShrink:0 }}>
-        <CoverImg src={track.cover} alt="" radius={12} size={128} eager={false} style={{ width:'var(--thumb)', height:'var(--thumb)' }} />
+        <CoverImg src={bestCoverFor(track.id,track.cover)} alt="" radius={12} size={128} eager={false} style={{ width:'var(--thumb)', height:'var(--thumb)' }} />
         {active && playing && (
           <div className="glass" style={{ position:'absolute', inset:0, background:'#00000066', borderRadius:12, display:'flex', alignItems:'center', justifyContent:'center' }}>
             <EQViz color={T.accent} color2={T.accent2} playing={playing} bars={5} h={18} gap={2} />
