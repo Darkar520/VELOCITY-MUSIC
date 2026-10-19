@@ -263,6 +263,7 @@ test('Regresión: /api/search/all devuelve songs/albums/artists', async () => {
       songs: [{ id: 'v1', title: `${q}`, artist: 'Test', durationSeconds: 200 }],
       albums: [{ albumId: 'a1', name: 'Album' }],
       artists: [{ artistId: 'ar1', name: 'Artist' }],
+      context: { kind: 'album', albumId: 'a1', artistId: 'ar1' },
     }),
   });
   const res = await request(app).get('/api/search/all').query({ q: 'strobe' }).expect(200);
@@ -270,6 +271,7 @@ test('Regresión: /api/search/all devuelve songs/albums/artists', async () => {
   assert.ok(Array.isArray(res.body.albums));
   assert.ok(Array.isArray(res.body.artists));
   assert.equal(res.body.songs[0].title, 'strobe');
+  assert.deepEqual(res.body.context, { kind: 'album', albumId: 'a1', artistId: 'ar1' });
 });
 
 test('Regresión: /api/search/all sin q → 400', async () => {
