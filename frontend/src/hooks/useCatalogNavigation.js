@@ -20,6 +20,7 @@ import * as offline from '../offline.js';
 import { dedupeByTitle } from '../helpers.js';
 import {buildSeedMix, selectSearchSeed} from '../feed/seededMix.js';
 import {starterQueries, artistIdentity} from '../feed/tasteProfile.js';
+import { rankDjSeeds, orderDjStation } from '../feed/aiDj.js';
 import { cacheTrack, trackById, allCached, saveMeta, normalizeTrack } from '../catalog.js';
 
 // El enlace compartido debe salir del mismo origen que sirve la aplicación.
@@ -102,10 +103,14 @@ export function useCatalogNavigation({
 
   const startAiDj = async () => {
     showToast('AI DJ preparando tu estacion...');
-    const score = {};
-    recent.forEach((id, i) => { score[id] = (score[id] || 0) + Math.max(1, 12 - i * 0.4); });
-    favs.forEach(id => { score[id] = (score[id] || 0) + 6; });
-    const ranked = Object.keys(score).map(trackById).filter(Boolean).sort((a, b) => score[b.id] - score[a.id]);
+    let previous = [], stationKey;
+    try {
+      stationKey = 'velocity.dj.previous.' + encodeURIComponent(localStorage.getItem('velocity.email') || 'anonymous');
+      const saved = JSON.parse(localStorage.getItem(stationKey) || '[]');
+      if (Array.isArray(saved)) previous = saved.filter(id => typeof id === 'string').slice(0, 50);
+    } catch { /* storage is optional */ }
+    const tracks = [...new Set([...recent, ...favs])].map(trackById).filter(Boolean);
+    const ranked = rankDjSeeds({ recent, favorites: favs, tracks, prefs: onboardPrefs, previous });
     let seed = ranked[0];
     let pool = [];
     const controller = new AbortController();
@@ -125,6 +130,8 @@ export function useCatalogNavigation({
       }
     } catch {} finally { clearTimeout(timer); }
     if (pool.length!==50) { showToast('No se pudo reunir una estación de 50 canciones relacionadas. Revisa tus gustos e inténtalo de nuevo.'); return; }
+    pool = orderDjStation(pool, { recent, favorites: favs, previous, prefs: onboardPrefs });
+    try { if (stationKey) localStorage.setItem(stationKey, JSON.stringify(pool.map(track => track.id))); } catch { /* optional */ }
     pool.forEach(cacheTrack);
     play(pool[0], pool.map(t => t.id), { radio: true });
     showToast('AI DJ sonando tu estacion personalizada');

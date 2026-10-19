@@ -11,7 +11,7 @@
 
 self.importScripts('/offline-artwork.js', '/downloads-db.js', '/downloads-worker.js');
 
-const CACHE = 'velocity-v105';
+const CACHE = 'velocity-v106';
 const ARTWORK_CACHE = self.VelocityOfflineArtwork.CACHE;
 const APP_SHELL = ['/', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'];
 
@@ -69,18 +69,33 @@ self.addEventListener('fetch', (event) => {
     return;
   }
   if (url.pathname === '/img') {
+    const fallbackResponses = new WeakSet();
+    const fallbackImage = async () => {
+      const response = await self.VelocityOfflineArtwork.cached(request.url);
+      if (response) fallbackResponses.add(response);
+      return response;
+    };
     const image = (async () => {
-      // A cached 512px album cover can satisfy 96px/900px views without a
-      // server. This is also used by metadata repair before any network work.
-      const cached = await self.VelocityOfflineArtwork.cached(request.url);
+      // Online, fetch the requested resolution instead of enlarging thumbnails.
+      // Offline, retain the largest available image of this exact resource.
+      const cached = await self.VelocityOfflineArtwork.cached(request.url, { allowSmaller: false });
       if (cached) return cached;
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 8000);
-      try { return await fetch(request, { signal: controller.signal }); }
+      try {
+        const response = await fetch(request, { signal: controller.signal });
+        if (response.ok) return response;
+        return await fallbackImage() || response;
+      } catch (error) {
+        const fallback = await fallbackImage();
+        if (fallback) return fallback;
+        throw error;
+      }
       finally { clearTimeout(timer); }
     })();
     event.respondWith(image.catch(() => new Response(null, { status: 503 })));
     event.waitUntil(image.then(async response => {
+        if (fallbackResponses.has(response)) return;
       if (response?.ok && /^image\//i.test(response.headers.get('content-type') || '')) {
         // Clone before yielding: respondWith may start consuming the original
         // body while CacheStorage.open awaits disk. Cloning after that await

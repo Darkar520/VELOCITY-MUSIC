@@ -2,7 +2,7 @@ import {afterEach,expect,it,vi} from 'vitest';
 import {api} from '../../api.js';
 import {cacheTrack} from '../../catalog.js';
 import {useCatalogNavigation} from '../useCatalogNavigation.js';
-afterEach(()=>vi.restoreAllMocks());
+afterEach(()=>{vi.restoreAllMocks();localStorage.removeItem('velocity.dj.previous.anonymous');});
 const options=()=>({setExpanded:vi.fn(),setView:vi.fn(),setOpenPlaylist:vi.fn(),setTab:vi.fn(),setDetailData:vi.fn(),setDetailLoading:vi.fn(),setCatVer:vi.fn(),showToast:vi.fn(),play:vi.fn(),recent:[],favs:[],downloaded:new Set(),playlists:[],savedPlaylists:[]});
 
 it('AI DJ starts from actual listening context and supplies 50 related recordings',async()=>{
@@ -12,7 +12,8 @@ it('AI DJ starts from actual listening context and supplies 50 related recording
  const o={...options(),recent:[seed.id],downloaded:new Set([other.id])};
  await useCatalogNavigation(o).startAiDj();
  expect(radio.mock.calls[0][0]).toBe(seed.id);
- expect(o.play.mock.calls[0][0].id).toBe(seed.id);
+ expect(o.play.mock.calls[0][0].id).toBe('dj-0'); // Related discovery precedes the just-played seed.
+ expect(o.play.mock.calls[0][1]).toContain(seed.id);
  expect(o.play.mock.calls[0][1].length).toBe(50);
  expect(o.play.mock.calls[0][1]).not.toContain(other.id);
 });

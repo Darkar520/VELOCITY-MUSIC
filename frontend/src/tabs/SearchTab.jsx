@@ -47,7 +47,7 @@ export function SearchTab({ T, play, addToTarget, onMenu, onToggleFav, recentSea
       const attempt = async () => {
         try {
           const d = await api.searchAll(term, ctrl.signal);
-          return { songs: dedupeByRelevance(term, (d.songs || []).map(normalizeTrack)), albums: d.albums || [], artists: d.artists || [] };
+          return { context: d.context, songs: dedupeByRelevance(term, (d.songs || []).map(normalizeTrack), d.context), albums: d.albums || [], artists: d.artists || [] };
         } catch (e) {
           if (aborted(e)) throw e;                      // cancelada: no es error real
           const raw = await api.search(term, ctrl.signal); // respaldo
@@ -109,7 +109,8 @@ export function SearchTab({ T, play, addToTarget, onMenu, onToggleFav, recentSea
     const controller = new AbortController();
     const timer = setTimeout(()=>controller.abort(),45000);
     (async () => {
-      const base=selectSearchSeed(q,songs,{explicit:chosenSeed?.query===q.trim()?chosenSeed.track:null,recentTracks:useLibraryStore.getState().recent.map(trackById).filter(Boolean)});
+      const explicit = chosenSeed?.query === q.trim() ? chosenSeed.track : res.context ? songs[0] : null;
+      const base=selectSearchSeed(q,songs,{explicit,recentTracks:useLibraryStore.getState().recent.map(trackById).filter(Boolean)});
       if(!base)return;
       const normalize=raw=>(raw||[]).map(normalizeTrack);
       try{

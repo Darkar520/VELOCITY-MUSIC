@@ -21,6 +21,7 @@ export default [
       'data-test/**',
       'data-staging/**',
       'scratch/**',
+      'test-results/**', // resultados y benchmarks generados, no código publicable
       'tools/**',
       'cloudflare-worker/**', // entorno Workers, no Node
     ],

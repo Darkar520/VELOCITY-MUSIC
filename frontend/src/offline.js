@@ -74,6 +74,7 @@ function lyricsRecord(id, data = {}, previous = null) {
     id,
     synced,
     plain,
+    translation: data.translation || ((synced === previous?.synced && plain === previous?.plain) ? previous?.translation : null) || null,
     source: data.source || previous?.source || null,
     status: lyricsStatus({ ...data, synced, plain }),
     error: data.error || null,

@@ -62,6 +62,7 @@ tools/amd/app/assets/wrapper-manager.qcow2
 tools/amd/*.zip
 # Caché de archivos descifrados por AMD (generado en runtime)
 tools/amd/cache/
+tools/lyrics-translation/
 
 # ── Sesión local: no versionar (AGENTS.md lo pide explícitamente) ─────────────
 # Estaban versionados por error. `data-test/velocity-db.json` llegó a contener

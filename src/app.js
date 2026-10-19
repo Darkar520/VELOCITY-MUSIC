@@ -4,6 +4,7 @@ import compression from 'compression';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import YTMusic from 'ytmusic-api';
+import { translateLyrics } from './services/lyricsTranslation.js';
 import { createRateLimiter } from './middleware/rateLimit.js';
 
 import { StreamCache } from './services/streamCache.js';
@@ -622,6 +623,11 @@ export function createApp(deps = {}) {
   });
 
   // ---- Búsqueda combinada (canciones + álbumes + artistas) ----
+  app.post('/api/lyrics/translate', requireAuth || ((_req, res) => res.status(503).json({ error: 'Autenticación no disponible.' })), createRateLimiter({ windowMs: 60000, max: 60 }), async (req, res) => {
+    try { return res.json(await translateLyrics(req.body?.lines)); }
+    catch (error) { return res.status(error.status || 503).json({ error: error.message }); }
+  });
+
   app.get('/api/search/all', async (req, res) => {
     const q = String(req.query.q || '').trim();
     if (!q) return res.status(400).json({ error: 'Falta el parámetro q.' });
