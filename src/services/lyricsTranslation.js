@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const python = process.env.LYRICS_TRANSLATION_PYTHON || path.join(root, 'tools/lyrics-translation', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
+// server.js loads .env after ESM imports; resolve configuration at request time.
+const pythonPath = () => process.env.LYRICS_TRANSLATION_PYTHON || path.join(root, 'tools/lyrics-translation', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
 const cache = new Map(), pending = new Map();
 let active = 0;
 
@@ -23,7 +24,7 @@ export async function translateLyrics(lines) {
   if (active >= 2) throw Object.assign(new Error('Traductor ocupado. Inténtalo de nuevo.'), { status: 503 });
   active++;
   const task = new Promise((resolve, reject) => {
-    const child = spawn(python, [path.join(root, 'scripts/translate-lyrics.py')], { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
+    const child = spawn(pythonPath(), [path.join(root, 'scripts/translate-lyrics.py')], { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
     let output = '', finished = false;
     const finish = (error, result) => {
       if (finished) return;
