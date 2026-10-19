@@ -86,6 +86,27 @@ describe('api.ensureStreamUrl playback preflight', () => {
     api._streamSignInflight.clear();
   });
 
+  it('recupera una respuesta HTML transitoria sin cachearla como firma', async () => {
+    mockFetch.mockResolvedValueOnce(new Response('<html>gateway error</html>', { status: 502 }));
+    mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ exp: Math.floor(Date.now()/1000)+3600, sig: 'recovered' })));
+    const url = await api.ensureStreamUrl({ artist: 'A', title: 'T', id: 'recover' });
+    expect(url).toContain('sig=recovered');
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch.mock.calls[0][1].cache).toBe('no-store');
+    expect(mockFetch.mock.calls[0][1].signal).toBe(mockFetch.mock.calls[1][1].signal);
+  });
+
+  it('acota las respuestas HTML persistentes y conserva la sesión sin crear una firma inválida', async () => {
+    setToken('alive');
+    mockFetch.mockImplementation(async () => new Response('<html>unavailable</html>', { status: 200 }));
+    await expect(api.ensureStreamUrl({ artist: 'A', title: 'T', id: 'broken' })).rejects.toMatchObject({
+      code: 'PLAYBACK_INVALID_RESPONSE', status: 200, nonJson: true,
+    });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(api._streamSignCache.size).toBe(0);
+    expect(getToken()).toBe('alive');
+  });
+
   it('prepara la fuente antes de construir la URL firmada', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,

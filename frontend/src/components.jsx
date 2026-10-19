@@ -77,11 +77,14 @@ export function DownloadAllButton({ ids, downloaded, downloading, onClick, T }) 
 export function CoverImg({ src, alt = '', radius = 12, className = '', style = {}, size = 512, eager = false, priority = 'low' }) {
   const [loaded, setLoaded] = useState(false);
   const [step, setStep] = useState(0); // 0 hiRes · 1 original · 2 fallback
+  const [attempt, setAttempt] = useState(0);
+  const retries = useRef(0);
   const imgRef = useRef(null);
   const real = step >= 2 || !src
     ? FALLBACK_COVER
     : (step === 1 ? src : hiResCover(src, size));
   useEffect(() => {
+    retries.current = 0;
     setStep(0);
     const img = imgRef.current;
     if (img && img.complete && img.naturalWidth > 0) setLoaded(true);
@@ -92,10 +95,34 @@ export function CoverImg({ src, alt = '', radius = 12, className = '', style = {
     if (img && img.complete && img.naturalWidth > 0) setLoaded(true);
     else setLoaded(false);
   }, [real]);
+  useEffect(() => {
+    if (step < 2 || !src || /^(data:|blob:)/.test(src)) return;
+    const recover = () => {
+      if (navigator.onLine === false || document.visibilityState === 'hidden') return;
+      retries.current += 1;
+      setLoaded(false);
+      setStep(0);
+      setAttempt(value => value + 1);
+    };
+    const online = () => { retries.current = 0; recover(); };
+    // Mobile tabs may resume without an `online` event. Failed covers retry on
+    // return; persistent failures back off to one attempt per minute. Native
+    // lazy loading still keeps offscreen images from competing with audio.
+    window.addEventListener('online', online);
+    document.addEventListener('visibilitychange', recover);
+    const delay = Math.min(60000, 1500 * 4 ** Math.min(retries.current, 3));
+    const timer = navigator.onLine !== false && document.visibilityState !== 'hidden'
+      ? setTimeout(recover, delay) : null;
+    return () => {
+      if (timer !== null) clearTimeout(timer);
+      window.removeEventListener('online', online);
+      document.removeEventListener('visibilitychange', recover);
+    };
+  }, [step, src, size]);
   return (
     <div style={{ position:'relative', overflow:'hidden', borderRadius:radius, background:'var(--surf-2)', flexShrink:0, ...style }}>
       {!loaded && <div style={{ position:'absolute', inset:0, background:'linear-gradient(110deg, var(--surf-1) 30%, var(--surf-2) 50%, var(--surf-1) 70%)' }} />}
-      <img ref={imgRef} src={real} alt={alt} loading={eager ? 'eager' : 'lazy'} decoding="async" fetchPriority={priority} className={className}
+      <img key={attempt} ref={imgRef} src={real} alt={alt} loading={eager ? 'eager' : 'lazy'} decoding="async" fetchPriority={priority} className={className}
         onLoad={() => setLoaded(true)}
         onError={() => {
           if (step === 0 && src && hiResCover(src, size) !== src) {
