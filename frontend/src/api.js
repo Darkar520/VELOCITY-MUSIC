@@ -321,6 +321,10 @@ export const api = {
       headers: authHeaders(),
     }).catch(() => {});
   },
+  async translateLyrics(lines, signal) {
+    const res = await fetch('/api/lyrics/translate', { method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' }, body: JSON.stringify({ lines }), signal });
+    return jsonOrThrow(res);
+  },
   async lyrics({ artist, title, album, duration, id, sync }, signal) {
     const params = new URLSearchParams({ artist, title });
     if (album) params.set('album', album);

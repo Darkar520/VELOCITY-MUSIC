@@ -7,6 +7,7 @@
 import { api } from './api.js';
 import * as offline from './offline.js';
 import { trackById } from './catalog.js';
+import { translateRecord, matchingTranslation } from './lyricsTranslation.js';
 
 export function isTrackInLibrary(trackId, { favs = [], playlists = [], savedPlaylists = [] } = {}) {
   if (!trackId) return false;
@@ -20,7 +21,7 @@ export async function ensureLyricsOffline(track) {
   if (!track?.id) return { status: 'failed', error: 'missing_track' };
   try {
     const existing = await offline.getLyrics(track.id);
-    if (existing?.synced) return { status: 'synced', record: existing };
+    if (existing?.synced && matchingTranslation(existing)) return { status: 'synced', record: existing };
 
     const base = {
       artist: track.artist,
@@ -30,21 +31,23 @@ export async function ensureLyricsOffline(track) {
       id: track.id,
     };
 
-    let d = await api.lyrics({ ...base, sync: true }).catch(() => null);
+    let d = existing?.synced ? existing : await api.lyrics({ ...base, sync: true }).catch(() => null);
     if (!d?.synced) d = await api.lyrics(base).catch(() => null);
     if (!d || (!d.synced && !d.plain)) {
-      if (existing?.plain) return { status: 'plain', record: existing };
-      return { status: 'failed', error: 'lyrics_not_found' };
+      if (existing?.plain) d = existing;
+      else return { status: 'failed', error: 'lyrics_not_found' };
     }
 
-    const saved = await offline.saveLyrics(track.id, {
+    const lyrics = {
       synced: d.synced || existing?.synced || null,
       plain: d.plain || existing?.plain || null,
       source: d.source || existing?.source || null,
-    });
+    };
+    const translation = await translateRecord(lyrics, api).catch(() => null);
+    const saved = await offline.saveLyrics(track.id, { ...lyrics, translation });
     if (!saved) return { status: 'failed', error: 'storage_error' };
     const record = await offline.getLyrics(track.id);
-    return { status: record?.synced ? 'synced' : 'plain', record };
+    return { status: record?.synced ? 'synced' : 'plain', record, translationPending: !translation };
   } catch (error) {
     return { status: 'failed', error: error?.message || 'lyrics_request_failed' };
   }
@@ -55,7 +58,7 @@ export async function ensureLyricsOffline(track) {
  * @param {string|string[]} trackIds
  */
 const activeSyncs = new Map();
-const BACKFILL_STATE_PREFIX = 'velocity.lyricsBackfill.v2.';
+const BACKFILL_STATE_PREFIX = 'velocity.lyricsBackfill.v3.';
 
 function syncScope(scope) {
   const value = String(scope || (() => {
@@ -110,13 +113,14 @@ export function scheduleLibraryOfflineSync(trackIds, { scope } = {}) {
   writeState(scope, state);
   const queue = [...state.pending];
 
-  const run = Promise.all(Array.from({ length: Math.min(2, queue.length) }, async () => {
+  // Keep one backend translation slot available for the visible player.
+  const run = Promise.all(Array.from({ length: Math.min(1, queue.length) }, async () => {
     while (queue.length) {
       const id = queue.shift();
       const tk = trackById(id);
       const ok = !!tk && await ensureLyricsOffline(tk);
       state.pending.delete(id);
-      if (ok) {
+      if (ok && ['synced', 'plain'].includes(ok.status) && !ok.translationPending) {
         state.completed.add(id);
         delete state.failed[id];
       } else {

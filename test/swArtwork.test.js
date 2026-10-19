@@ -12,14 +12,14 @@ function fixture({ copyFails = false, networkImage = false, consumeImmediately =
     keys: async () => [...stores.keys()],
     delete: async name => stores.delete(name),
     open: async name => {
-      if (consumeImmediately && name === 'velocity-artwork-v1') await new Promise(resolve => setTimeout(resolve, 0));
+      if (consumeImmediately && name === 'velocity-artwork-v2') await new Promise(resolve => setTimeout(resolve, 0));
       if (!stores.has(name)) stores.set(name, new Map());
       const entries = stores.get(name);
       return {
         keys: async () => [...entries.keys()].map(url => new Request(url)),
         match: async request => entries.get(keyOf(request))?.clone(),
         put: async (request, response) => {
-          if (copyFails && name === 'velocity-artwork-v1') throw new Error('quota');
+          if (copyFails && name === 'velocity-artwork-v2') throw new Error('quota');
           entries.set(keyOf(request), response.clone());
         },
       };
@@ -59,7 +59,7 @@ test('network artwork is cached even when the browser consumes the response befo
   const url = f.imageUrl(128).replace('album','fresh');
   const response = await f.fetch(url);
   assert.equal(await response.text(),'fresh artwork');
-  assert.equal(await f.stores.get('velocity-artwork-v1')?.get(url)?.clone().text(),'fresh artwork');
+  assert.equal(await f.stores.get('velocity-artwork-v2')?.get(url)?.clone().text(),'fresh artwork');
 });
 
 test('worker update retains artwork, discards old shell, and leaves other caches alone', async () => {
@@ -67,7 +67,7 @@ test('worker update retains artwork, discards old shell, and leaves other caches
   await f.activate();
   assert.equal(f.stores.has('velocity-v91'), false);
   assert.equal(f.stores.has('unrelated-app'), true);
-  const images = f.stores.get('velocity-artwork-v1');
+  const images = f.stores.get('velocity-artwork-v2');
   assert.equal(images.size, 1);
   assert.equal(await images.get(f.imageUrl(512)).clone().text(), 'album bytes');
   for (const size of [96, 900, 1200]) {
@@ -75,7 +75,23 @@ test('worker update retains artwork, discards old shell, and leaves other caches
     assert.equal(response.status, 200);
     assert.equal(await response.text(), 'album bytes');
   }
-  assert.equal(f.network(), 0);
+  assert.equal(f.network(), 2);
+});
+
+test('a small cached cover does not suppress a larger online request', async () => {
+  const f = fixture({ networkImage: true });
+  await f.activate();
+  assert.equal(await (await f.fetch(f.imageUrl(900))).text(), 'fresh artwork');
+  assert.equal(f.network(), 1);
+  assert.equal(await (await f.fetch(f.imageUrl(900))).text(), 'fresh artwork');
+  assert.equal(f.network(), 1);
+});
+
+test('offline thumbnail fallback never becomes a falsely high-resolution cache entry', async () => {
+  const f = fixture();
+  await f.activate();
+  await f.fetch(f.imageUrl(900));
+  assert.equal(f.stores.get('velocity-artwork-v2').has(f.imageUrl(900)), false);
 });
 
 test('failed artwork migration retains the old cache and can still serve another image size', async () => {

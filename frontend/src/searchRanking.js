@@ -48,6 +48,7 @@ export function scoreTrack(nq, t) {
     }
     if (artist === nq) sc += 40;
     else if (artist && (artist.includes(nq) || nq.includes(artist))) sc += 20;
+    if (artist.split(/\s+/).length >= 2 && (` ${nq} `).includes(` ${artist} `)) sc += 120;
   }
 
   // Versión de álbum / audio oficial vs. video.
@@ -69,13 +70,13 @@ export function scoreTrack(nq, t) {
  * @param {Array<object>} tracks pistas ya normalizadas (normalizeTrack)
  * @returns {Array<object>}
  */
-export function dedupeByRelevance(query, tracks) {
+export function dedupeByRelevance(query, tracks, context = null) {
   if (!Array.isArray(tracks) || !tracks.length) return [];
   const nq = normText(query);
   const best = new Map(); // key -> { track, score, idx }
   tracks.forEach((t, idx) => {
     const key = dedupeKey(t);
-    const score = scoreTrack(nq, t);
+    const score = scoreTrack(nq, t) + (context?.kind === 'album' && t.albumId === context.albumId ? 1000 : context?.kind === 'track' && t.id === context.trackId ? 1000 : 0);
     const cur = best.get(key);
     if (!cur || score > cur.score) best.set(key, { track: t, score, idx });
   });

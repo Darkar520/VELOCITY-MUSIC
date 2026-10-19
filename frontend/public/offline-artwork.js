@@ -2,7 +2,7 @@
 // independently of the disposable HTTP cache. No audio is read or converted.
 (function (root) {
   const MAX_BYTES = 1024 * 1024;
-  const CACHE = 'velocity-artwork-v1';
+  const CACHE = 'velocity-artwork-v2';
   const isImage = response => response?.ok && /^image\//i.test(response.headers.get('content-type') || '');
   // Compare the image resource, not the display size. Keep all non-size
   // parameters and the explicit video fallback id: unrelated artwork must not
@@ -22,7 +22,9 @@
       const id = url.searchParams.get('id');
       url.searchParams.delete('id');
       url.searchParams.sort();
-      return { resource: url.origin + url.pathname + '?' + url.searchParams, id };
+      const dimensions = new URL(new URL(value, root.location?.origin || 'https://velocity.invalid').searchParams.get('u')).pathname.match(/=w(\d+)-h(\d+)|=s(\d+)|(\d+)x(\d+)bb/i);
+      const size = dimensions ? Math.min(Number(dimensions[1] || dimensions[3] || dimensions[4]), Number(dimensions[2] || dimensions[3] || dimensions[5])) : null;
+      return { resource: url.origin + url.pathname + '?' + url.searchParams, id, size };
     } catch { return null; }
   }
   const indexes = new Map();
@@ -34,7 +36,7 @@
       for(const request of requests){
         const key=identity(request.url);if(!key)continue;
         if(!index.has(key.resource))index.set(key.resource,[]);
-        index.get(key.resource).push({url:request.url,id:key.id});
+        index.get(key.resource).push({url:request.url,id:key.id,size:key.size});
       }
       return index;
     });
@@ -45,23 +47,27 @@
     if(!saved||!key)return;
     try{
       const index=await saved.promise,entries=index.get(key.resource)||[];
-      if(!entries.some(entry=>entry.url===value))entries.push({url:value,id:key.id});
+      if(!entries.some(entry=>entry.url===value))entries.push({url:value,id:key.id,size:key.size});
       index.set(key.resource,entries);
     }catch{indexes.delete(name);}
   }
-  async function cached(value) {
+  async function cached(value, { allowSmaller = true } = {}) {
     if (!root.caches) return null;
     const key = identity(value);
     if (!key) return null;
     try {
-      const names = (await root.caches.keys()).filter(name => name === CACHE || /^velocity-v\d+$/.test(name));
+      // v1 may contain thumbnails stored under a larger request URL. Keep it
+      // available offline, but never trust its size labels for online quality.
+      const names = (await root.caches.keys()).filter(name => name === CACHE || (allowSmaller && name === 'velocity-artwork-v1') || /^velocity-v\d+$/.test(name)).sort((a,b) => Number(b === CACHE) - Number(a === CACHE));
       for (const name of names) {
         const cache = await root.caches.open(name);
         const exact = await cache.match(new URL(value, root.location?.origin || 'https://velocity.invalid').href);
         if (isImage(exact)) return exact;
         const index=await cacheIndex(name,cache);
-        for (const candidate of index.get(key.resource)||[]) {
+        const candidates = [...(index.get(key.resource)||[])].sort((a,b)=>(b.size || 0)-(a.size || 0));
+        for (const candidate of candidates) {
           if (candidate.id && key.id && candidate.id !== key.id) continue;
+          if (!allowSmaller && key.size && (!candidate.size || candidate.size < key.size)) continue;
           const response = await cache.match(candidate.url);
           if (isImage(response)) return response;
         }
@@ -94,9 +100,19 @@
     } catch { return null; }
   }
   async function toDataUrl(cover, id) {
-    const url = source(cover, id);
+    let url = source(cover, id);
     if (!url) return null;
     if (/^data:image\//i.test(url)) return url.length <= MAX_BYTES * 1.4 ? url : null;
+    try {
+      const proxy = new URL(url, root.location?.origin || 'https://velocity.invalid');
+      if (proxy.pathname === '/img') {
+        const image = new URL(proxy.searchParams.get('u'));
+        if (/(^|\.)(googleusercontent\.com|ggpht\.com)$/i.test(image.hostname)) image.pathname = image.pathname.replace(/=w(\d+)-h(\d+)/, (_,w,h) => `=w${Math.max(900,Number(w))}-h${Math.max(900,Number(h))}`).replace(/=s(\d+)/, (_,s) => `=s${Math.max(900,Number(s))}`);
+        else if (/(^|\.)mzstatic\.com$/i.test(image.hostname)) image.pathname = image.pathname.replace(/(\d+)x(\d+)bb\.(jpg|png)/i, (_,w,h,ext) => `${Math.max(900,Number(w))}x${Math.max(900,Number(h))}bb.${ext}`);
+        proxy.searchParams.set('u', image.href);
+        url = url.startsWith('/') ? proxy.pathname + proxy.search : proxy.href;
+      }
+    } catch { /* leave unknown artwork resources intact */ }
     if (pending.has(url)) return pending.get(url);
     const task = run(async () => {
       const controller = new AbortController();
@@ -104,10 +120,11 @@
       try {
         return await Promise.race([
           (async () => {
-            const local = await cached(url);
+            const local = await cached(url, { allowSmaller: root.navigator?.onLine === false });
             if (!local && root.navigator?.onLine === false) return null;
-            const response = local || await root.fetch(url, { signal: controller.signal });
-            if (!response.ok || Number(response.headers?.get('content-length')) > MAX_BYTES) return null;
+            let response = local || await root.fetch(url, { signal: controller.signal }).catch(() => cached(url));
+            if (!response?.ok) response = await cached(url) || response;
+            if (!response?.ok || Number(response.headers?.get('content-length')) > MAX_BYTES) return null;
             const blob = await response.blob();
             if (!blob.size || blob.size > MAX_BYTES || !/^image\//i.test(blob.type)) return null;
             const bytes = new Uint8Array(await blob.arrayBuffer());

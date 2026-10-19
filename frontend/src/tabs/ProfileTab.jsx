@@ -207,8 +207,8 @@ export function ProfileTab({
       </SettingCard>
 
       <SettingCard title="Intensidad del brillo" badge={`${glow}%`} accent={T.accent}>
-        <RangeSlider value={glow} min={10} max={100} onChange={setGlow} accent={T.accent} ariaLabel="Brillo" />
-        <div style={{ fontSize:10, color:'var(--txt-2)', marginTop:9, lineHeight:1.5 }}>Controla el resplandor de color detrás de la portada en el reproductor a pantalla completa y en el mini-reproductor. Súbelo para un ambiente más intenso.</div>
+        <RangeSlider value={glow} min={0} max={100} onChange={setGlow} accent={T.accent} ariaLabel="Brillo" />
+        <div style={{ fontSize:10, color:'var(--txt-2)', marginTop:9, lineHeight:1.5 }}>Controla el resplandor de color del reproductor ampliado, incluso en pausa. No modifica el brillo de la pantalla.</div>
       </SettingCard>
 
       <SettingCard title="Reproducción">

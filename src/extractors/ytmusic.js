@@ -11,6 +11,7 @@
  */
 
 import YTMusic from 'ytmusic-api';
+import { verifiedArtistProfile } from '../lib/artistRelations.js';
 
 import { normalizeText } from '../lib/normalize.js';
 import { artistNameMatches } from '../lib/lyricsMatch.js';
@@ -311,7 +312,7 @@ export function createYTMusicVideoSearch() {
 /** Perfil de artista: nombre, portada, canciones más escuchadas y álbumes. */
 export async function getArtistData(artistId) {
   return withClient(async (client) => {
-    const a = await client.getArtist(artistId);
+    const a = await verifiedArtistProfile(client, artistId);
     const artistName = a.name ?? null;
     const key = normalizeText(artistName || '');
 
@@ -551,7 +552,7 @@ function withTimeoutPerCall(promise, ms, fallback) {
  */
 async function getRadioArtistProfile(client, artistId) {
   if (!artistId) return null;
-  const artist = await client.getArtist(artistId);
+  const artist = await verifiedArtistProfile(client, artistId);
   if (!artist) return null;
   return {
     name: artist.name ?? null,
@@ -812,7 +813,7 @@ export function rankSearchSongs(query, songs, artists = []) {
   for (const a of artists) {
     const na = normalizeText(a?.name || '');
     if (!na) continue;
-    if (na === nq || nq === na || artistNameMatches(a.name, query) || artistNameMatches(query, a.name)) {
+    if (na === nq || nq === na || artistNameMatches(a.name, query) || artistNameMatches(query, a.name) || (na.split(' ').length >= 2 && (` ${nq} `).includes(` ${na} `))) {
       primary = a;
       break;
     }
@@ -843,7 +844,7 @@ export async function searchAllYTMusic(query, limit = 20) {
 // Exportada para test: recibe el `client` como parámetro (inyectable) y
 // contiene la lógica pura de combinar songs/álbumes/artistas + el invariante
 // "si las 3 sub-consultas fallan → lanzar".
-export async function searchAllWithClient(client, query, limit) {
+export async function searchAllWithClient(client, query, limit = 20) {
   const [songsR, albumsR, artistsR] = await Promise.allSettled([
     client.searchSongs(query),
     client.searchAlbums(query),
@@ -898,7 +899,15 @@ export async function searchAllWithClient(client, query, limit) {
   }
 
   songs = rankSearchSongs(query, songs, artists).slice(0, limit);
-  return { songs, albums, artists };
+  const direct = { songs, albums, artists };
+  let timer;
+  try {
+    const { enrichSearchContext } = await import('../lib/searchContext.js');
+    return await Promise.race([
+      enrichSearchContext(client, query, direct, { normalize: normalizeText, mapSong: mapYTMusicSong, mapAlbum: mapAlbumDetailed, mapArtist: mapArtistDetailed, loadAlbum: getAlbumDataWithClient }).then(result => ({ ...result, songs: result.songs.slice(0, limit), albums: result.albums.slice(0, 12), artists: result.artists.slice(0, 12) })),
+      new Promise(resolve => { timer = setTimeout(() => resolve(direct), 5000); }),
+    ]);
+  } finally { clearTimeout(timer); }
 }
 
 export function createYTMusicSearchAll() { return (query, limit) => searchAllYTMusic(query, limit); }

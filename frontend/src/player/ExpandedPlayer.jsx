@@ -10,10 +10,13 @@ import { cacheTrack, cacheTracks, trackById, allCached, loadMeta, loadPlayerStat
 import { usePlayerStore } from '../store/playerStore.js';
 import { CoverSwipe } from './CoverSwipe.jsx';
 import { DeviceChip } from './DeviceChip.jsx';
+import { translateRecord } from '../lyricsTranslation.js';
 
 export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next, prev, time: timeProp, dur, seek,
   vol, setVol, shuffle, setShuffle, repeat, setRepeat, faved, toggleFav, T, quality, glow, compact, desktop, onAdd, onMenu, loadingAudio, onQueue, outputs, sinkId, setOutput, lyricOffset = 0, setLyricOffset, audioRef, nextCover, prevCover, inLibrary = false }) {
   const [showLyrics, setShowLyrics] = useState(false);
+  const [translationOn, setTranslationOn] = usePersisted('velocity.lyricsTranslation', false);
+  const [translationState, setTranslationState] = useState({ status: 'idle' });
   const pageVisible = usePageVisible();
   // iOS no permite controlar el volumen por software (solo botones físicos).
   const isIOS = typeof navigator !== 'undefined' && /iphone|ipad|ipod/i.test(navigator.userAgent) && !/crios|fxios/i.test(navigator.userAgent);
@@ -152,7 +155,7 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
           commit(d);
           return;
         }
-        if (!cancel) setLyricState({ status: 'none', synced: [], plain: [] });
+        if (!cancel && !cached?.synced && !cached?.plain) setLyricState({ status: 'none', synced: [], plain: [] });
       } catch {
         if (!cancel) setLyricState({ status: 'none', synced: [], plain: [] });
       }
@@ -160,6 +163,37 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
 
     return () => { cancel = true; };
   }, [open, track?.id, track?.artist, track?.title, inLibrary]);
+
+  const translationKey = JSON.stringify((lyricState.synced.length ? lyricState.synced.map(line => line.text) : lyricState.plain));
+  useEffect(() => {
+    setTranslationState({ status: 'idle' });
+    if (!open || lyricState.status !== 'ok' || !track?.id) return;
+    let cancelled = false;
+    const controller = new AbortController();
+    (async () => {
+      const existing = await offline.getLyrics(track.id).catch(() => null);
+      // Use the displayed text as the authority, including when sync data improved.
+      const record = { plain: lyricState.plain.join('\n'), synced: lyricState.synced.map(line => `[${Math.floor(line.t / 60)}:${(line.t % 60).toFixed(3)}]${line.text}`).join('\n'), translation: existing?.translation };
+      if (cancelled) return;
+      setTranslationState({ status: 'loading' });
+      try {
+        const translation = await translateRecord(record, api, controller.signal);
+        if (cancelled) return;
+        setTranslationState(translation);
+        await offline.saveLyrics(track.id, { translation });
+      } catch {
+        if (!cancelled) setTranslationState({ status: 'unavailable' });
+      }
+    })();
+    return () => { cancelled = true; controller.abort(); };
+  }, [open, track?.id, lyricState.status, translationKey]);
+
+  const translatedLine = index => translationOn && translationState.status === 'ready' && translationState.lines?.[index]
+    ? <div lang={translationState.targetLanguage} style={{ fontSize: desktop ? 15 : 12.5, fontWeight: 500, color: T.accent, lineHeight: 1.55, marginTop: 5 }}>{translationState.lines[index]}</div> : null;
+  const translationToggle = <div style={{ padding: '6px 12px', textAlign: 'center', flexShrink: 0 }}>
+    <button type="button" aria-pressed={translationOn} onClick={() => setTranslationOn(value => !value)} style={{ border: '1px solid var(--line)', borderRadius: 16, padding: '7px 12px', background: 'var(--surf-1)', color: translationOn ? T.accent : 'var(--txt-1)', cursor: 'pointer', fontSize: 12 }}>Traducción {translationOn ? 'activada' : 'desactivada'}</button>
+    {translationOn && <div role="status" style={{ fontSize: 11, color: 'var(--txt-2)', marginTop: 5 }}>{translationState.status === 'ready' ? `Traducción automática · ${translationState.targetLanguage === 'es' ? 'Español' : 'English'}` : translationState.status === 'loading' ? 'Preparando traducción…' : translationState.status === 'unsupported' ? 'Traducción disponible para letras en inglés y español.' : 'Traducción no guardada o temporalmente no disponible.'}</div>}
+  </div>;
 
   const activeLyric = useMemo(() => {
     if (!lyricState.synced || !lyricState.synced.length) return -1;
@@ -182,7 +216,7 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
 
   if (!track) return null;
   const pct = dur > 0 ? (time / dur) * 100 : 0;
-  const glowF = glow / 100;
+  const glowF = Math.max(0, Math.min(1, Number(glow) / 100 || 0));
   // La carátula debe caber por ANCHO y por ALTO. Antes en móvil solo se acotaba
   // por ancho (80vw), así que en apaisado o en pantallas bajas desbordaba y
   // empujaba los controles fuera de la vista. El término 46vh lo impide sin
@@ -191,8 +225,8 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
   const pad = compact ? 'calc(env(safe-area-inset-top, 14px) + 18px) 22px calc(env(safe-area-inset-bottom, 16px) + 26px)' : '52px 26px 36px';
 
   const panelBg = desktop
-    ? `radial-gradient(130% 85% at 50% 0%, ${ambientRgba(.18 + glowF * .25)}, transparent 62%), var(--surf-0)`
-    : `radial-gradient(130% 80% at 50% 0%, ${ambientRgba(.16 + glowF * .28)}, transparent 60%), var(--bg-0)`;
+    ? `radial-gradient(130% 85% at 50% 0%, ${ambientRgba(glowF * .43)}, transparent 62%), var(--surf-0)`
+    : `radial-gradient(130% 80% at 50% 0%, ${ambientRgba(glowF * .44)}, transparent 60%), var(--bg-0)`;
 
   const panelStyle = desktop ? {
     position:'fixed', top:'50%', left:'50%', transform:`translate(-50%,-50%) scale(${open?1:.95})`,
@@ -219,18 +253,18 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
       <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:26 }}>
         <button aria-label="Aleatorio" onClick={() => setShuffle(s=>!s)} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer', opacity: shuffle ? 1 : .4 }}><Icon.Shuf c={shuffle ? T.accent : 'var(--txt-1)'} sz={19} /></button>
         <button aria-label="Anterior" onClick={prev} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer' }}><Icon.Prev c="var(--txt-0)" sz={26} /></button>
-        <button aria-label={playing?'Pausar':'Reproducir'} onClick={togglePlay} className="btn-tap" style={{ width:60, height:60, borderRadius:'50%', background:grad(T), border:'none', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', boxShadow:`0 0 ${20+glowF*26}px ${hex2rgba(T.accent,.55)}, 0 8px 24px #000a` }}>{loadingAudio ? <Spinner c="#04060a" sz={24} /> : (playing ? <Icon.Pause c="#04060a" sz={26} /> : <Icon.Play c="#04060a" sz={26} />)}</button>
+        <button aria-label={playing?'Pausar':'Reproducir'} onClick={togglePlay} className="btn-tap" style={{ width:60, height:60, borderRadius:'50%', background:grad(T), border:'none', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', boxShadow:`0 0 ${glowF*46}px ${hex2rgba(T.accent,glowF*.55)}, 0 8px 24px #000a` }}>{loadingAudio ? <Spinner c="#04060a" sz={24} /> : (playing ? <Icon.Pause c="#04060a" sz={26} /> : <Icon.Play c="#04060a" sz={26} />)}</button>
         <button aria-label="Siguiente" onClick={next} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer' }}><Icon.Next c="var(--txt-0)" sz={26} /></button>
         <button aria-label="Repetir" onClick={() => setRepeat(r=>!r)} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer', opacity: repeat ? 1 : .4 }}><Icon.Rep c={repeat ? T.accent : 'var(--txt-1)'} sz={19} /></button>
       </div>
     );
     return (
-      <div role="dialog" aria-label="Reproductor ampliado" aria-modal="true" aria-hidden={!open} style={{ position:'fixed', inset:0, zIndex:90, opacity: open?1:0, pointerEvents: open?'auto':'none', transition:'opacity .38s ease', display:'flex', flexDirection:'column', background:`radial-gradient(120% 90% at 50% -10%, ${ambientRgba(.28 + glowF*.22)}, transparent 58%), var(--bg-0)`, fontFamily:'Inter,sans-serif' }}>
+      <div role="dialog" aria-label="Reproductor ampliado" aria-modal="true" aria-hidden={!open} style={{ position:'fixed', inset:0, zIndex:90, opacity: open?1:0, pointerEvents: open?'auto':'none', transition:'opacity .38s ease', display:'flex', flexDirection:'column', background:`radial-gradient(120% 90% at 50% -10%, ${ambientRgba(glowF * .5)}, transparent 58%), var(--bg-0)`, fontFamily:'Inter,sans-serif' }}>
         {/* Halo ambiental único, fuera del grid de portada/letra: nunca adquiere
             los límites rectangulares de una columna. Alfas y opacidad por encima
             del umbral de percepción también EN PAUSA (regresión: con .18*.3 el
             halo era invisible y el fondo se veía negro plano). */}
-        <div aria-hidden style={{ position:'absolute', top:'10%', left:'6%', width:'min(52vw, 640px)', height:'min(66vh, 640px)', borderRadius:'50%', background:`radial-gradient(ellipse, ${ambientRgba(.30 + glowF*.12)} 0%, ${ambientRgba(.10 + glowF*.05)} 44%, transparent 72%)`, filter:'blur(72px)', opacity: playing ? .85 : .6, pointerEvents:'none', zIndex:0 }} />
+        <div aria-hidden style={{ position:'absolute', top:'10%', left:'6%', width:'min(52vw, 640px)', height:'min(66vh, 640px)', borderRadius:'50%', background:`radial-gradient(ellipse, ${ambientRgba(glowF * .6)} 0%, ${ambientRgba(glowF * .25)} 44%, transparent 72%)`, filter:'blur(72px)', opacity: playing ? .85 : .6, pointerEvents:'none', zIndex:0 }} />
         {/* Barra superior */}
         <div style={{ position:'relative', zIndex:1, display:'flex', alignItems:'center', justifyContent:'space-between', padding:'20px 32px', flexShrink:0 }}>
           <button aria-label="Minimizar" onClick={onClose} className="btn-tap glass" style={{ background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:'50%', width:42, height:42, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}><Icon.ChevD c="var(--txt-1)" sz={20} /></button>
@@ -265,17 +299,18 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
                 </div>
               )}
             </div>
+            {translationToggle}
             <div ref={lyricBoxRef} style={{ flex:1, overflowY:'auto', padding:'6px 28px 28px' }}>
               {lyricState.status === 'loading' && <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:10, paddingTop:'30%', color:'var(--txt-2)' }}><Spinner c={T.accent} sz={22} /><span style={{ fontSize:13 }}>Buscando letra…</span></div>}
               {lyricState.status === 'none' && <div style={{ fontSize:14, color:'var(--txt-2)', paddingTop:'34%', textAlign:'center' }}>Letra no disponible para esta pista.</div>}
               {lyricState.status === 'ok' && lyricState.synced.length > 0 && (<>
                 {lyricState.synced.map((l, i) => (
-                  <div key={i} data-li={i} onClick={() => seek(l.t)} style={{ fontSize: i===activeLyric ? 26 : 20, fontWeight: i===activeLyric ? 800 : 700, color: i===activeLyric ? 'var(--txt-0)' : (i < activeLyric ? 'var(--txt-2)' : 'var(--txt-1)'), margin:'14px 0', lineHeight:1.35, transition:'all .25s ease', cursor:'pointer', opacity: i===activeLyric ? 1 : .55 }}>{l.text || '♪'}</div>
+                  <div key={i} data-li={i} onClick={() => seek(l.t)} style={{ fontSize: i===activeLyric ? 26 : 20, fontWeight: i===activeLyric ? 800 : 700, color: i===activeLyric ? 'var(--txt-0)' : (i < activeLyric ? 'var(--txt-2)' : 'var(--txt-1)'), margin:'14px 0', lineHeight:1.35, transition:'all .25s ease', cursor:'pointer', opacity: i===activeLyric ? 1 : .55 }}>{l.text || '♪'}{translatedLine(i)}</div>
                 ))}
                 <div style={{ fontSize:10, color:'var(--txt-3)', marginTop:14 }}>Letra sincronizada · {lyricState.source}</div>
               </>)}
               {lyricState.status === 'ok' && lyricState.synced.length === 0 && (<>
-                {lyricState.plain.map((line, i) => <div key={i} style={{ fontSize:19, fontWeight:700, color:'var(--txt-1)', margin:'11px 0', lineHeight:1.5 }}>{line || '♪'}</div>)}
+                {lyricState.plain.map((line, i) => <div key={i} style={{ fontSize:19, fontWeight:700, color:'var(--txt-1)', margin:'11px 0', lineHeight:1.5 }}>{line || '♪'}{translatedLine(i)}</div>)}
                 <div style={{ fontSize:10, color:'var(--txt-3)', marginTop:14 }}>Letra · {lyricState.source}</div>
               </>)}
             </div>
@@ -340,6 +375,7 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
           ))}
         </div>
 
+        {showLyrics && translationToggle}
         {!showLyrics ? (
           <CoverSwipe next={next} prev={prev} playing={playing} glowF={glowF} ambientRgba={ambientRgba} art={art} track={track} loadingAudio={loadingAudio} nextCover={nextCover} prevCover={prevCover} />
         ) : (
@@ -348,7 +384,7 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
             {lyricState.status === 'none' && <div style={{ fontSize:13, color:'var(--txt-2)', paddingTop:'30%' }}>Letra no disponible para esta pista.</div>}
             {lyricState.status === 'ok' && lyricState.synced.length > 0 && (<>
               {lyricState.synced.map((l, i) => (
-                <div key={i} data-li={i} style={{ fontSize: i===activeLyric ? 17 : 14.5, fontWeight: i===activeLyric ? 800 : 600, color: i===activeLyric ? T.accent : (i < activeLyric ? 'var(--txt-2)' : 'var(--txt-1)'), margin:'9px 0', lineHeight:1.4, transition:'all .25s ease' }}>{l.text || '♪'}</div>
+                <div key={i} data-li={i} style={{ fontSize: i===activeLyric ? 17 : 14.5, fontWeight: i===activeLyric ? 800 : 600, color: i===activeLyric ? T.accent : (i < activeLyric ? 'var(--txt-2)' : 'var(--txt-1)'), margin:'9px 0', lineHeight:1.4, transition:'all .25s ease' }}>{l.text || '♪'}{translatedLine(i)}</div>
               ))}
               {setLyricOffset && (
                 <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:12, marginTop:16 }}>
@@ -360,7 +396,7 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
               <div style={{ fontSize:9.5, color:'var(--txt-3)', marginTop:8 }}>Letra sincronizada · {lyricState.source}</div>
             </>)}
             {lyricState.status === 'ok' && lyricState.synced.length === 0 && (<>
-              {lyricState.plain.map((line, i) => <div key={i} style={{ fontSize:14.5, fontWeight:600, color:'var(--txt-0)', margin:'7px 0', lineHeight:1.5 }}>{line || '♪'}</div>)}
+              {lyricState.plain.map((line, i) => <div key={i} style={{ fontSize:14.5, fontWeight:600, color:'var(--txt-0)', margin:'7px 0', lineHeight:1.5 }}>{line || '♪'}{translatedLine(i)}</div>)}
               <div style={{ fontSize:9.5, color:'var(--txt-3)', marginTop:14 }}>Letra · {lyricState.source}</div>
             </>)}
           </div>
@@ -392,7 +428,7 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:18, flexShrink:0 }}>
           <button aria-label="Aleatorio" onClick={() => setShuffle(s=>!s)} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer', opacity: shuffle ? 1 : .3 }}><Icon.Shuf c={shuffle ? T.accent : 'var(--txt-1)'} sz={18} /></button>
           <button aria-label="Anterior" onClick={prev} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer' }}><Icon.Prev c="var(--txt-0)" sz={24} /></button>
-          <button aria-label={playing?'Pausar':'Reproducir'} onClick={togglePlay} className="btn-tap" style={{ width:64, height:64, borderRadius:'50%', background:grad(T), border:'none', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', boxShadow:`0 0 ${20+glowF*26}px ${hex2rgba(T.accent,.55)}, 0 8px 24px #000a` }}>{loadingAudio ? <Spinner c="#04060a" sz={26} /> : (playing ? <Icon.Pause c="#04060a" sz={26} /> : <Icon.Play c="#04060a" sz={26} />)}</button>
+          <button aria-label={playing?'Pausar':'Reproducir'} onClick={togglePlay} className="btn-tap" style={{ width:64, height:64, borderRadius:'50%', background:grad(T), border:'none', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', boxShadow:`0 0 ${glowF*46}px ${hex2rgba(T.accent,glowF*.55)}, 0 8px 24px #000a` }}>{loadingAudio ? <Spinner c="#04060a" sz={26} /> : (playing ? <Icon.Pause c="#04060a" sz={26} /> : <Icon.Play c="#04060a" sz={26} />)}</button>
           <button aria-label="Siguiente" onClick={next} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer' }}><Icon.Next c="var(--txt-0)" sz={24} /></button>
           <button aria-label="Repetir" onClick={() => setRepeat(r=>!r)} className="btn-tap" style={{ background:'none', border:'none', cursor:'pointer', opacity: repeat ? 1 : .3 }}><Icon.Rep c={repeat ? T.accent : 'var(--txt-1)'} sz={18} /></button>
         </div>

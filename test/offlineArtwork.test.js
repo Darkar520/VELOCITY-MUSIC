@@ -4,6 +4,16 @@ import '../frontend/public/offline-artwork.js';
 const art = globalThis.VelocityOfflineArtwork;
 const image = 'data:image/png;base64,aGVsbG8=';
 
+test('new offline artwork requests at least 900 pixels without recompressing image bytes', async () => {
+  const previousFetch = globalThis.fetch;
+  let requested;
+  try {
+    globalThis.fetch = async url => { requested = url; return new Response('hello', { headers: { 'content-type': 'image/png' } }); };
+    assert.equal(await art.toDataUrl('https://lh3.googleusercontent.com/quality=w128-h128-l90-rj', 'quality'), image);
+    assert.match(new URL(requested, 'https://velocity.invalid').searchParams.get('u'), /=w900-h900/);
+  } finally { globalThis.fetch = previousFetch; }
+});
+
 test('offline artwork preserves proxy ids, wraps external URLs once and rejects non-image schemes', () => {
   assert.equal(art.source('/img?u=https%3A%2F%2Fcdn.test%2Fa&id=track', 'track'), '/img?u=https%3A%2F%2Fcdn.test%2Fa&id=track');
   const url = new URL(art.source('https://cdn.test/a', 'track'), 'https://velocity.test');
@@ -58,7 +68,7 @@ test('a partial replacement preserves already saved artwork and known text witho
   } finally { globalThis.fetch = fetcher; }
 });
 
-test('a list-sized cached cover repairs original-size metadata without network access', async () => {
+test('a network failure still repairs original-size metadata using cached artwork', async () => {
   const fetcher = globalThis.fetch, cacheStorage = globalThis.caches;
   let network = 0;
   const original = '/img?u=' + encodeURIComponent('https://lh3.googleusercontent.com/album=w1200-h1200-l90-rj') + '&id=saved';
@@ -72,7 +82,7 @@ test('a list-sized cached cover repairs original-size metadata without network a
     const meta = await art.prepare({ id: 'saved', cover: original });
     assert.equal(meta.cover, image);
     assert.equal(meta.artworkStatus, 'ready');
-    assert.equal(network, 0);
+    assert.equal(network, 1);
   } finally { globalThis.fetch = fetcher; globalThis.caches = cacheStorage; }
 });
 

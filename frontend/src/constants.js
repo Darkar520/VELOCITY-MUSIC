@@ -45,7 +45,7 @@ export const CSS = `
   *, *::before, *::after { box-sizing: border-box; }
   @keyframes fadeUp      { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:translateY(0); } }
   @keyframes eqBar       { from { transform:scaleY(.16); } to { transform:scaleY(1); } }
-  @keyframes breathe     { 0%,100%{ opacity:.26; transform:translate(-50%,-50%) scale(.9); } 50%{ opacity:.6; transform:translate(-50%,-50%) scale(1.12); } }
+  @keyframes breathe     { 0%,100%{ transform:translate(-50%,-50%) scale(.9); } 50%{ transform:translate(-50%,-50%) scale(1.12); } }
   @keyframes spinSlow    { to { transform:rotate(360deg); } }
   @keyframes spin360     { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }
   @keyframes coverInLeft  { from { opacity:.4; transform:scale(.94) translateX(60px);  } to { opacity:1; transform:scale(1) translateX(0); } }

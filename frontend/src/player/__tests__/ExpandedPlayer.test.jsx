@@ -15,6 +15,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 vi.mock('../../api.js', () => ({
   api: {
     lyrics: vi.fn(async () => ({ synced: null, plain: '' })),
+    translateLyrics: vi.fn(),
     streamUrl: () => 'mock://stream',
   },
 }));
@@ -25,6 +26,8 @@ vi.mock('../../offline.js', () => ({
 }));
 
 import { ExpandedPlayer } from '../ExpandedPlayer.jsx';
+import { api } from '../../api.js';
+import * as offline from '../../offline.js';
 import { T, makeTrack, resetStores, seedCatalog } from '../../__tests__/uiFixtures.js';
 
 function setup(over = {}) {
@@ -48,8 +51,39 @@ function setup(over = {}) {
 }
 
 describe('ExpandedPlayer', () => {
-  beforeEach(resetStores);
+  beforeEach(() => { resetStores(); localStorage.removeItem('velocity.lyricsTranslation'); Element.prototype.scrollTo = vi.fn(); });
   afterEach(() => { cleanup(); vi.clearAllMocks(); });
+
+  it('translation mode renders each translation under its synchronized original and saves it', async () => {
+    api.lyrics.mockResolvedValueOnce({ synced: '[00:01.00]A first original sentence\n[00:02.00]A second original sentence', source: 'test' });
+    api.translateLyrics.mockResolvedValueOnce({ status: 'ready', targetLanguage: 'es', lines: ['Primera frase traducida', 'Segunda frase traducida'] });
+    setup();
+    fireEvent.click(screen.getByRole('button', { name: 'Traducción desactivada' }));
+    const translated = await screen.findByText('Primera frase traducida');
+    expect(translated.parentElement.textContent).toContain('A first original sentence');
+    expect(translated.getAttribute('lang')).toBe('es');
+    expect(offline.saveLyrics).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ translation: expect.objectContaining({ status: 'ready' }) }));
+  });
+
+  it('a stored aligned translation renders without a translation network request', async () => {
+    const lines = ['First original', 'Second original', 'Third original', 'Fourth original'];
+    const record = { synced: lines.map((line,i) => `[00:0${i+1}.00]${line}`).join('\n'), translation: { status: 'ready', sourceText: JSON.stringify(lines), targetLanguage: 'es', lines: ['Primera', 'Segunda', 'Tercera', 'Cuarta'] } };
+    offline.getLyrics.mockResolvedValue(record);
+    try {
+      setup();
+      const toggle = screen.getByRole('button', { name: /Traducción/ });
+      if (toggle.getAttribute('aria-pressed') !== 'true') fireEvent.click(toggle);
+      expect(await screen.findByText('Primera')).toBeTruthy();
+      expect(api.translateLyrics).not.toHaveBeenCalled();
+    } finally { offline.getLyrics.mockResolvedValue(null); }
+  });
+
+  it('paused mobile glow responds to both zero and maximum intensity', () => {
+    const { container, rerender, props } = setup({ desktop: false, glow: 0, playing: false });
+    expect(container.querySelector('.breathe').style.opacity).toBe('0');
+    rerender(<ExpandedPlayer {...props} glow={100} />);
+    expect(Number(container.querySelector('.breathe').style.opacity)).toBeGreaterThan(.7);
+  });
 
   it('sin pista no renderiza nada (no crashea)', () => {
     const { container } = setup({ track: null });

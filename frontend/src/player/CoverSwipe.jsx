@@ -54,7 +54,7 @@ export function CoverSwipe({ next, prev, playing, glowF, ambientRgba, art, track
   return (
     <div style={{ position:'relative', display:'flex', justifyContent:'center', alignItems:'center', marginBottom:22, flexShrink:0, touchAction:'pan-y' }}>
       {/* Halo circular ambiental; en desktop se pinta en el root para que el grid no lo recorte. */}
-      {!desktop && <div aria-hidden className="breathe" style={{ position:'absolute', width:`calc(${art} * 1.5)`, height:`calc(${art} * 1.5)`, top:'50%', left:'50%', borderRadius:'50%', background:`radial-gradient(circle, ${ambientRgba(.85)}, ${ambientRgba(.4)} 42%, transparent 70%)`, filter:'blur(60px)', opacity: playing ? .45 + glowF*.55 : .22, transition:'opacity .6s ease, background 1.4s ease', pointerEvents:'none', zIndex:0 }} />}
+      {!desktop && <div aria-hidden className="breathe" style={{ position:'absolute', width:`calc(${art} * 1.5)`, height:`calc(${art} * 1.5)`, top:'50%', left:'50%', borderRadius:'50%', background:`radial-gradient(circle, ${ambientRgba(.85)}, ${ambientRgba(.4)} 42%, transparent 70%)`, filter:'blur(60px)', opacity: glowF * (playing ? 1 : .72), transition:'opacity .6s ease, background 1.4s ease', pointerEvents:'none', zIndex:0 }} />}
       {/* Carrusel: portada actual + vecinas para el peek al deslizar */}
       <div
         ref={boxRef}

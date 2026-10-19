@@ -11,6 +11,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+test('an explicit multiword artist in a title query ranks its recording above covers', async () => {
+  const { dedupeByRelevance } = await import('../frontend/src/searchRanking.js');
+  const result = dedupeByRelevance('Another Brick in the Wall Pink Floyd', [
+    { id: 'cover', title: 'Another Brick in the Wall', artist: 'The Chill-Out Orchestra', albumId: 'cover-album', cover: 'official.jpg' },
+    { id: 'original', title: 'Another Brick in the Wall, Pt. 2', artist: 'Pink Floyd', albumId: 'wall', cover: 'official.jpg' },
+  ]);
+  assert.equal(result[0].id, 'original');
+});
+
 const { dedupeByRelevance, scoreTrack } = await import('../frontend/src/searchRanking.js');
 const { dedupeByTitle } = await import('../frontend/src/helpers.js');
 
