@@ -24,7 +24,14 @@ cede el foco y guarda 145 bajo el ID nuevo. A34 solo protegía eventos nativos.
 No se ha capturado una traza del Samsung que demuestre cuál de estas carreras
 ocurrió en cada episodio del usuario.
 
-## Implementación 3.26 / worker v97
+## Implementación 3.28 / worker v99
+
+Después de publicar el feed 3.27 se revalidaron los casos 4/5 contra su hook
+real: ambos emitieron cuatro PIPELINE_DEAD con posición 145 durante seis
+segundos simulados. Los mismos controles pasan en esta rama. Esto confirma
+la carrera también durante preparación automática de una pista; sigue sin
+identificar qué episodio concreto ocurrió en el Samsung. La rama se actualizó
+sobre main sin retirar los cambios del feed.
 
 - `syncAudioElement` lee el store vigente al ejecutar. No monta fuentes ni
   infiere ready/intent desde el render; sigue usando selectPlaySync y runner.
@@ -37,6 +44,14 @@ ocurrió en cada episodio del usuario.
 - No se borran ni se descargan de nuevo archivos. No se toca backend/proveedor.
 
 ## Pruebas
+
+Validación después de actualizar sobre el feed 3.27: verify, compilación y
+lint correctos; 579 pruebas frontend aprobadas. El harness añadió tres finales
+automáticos en primer plano y tres con visibilidad oculta simulada. Los seis
+pasaron: pista esperada, intent=play, srcStatus=ready, focus=own, blob local,
+readyState=4, reloj avanzando y ningún MediaError. Se buscó cerca del final para
+acelerar la prueba; no se esperaron seis canciones completas. Evidencia:
+test-results/audio-automatic-328.json en el checkout principal.
 
 - Seis regresiones fallan antes y pasan después; dos controles positivos
   evitan convertir sync en un no-op general o reclamar foco tras yield.
@@ -63,4 +78,4 @@ abrir el HTML, pulsar «Probar ocho avances». No requiere cuenta ni modifica
 datos de producción; utiliza un origen de prueba y grabaciones sintéticas.
 
 Pendiente: confirmar cinco avances desde la notificación física de
-Samsung/Brave después de que Perfil muestre 3.26.
+Samsung/Brave después de que Perfil muestre 3.28.
