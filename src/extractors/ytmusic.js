@@ -20,6 +20,7 @@ import {
   assembleRadio,
   classifyCandidate,
   buildNeighborArtistSet,
+  requestedRadioLength,
 } from '../lib/radioCohesion.js';
 
 let _client = null;
@@ -710,9 +711,7 @@ async function expandRounds(client, seedProfile, videoId, config) {
  * el retorno (array de TrackMetadata). (Req 1.3, 6.1, 8.1, 8.4)
  */
 export async function getRadio(videoId, limit = RADIO_CONFIG.TARGET_QUEUE_LENGTH) {
-  const requestedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0
-    ? Math.min(RADIO_CONFIG.TARGET_QUEUE_LENGTH, Math.floor(Number(limit)))
-    : RADIO_CONFIG.TARGET_QUEUE_LENGTH;
+  const requestedLimit = requestedRadioLength(limit);
   return withClient(async (client) => {
     const config = RADIO_CONFIG;
     const seedProfile = await buildSeedProfile(client, videoId, config);

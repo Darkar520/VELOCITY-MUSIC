@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { api, isAuthed, setOnUnauthorized } from './api.js';
+import { api, isAuthed, setOnUnauthorized, getToken } from './api.js';
+import {cacheIdentity} from './favoriteOutbox.js';
+import {rememberSearchSeed} from './feed/seededMix.js';
 import * as offline from './offline.js';
 
 import { CSS, THEMES, BASE_VARS } from './constants.js';
@@ -693,7 +695,7 @@ export default function App() {
   } = useLibraryActions({ authed, email, showToast });
 
   // Búsquedas recientes (UI local, no libraryStore)
-  const addSearch = (term) => setRecentSearches(s => [term, ...s.filter(x => x.toLowerCase() !== term.toLowerCase())].slice(0, 8));
+  const addSearch = (term, seed) => { rememberSearchSeed(term,seed,cacheIdentity(email||'',getToken())); setRecentSearches(s => [term, ...s.filter(x => x.toLowerCase() !== term.toLowerCase())].slice(0, 8)); };
   const removeSearch = (term) => setRecentSearches(s => s.filter(x => x !== term));
 
   // ── Navegación del catálogo (artista/álbum/mezcla), AI DJ, compartir ──
@@ -705,7 +707,7 @@ export default function App() {
     setExpanded, setView, setOpenPlaylist, setTab,
     setDetailData, setDetailLoading, setCatVer,
     showToast, play,
-    recent, favs, downloaded,
+    recent, favs, onboardPrefs,
     playingFrom, playlists, savedPlaylists,
   });
 

@@ -31,6 +31,12 @@ export const RADIO_CONFIG = Object.freeze({
   RELEVANCE_TIE_RATIO: 0.10,      // Req 2.4
 });
 
+export function requestedRadioLength(limit) {
+  return Number.isFinite(Number(limit)) && Number(limit) > 0
+    ? Math.min(100, Math.max(1, Math.floor(Number(limit))))
+    : RADIO_CONFIG.TARGET_QUEUE_LENGTH;
+}
+
 // ───────────────────────────────────────────────────────────────
 // Primitivas de saneamiento de lista (puras)
 // ───────────────────────────────────────────────────────────────

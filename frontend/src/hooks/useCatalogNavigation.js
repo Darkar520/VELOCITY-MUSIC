@@ -17,7 +17,9 @@
  */
 import { api } from '../api.js';
 import * as offline from '../offline.js';
-import { dedupeByTitle, capPerArtist } from '../helpers.js';
+import { dedupeByTitle } from '../helpers.js';
+import {buildSeedMix, selectSearchSeed} from '../feed/seededMix.js';
+import {starterQueries, artistIdentity} from '../feed/tasteProfile.js';
 import { cacheTrack, trackById, allCached, saveMeta, normalizeTrack } from '../catalog.js';
 
 // El enlace compartido debe salir del mismo origen que sirve la aplicación.
@@ -86,7 +88,7 @@ export function useCatalogNavigation({
   setExpanded, setView, setOpenPlaylist, setTab,
   setDetailData, setDetailLoading, setCatVer,
   showToast, play,
-  recent, favs, downloaded,
+  recent, favs, onboardPrefs,
   playingFrom, playlists, savedPlaylists,
 }) {
   const goMix = (mix) => {
@@ -103,16 +105,24 @@ export function useCatalogNavigation({
     const score = {};
     recent.forEach((id, i) => { score[id] = (score[id] || 0) + Math.max(1, 12 - i * 0.4); });
     favs.forEach(id => { score[id] = (score[id] || 0) + 6; });
-    [...downloaded].forEach(id => { score[id] = (score[id] || 0) + 4; });
     const ranked = Object.keys(score).map(trackById).filter(Boolean).sort((a, b) => score[b.id] - score[a.id]);
-    const top = ranked.slice(0, 3);
+    let seed = ranked[0];
     let pool = [];
     try {
-      if (top.length) { const rels = await Promise.all(top.map(s => api.radio(s.id).catch(() => []))); pool = capPerArtist(dedupeByTitle([...top, ...rels.flat().map(normalizeTrack)]), 2).filter(t => t.id); }
-      else { const raw = await api.search('top hits 2024'); pool = dedupeByTitle(raw.map(normalizeTrack)).filter(t => t.id); }
+      if(!seed){
+        const query=starterQueries(onboardPrefs)[0];
+        if(query){const candidates=(await api.search(query.q)).map(normalizeTrack).filter(t=>artistIdentity(t.artist)===artistIdentity(query.artist||query.q));seed=selectSearchSeed(query.q,candidates,{prefs:onboardPrefs});}
+      }
+      if(seed){
+        const normalize=raw=>(raw||[]).map(normalizeTrack);
+        const result=await buildSeedMix(seed,{pool:ranked,prefs:onboardPrefs,
+          radio:(...args)=>api.radio(...args).then(normalize),
+          artist:(...args)=>api.artist(...args).then(d=>({...d,topSongs:normalize(d.topSongs)})),
+          search:(...args)=>api.search(...args).then(normalize)});
+        pool=result.tracks;
+      }
     } catch {}
-    for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
-    if (!pool.length) { showToast('No se pudo iniciar el AI DJ'); return; }
+    if (pool.length!==50) { showToast('No se pudo reunir una estación de 50 canciones relacionadas. Revisa tus gustos e inténtalo de nuevo.'); return; }
     pool.forEach(cacheTrack);
     play(pool[0], pool.map(t => t.id), { radio: true });
     showToast('AI DJ sonando tu estacion personalizada');
