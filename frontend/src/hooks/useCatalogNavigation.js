@@ -108,20 +108,22 @@ export function useCatalogNavigation({
     const ranked = Object.keys(score).map(trackById).filter(Boolean).sort((a, b) => score[b.id] - score[a.id]);
     let seed = ranked[0];
     let pool = [];
+    const controller = new AbortController();
+    const timer = setTimeout(()=>controller.abort(),45000);
     try {
       if(!seed){
         const query=starterQueries(onboardPrefs)[0];
-        if(query){const candidates=(await api.search(query.q)).map(normalizeTrack).filter(t=>artistIdentity(t.artist)===artistIdentity(query.artist||query.q));seed=selectSearchSeed(query.q,candidates,{prefs:onboardPrefs});}
+        if(query){const candidates=(await api.search(query.q,controller.signal)).map(normalizeTrack).filter(t=>artistIdentity(t.artist)===artistIdentity(query.artist||query.q));seed=selectSearchSeed(query.q,candidates,{prefs:onboardPrefs});}
       }
       if(seed){
         const normalize=raw=>(raw||[]).map(normalizeTrack);
-        const result=await buildSeedMix(seed,{pool:ranked,prefs:onboardPrefs,
+        const result=await buildSeedMix(seed,{pool:ranked,prefs:onboardPrefs,signal:controller.signal,
           radio:(...args)=>api.radio(...args).then(normalize),
           artist:(...args)=>api.artist(...args).then(d=>({...d,topSongs:normalize(d.topSongs)})),
           search:(...args)=>api.search(...args).then(normalize)});
         pool=result.tracks;
       }
-    } catch {}
+    } catch {} finally { clearTimeout(timer); }
     if (pool.length!==50) { showToast('No se pudo reunir una estación de 50 canciones relacionadas. Revisa tus gustos e inténtalo de nuevo.'); return; }
     pool.forEach(cacheTrack);
     play(pool[0], pool.map(t => t.id), { radio: true });
