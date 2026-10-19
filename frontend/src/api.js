@@ -227,20 +227,37 @@ export const api = {
       if (quality) q.set('quality', quality);
       if (stream) q.set('stream', stream);
       if (forceRefresh) q.set('refresh', '1');
-      let response;
-      try {
-        response = await fetch(`/api/playback/prepare?${q.toString()}`, {
-          headers: authHeaders(),
-          signal: prepareSignal,
-        });
-      } catch (err) {
-        if (prepareSignal.aborted) throw playbackPrepareAbortError();
-        throw Object.assign(
-          new Error('No se pudo contactar con el servidor para preparar esta pista. Revisa la conexión e inténtalo de nuevo.'),
-          { code: 'PLAYBACK_NETWORK_ERROR', retryable: true },
-        );
+      let data;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        let response;
+        try {
+          response = await fetch(`/api/playback/prepare?${q.toString()}`, {
+            headers: { ...authHeaders(), Accept: 'application/json' },
+            cache: 'no-store',
+            signal: prepareSignal,
+          });
+        } catch (err) {
+          if (prepareSignal.aborted) throw playbackPrepareAbortError();
+          throw Object.assign(
+            new Error('No se pudo contactar con el servidor para preparar esta pista. Revisa la conexión e inténtalo de nuevo.'),
+            { code: 'PLAYBACK_NETWORK_ERROR', retryable: true },
+          );
+        }
+        try {
+          data = await jsonOrThrow(response, prepareSignal);
+          break;
+        } catch (err) {
+          if (!err.nonJson) throw err;
+          // Retry only malformed gateway responses, within the SAME 20s
+          // deadline. Typed resolver/auth failures retain their original cause.
+          const transient = response.status === 200 || response.status >= 500;
+          if (attempt === 0 && transient) continue;
+          throw Object.assign(new Error(`El servidor devolvió una respuesta inválida al preparar el audio (HTTP ${response.status}). Inténtalo de nuevo.`), {
+            code: 'PLAYBACK_INVALID_RESPONSE', status: response.status,
+            nonJson: true, retryable: transient,
+          });
+        }
       }
-      const data = await jsonOrThrow(response, prepareSignal);
       // Una respuesta tardía tras cancelación no debe poblar la caché de firmas.
       if (prepareSignal.aborted) throw playbackPrepareAbortError();
       const url = this.buildSignedStreamUrl({
@@ -256,8 +273,7 @@ export const api = {
       return url;
     }, signal);
 
-    // Cada preparación es una sola operación con plazo en backend. Reintentar
-    // aquí ocultaba la causa y podía duplicar hasta 12 s de espera por pista.
+    // Una sola operación con plazo total; no repetir errores del resolver.
     const p = signOnce();
 
     if (!signal) this._streamSignInflight.set(inflightKey, p);

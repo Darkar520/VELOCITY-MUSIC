@@ -5,13 +5,13 @@
  * Sin ese reset, un fallo previo deja el fallback pegado y todas las pistas
  * siguientes muestran el placeholder aunque tengan portada válida.
  */
-import { render, cleanup, fireEvent } from '@testing-library/react';
-import { describe, it, expect, afterEach } from 'vitest';
+import { render, cleanup, fireEvent, act } from '@testing-library/react';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { CoverImg } from '../components.jsx';
 import { FALLBACK_COVER } from '../constants.js';
 
 describe('CoverImg', () => {
-  afterEach(cleanup);
+  afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
   it('sin src usa directamente el fallback', () => {
     const { container } = render(<CoverImg src="" alt="" />);
@@ -55,5 +55,48 @@ describe('CoverImg', () => {
     expect(img.style.opacity).toBe('0');
     fireEvent.load(img);
     expect(img.style.opacity).toBe('1');
+  });
+
+  it('retries the same cover after connectivity returns instead of keeping a permanent fallback',()=>{
+    const src='https://cdn.test/temporary.jpg';
+    const {container}=render(<CoverImg src={src}/>);
+    fireEvent.error(container.querySelector('img'));
+    expect(container.querySelector('img').getAttribute('src')).toBe(FALLBACK_COVER);
+    fireEvent(window,new Event('online'));
+    expect(container.querySelector('img').getAttribute('src')).toBe(src);
+  });
+
+  it('automatically retries with backoff and cancels pending recovery on unmount', () => {
+    vi.useFakeTimers();
+    const src = 'https://cdn.test/temporary.jpg';
+    const { container, unmount } = render(<CoverImg src={src} />);
+    const img = () => container.querySelector('img');
+    fireEvent.error(img());
+    act(() => vi.advanceTimersByTime(1500));
+    expect(img().getAttribute('src')).toBe(src);
+    fireEvent.error(img());
+    act(() => vi.advanceTimersByTime(6000));
+    expect(img().getAttribute('src')).toBe(src);
+    fireEvent.error(img());
+    act(() => vi.advanceTimersByTime(23999));
+    expect(img().getAttribute('src')).toBe(FALLBACK_COVER);
+    act(() => vi.advanceTimersByTime(1));
+    expect(img().getAttribute('src')).toBe(src);
+    fireEvent.error(img());
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('suspends recovery while hidden and retries when returning to the app', () => {
+    vi.useFakeTimers();
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    const { container } = render(<CoverImg src="https://cdn.test/resume.jpg" />);
+    fireEvent.error(container.querySelector('img'));
+    expect(vi.getTimerCount()).toBe(0);
+    fireEvent(window, new Event('online'));
+    expect(container.querySelector('img').getAttribute('src')).toBe(FALLBACK_COVER);
+    visibility.mockReturnValue('visible');
+    fireEvent(document, new Event('visibilitychange'));
+    expect(container.querySelector('img').getAttribute('src')).toContain('resume.jpg');
   });
 });
