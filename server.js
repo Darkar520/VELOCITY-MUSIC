@@ -329,6 +329,7 @@ export async function bootstrap() {
           songs: [...(yt.songs || []), ...sc],
           albums: yt.albums || [],
           artists: yt.artists || [],
+          ...(yt.context ? { context: yt.context } : {}),
         };
       };
     })(),
