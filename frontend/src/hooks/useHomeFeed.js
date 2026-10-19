@@ -10,7 +10,7 @@ import {SEED_ROWS} from '../constants.js';
 import {trackById,normalizeTrack,cacheTrack} from '../catalog.js';
 import {loadFeedCache,saveFeedCache} from '../feed/feedCache.js';
 import {preferenceKey,starterQueries,genreArtists,artistIdentity} from '../feed/tasteProfile.js';
-import {balancedMix,deepRecommendationRows,MIX_TARGET} from '../feed/deepMixes.js';
+import {balancedMix,contextualPool,deepRecommendationRows,MIX_TARGET} from '../feed/deepMixes.js';
 import {offlineMixes,favArtistMixes,recentSliceMixes} from '../feed/mixBuilders.js';
 import {useLibraryStore} from '../store/libraryStore.js';
 import {usePlayerStore} from '../store/playerStore.js';
@@ -26,16 +26,17 @@ export function useHomeFeed({authed,downloaded,recentSearches=[],onboardPrefs,of
   const lib=useLibraryStore(s=>s);
   const storedDownloads=usePlayerStore(s=>s.downloaded);
   const downloads=downloaded||storedDownloads;
+  const hasExplicitTaste=starterQueries(onboardPrefs).length>0;
   const signature=useMemo(()=>JSON.stringify({
-    account,preferences:preferenceKey(onboardPrefs),favs:lib.favs,recent:lib.recent,
+    account,preferences:preferenceKey(onboardPrefs),favs:hasExplicitTaste?null:lib.favs,recent:hasExplicitTaste?null:lib.recent,
     playlists:lib.playlists.map(p=>[p.id,p.trackIds]),saved:lib.savedPlaylists.map(p=>[p.playlistId,p.trackIds]),
     downloads:offline?[...downloads]:[],nonce:lib.feedNonce,offline,
-  }),[account,onboardPrefs,lib.favs,lib.recent,lib.playlists,lib.savedPlaylists,downloads,recentSearches,lib.feedNonce,offline]);
+  }),[account,onboardPrefs,hasExplicitTaste,lib.favs,lib.recent,lib.playlists,lib.savedPlaylists,downloads,recentSearches,lib.feedNonce,offline]);
   const previousProfile=useRef(null);
   useEffect(()=>{
     if(!authed)return;
     const store=useLibraryStore.getState();
-    const profile=account+':home3:'+preferenceKey(onboardPrefs);
+    const profile=account+':home4:'+preferenceKey(onboardPrefs);
     const savedExtra=(loadFeedCache(profile)||[]).filter(s=>/^Más por descubrir \d+$/.test(s.section));
     if(previousProfile.current!==null && previousProfile.current!==profile)store.setHomeRows([]);
     previousProfile.current=profile;
@@ -50,7 +51,8 @@ export function useHomeFeed({authed,downloaded,recentSearches=[],onboardPrefs,of
       if(!alive())return;
       const visible=rows.filter(s=>s.mixes.length).map(s=>({...s,mixes:s.mixes.map(m=>({...m,tracks:[...m.tracks]}))}));
       if(!visible.length)return;
-      store.setHomeRows(visible);store.setHomeLoading(false);
+      store.setHomeRows(visible);
+      if(visible.some(row=>row.mixes.some(m=>!m.pending)))store.setHomeLoading(false);
       if(!firstSaved){saveFeedCache(visible,profile);firstSaved=true;}
     };
     const add=(section,mix)=>{
@@ -62,7 +64,7 @@ export function useHomeFeed({authed,downloaded,recentSearches=[],onboardPrefs,of
       if(!row){row={section,mixes:[]};rows.push(row);}
       const existing=row.mixes.find(m=>m.label===mix.label);
       if(existing)existing.tracks=dedupeByTitle([...existing.tracks,...tracks]).slice(0,200);
-      else row.mixes.push({...mix,tracks});
+      else row.mixes.push({...mix,tracks,pending:!['Tus playlists','Escuchado recientemente','De tus Me gusta','Listas para offline'].includes(section)});
       publish();
     };
     const request=(key,fn)=>{
@@ -147,10 +149,9 @@ export function useHomeFeed({authed,downloaded,recentSearches=[],onboardPrefs,of
         if(alive()){
           const catalog=dedupeByTitle(rows.filter(s=>!['Tus playlists','Escuchado recientemente','De tus Me gusta'].includes(s.section)).flatMap(s=>s.mixes).flatMap(m=>m.tracks));
           const expanded=deepRecommendationRows(catalog,onboardPrefs,store.feedNonce);
-          if(expanded.length){
-            const local=rows.filter(s=>['Tus playlists','Escuchado recientemente','De tus Me gusta'].includes(s.section));
-            rows.splice(0,rows.length,...local,...expanded,...savedExtra);publish();
-          }
+          const local=rows.filter(s=>['Tus playlists','Escuchado recientemente','De tus Me gusta'].includes(s.section));
+          rows.splice(0,rows.length,...local,...expanded,...savedExtra);
+          if(rows.length)publish();else store.setHomeRows([]);
         }
       }finally{
         clearTimeout(safety);
@@ -205,15 +206,25 @@ export function useHomeFeed({authed,downloaded,recentSearches=[],onboardPrefs,of
         const existing=new Set(current.flatMap(r=>r.mixes).flatMap(m=>m.tracks).map(t=>t.id));
         const novel=dedupeByTitle(fresh).filter(t=>!existing.has(t.id));
         const catalog=dedupeByTitle([...novel,...current.flatMap(r=>r.mixes).flatMap(m=>m.tracks)]);
-        const names=[...new Set(novel.map(t=>t.artist))];
-        const mixes=names.map((name,i)=>({label:'Descubre '+name,tracks:balancedMix(catalog,name,i+cursor)}))
-          .filter(m=>m.tracks.length===MIX_TARGET&&m.tracks.filter(t=>novel.some(n=>n.id===t.id)).length>=5).slice(0,10);
+        const names=[...new Set([...novel,...catalog].map(t=>t.artist))];
+        const novelIds=new Set(novel.map(t=>t.id));
+        const mixes=[];
+        for(const [i,name] of names.entries()){
+          if(mixes.length===10)break;
+          const qualified=contextualPool(catalog,name,onboardPrefs);
+          for(let attempt=0;attempt<20;attempt++){
+            const tracks=balancedMix(qualified,name,i+cursor+attempt);
+            if(tracks.length===MIX_TARGET&&tracks.filter(t=>novelIds.has(t.id)).length>=5){
+              mixes.push({label:'Descubre '+name,tracks});break;
+            }
+          }
+        }
         if(mixes.length>=8){
           mixes.flatMap(m=>m.tracks).forEach(cacheTrack);
           const sectionNo=current.filter(r=>/^Más por descubrir \d+$/.test(r.section)).length+1;
           const next=[...current,{section:'Más por descubrir '+sectionNo,mixes}];
           useLibraryStore.getState().setHomeRows(next);
-          if(current.length<8)saveFeedCache(next,account+':home3:'+preferenceKey(onboardPrefs));
+          if(current.length<8)saveFeedCache(next,account+':home4:'+preferenceKey(onboardPrefs));
           added=true;
         }
       }

@@ -3,6 +3,14 @@ import {dedupeByTitle} from '../helpers.js';
 export const MIX_TARGET=50;
 const hash=value=>{let h=2166136261;for(const char of String(value)){h=Math.imul(h^char.charCodeAt(0),16777619);}return h>>>0;};
 const gcd=(a,b)=>b?gcd(b,a%b):a;
+export function contextualPool(pool,seed,prefs){
+  const genres=Array.isArray(prefs)?prefs:prefs?.genres||[];
+  const key=artistIdentity(seed);
+  const contexts=genres.filter(g=>genreArtists([g]).some(a=>a._key===key));
+  const allowed=new Set(genreArtists(contexts).map(a=>a._key));
+  allowed.add(key);
+  return pool.filter(t=>allowed.has(artistIdentity(t.artist)));
+}
 export function balancedMix(pool,seed,variant=0){
   const unique=dedupeByTitle(pool).filter(t=>t?.id&&t.title);
   const groups=new Map();
@@ -54,7 +62,7 @@ export function deepRecommendationRows(pool,prefs,variant=0){
     for(const [i,name] of list.entries()){
       if(mixes.length===10)break;
       for(let attempt=0;attempt<20;attempt++){
-        const tracks=balancedMix(pool,name,variant+i+offset+attempt*7);
+        const tracks=balancedMix(contextualPool(pool,name,prefs),name,variant+i+offset+attempt*7);
         if(tracks.length!==MIX_TARGET)continue;
         const ids=new Set(tracks.map(t=>t.id));
         if(used.some(other=>[...ids].filter(id=>other.has(id)).length>30))continue;

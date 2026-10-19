@@ -39,7 +39,7 @@ export function slimSections(sections) {
     .slice(0, MAX_SECTIONS)
     .map((sec) => ({
       section: sec.section,
-      mixes: (sec.mixes || []).slice(0, MAX_MIXES).map((m) => ({
+      mixes: (sec.mixes || []).filter(m=>!m.pending).slice(0, MAX_MIXES).map((m) => ({
         label: m.label,
         featured: m.featured === true,
         tracks: (m.tracks || []).slice(0, MAX_TRACKS).map(slimTrack).filter(Boolean),

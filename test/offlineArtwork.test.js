@@ -67,13 +67,29 @@ test('a list-sized cached cover repairs original-size metadata without network a
     globalThis.fetch = async () => { network++; throw new Error('server unavailable'); };
     globalThis.caches = {
       keys: async () => ['velocity-v91'],
-      open: async () => ({ keys: async () => [cached], match: async request => request.url === cached.url ? new Response('hello', { headers: { 'content-type': 'image/png' } }) : undefined }),
+      open: async () => ({ keys: async () => [cached], match: async request => (request.url || request) === cached.url ? new Response('hello', { headers: { 'content-type': 'image/png' } }) : undefined }),
     };
     const meta = await art.prepare({ id: 'saved', cover: original });
     assert.equal(meta.cover, image);
     assert.equal(meta.artworkStatus, 'ready');
     assert.equal(network, 0);
   } finally { globalThis.fetch = fetcher; globalThis.caches = cacheStorage; }
+});
+
+test('many new covers share one cache enumeration and newly saved variants enter the index',async()=>{
+  const previous=globalThis.caches;
+  const url=(name,size)=>'https://velocity.invalid/img?u='+encodeURIComponent(`https://lh3.googleusercontent.com/${name}=w${size}-h${size}-l90-rj`);
+  let scans=0;
+  const stored=new Set(Array.from({length:1000},(_,i)=>url('cached'+i,128)));
+  const cache={keys:async()=>{scans++;return [...stored].map(value=>new Request(value));},match:async request=>stored.has(request.url||request)?new Response('image',{headers:{'content-type':'image/jpeg'}}):undefined};
+  try{
+    globalThis.caches={keys:async()=>[art.CACHE],open:async()=>cache};
+    await Promise.all(Array.from({length:20},(_,i)=>art.cached(url('missing'+i,256))));
+    assert.equal(scans,1);
+    const added=url('just-saved',128);stored.add(added);await art.remember(art.CACHE,added);
+    assert.equal((await art.cached(url('just-saved',256))).status,200);
+    assert.equal(scans,1);
+  }finally{globalThis.caches=previous;}
 });
 
 test('cached variant matching never substitutes a different album or another explicit fallback id', async () => {
