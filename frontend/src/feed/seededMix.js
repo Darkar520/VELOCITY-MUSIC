@@ -1,7 +1,9 @@
-import {artistIdentity, genreArtists} from './tasteProfile.js';
+import {genreArtists} from './tasteProfile.js';
 
 export const MIX_MIN = 50;
-export const titleKey = value => String(value || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s*[([][^]*$/, '').replace(/[^a-z0-9]+/g, ' ').trim();
+const textKey = value => String(value || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+export const titleKey = value => textKey(String(value || '').replace(/\s*[([][^]*$/, ''));
+const artistIdentity = value => textKey(value).replace(/\s+/g, '');
 export const uniqueSongs = tracks => {
   const ids = new Set(), titles = new Set();
   return (tracks || []).filter(t => {

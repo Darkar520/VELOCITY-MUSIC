@@ -48,3 +48,9 @@ test('homonyms cannot become expansion seeds when a radio response is insufficie
  const result=await buildSeedMix(seed,{radio:async id=>{calls.push(id);return [{id:'wrong-cover',title:'Creep',artist:'Unrelated rapper'},{id:'wrong-artist',title:'Other song',artist:'Creep'}];},search:async()=>[]});
  assert.deepEqual(calls,['seed']);assert.deepEqual(result.tracks,[]);
 });
+
+test('non-Latin song and artist identities remain distinct instead of collapsing into an empty key',()=>{
+ assert.equal(uniqueSongs([{id:'one',title:'夜曲',artist:'周杰倫'},{id:'two',title:'晴天',artist:'周杰倫'}]).length,2);
+ const foreign=Array.from({length:60},(_,i)=>({id:'foreign'+i,title:'外部'+i,artist:'林俊傑'}));
+ assert.deepEqual(composeSeedMix({id:'seed-cn',title:'夜曲',artist:'周杰倫'},{radioTracks:[{id:'neighbor',title:'有你',artist:'五月天'}],pool:foreign}),[]);
+});
