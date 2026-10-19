@@ -199,7 +199,7 @@ export function SearchTab({ T, play, addToTarget, onMenu, onToggleFav, recentSea
           {relatedMixes.length > 0 && (<>
             <SectionHeader label="Mixes relacionados" accent={T.accent} />
             <div className="carousel" style={{ gap:15, paddingBottom:6, paddingTop:2, marginBottom:18 }}>
-              {relatedMixes.map(m => <MixCard key={m.label} mix={m} T={T} onPlay={() => { play(m.tracks[0], m.tracks.map(t=>t.id)); addSearch(q.trim()); }} onOpen={() => { goMix(m); addSearch(q.trim()); }} />)}
+              {relatedMixes.map(m => <MixCard key={m.label} mix={m} T={T} onPlay={() => { play(m.tracks[0], m.tracks.map(t=>t.id)); addSearch(q.trim(),m.tracks[0]); }} onOpen={() => { goMix(m); addSearch(q.trim(),m.tracks[0]); }} />)}
             </div>
           </>)}
         </>
