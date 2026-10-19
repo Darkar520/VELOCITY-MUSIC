@@ -58,7 +58,7 @@ export function HomeDiscovery({rows,prefs,personalShelves=[],shelfKey='',play,go
   const toggleSongFav=id=>{lockSongs();onToggleFav?.(id);};
   const songMenu=id=>{lockSongs();onMenu?.(id);};
   const uniqueArt=[...new Map((featured?.tracks||[]).filter(t=>t.cover).map(t=>[t.cover,t])).values()].slice(0,4);
-  const heroArt=uniqueArt.length===4?uniqueArt:[featured?.tracks[0]].filter(Boolean);
+  const heroArt=uniqueArt.length===4?uniqueArt:[uniqueArt[0]||featured?.tracks[0]].filter(Boolean);
   const genres=Array.isArray(prefs)?prefs:prefs?.genres || [];
   const start=m=>play(m.tracks[0],m.tracks.map(t=>t.id),{mixLabel:m.label});
   if(!featured)return <section className="discovery-empty" aria-live="polite">
@@ -85,7 +85,7 @@ export function HomeDiscovery({rows,prefs,personalShelves=[],shelfKey='',play,go
     {readyRows.filter(s=>!s.mixes.every(m=>m.featured)).map(section=><section className="discovery-section" key={section.section}>
       <header><div><span className="discovery-eyebrow">EXPLORA TU SONIDO</span><h2>{section.section}</h2></div><span className="discovery-detail">{section.mixes.length} selecciones</span></header>
       <div className="discovery-mixes">{section.mixes.map((mix,i)=><article className="discovery-mix" key={mix.label+i}>
-        <div className="discovery-mix-art"><button onClick={()=>goMix(mix)} aria-label={`Abrir ${mix.label}`}><CoverImg src={mix.tracks[0]?.cover} alt="" size={256} radius={0}/></button><button className="discovery-mix-play" aria-label={`Reproducir mix ${mix.label}`} onClick={()=>start(mix)}><Icon.Play sz={20}/></button></div>
+        <div className="discovery-mix-art"><button onClick={()=>goMix(mix)} aria-label={`Abrir ${mix.label}`}><CoverImg src={mix.tracks.find(t=>t.cover)?.cover} alt="" size={256} radius={0}/></button><button className="discovery-mix-play" aria-label={`Reproducir mix ${mix.label}`} onClick={()=>start(mix)}><Icon.Play sz={20}/></button></div>
         <button className="discovery-mix-title" onClick={()=>goMix(mix)}>{mix.label}</button><p>{[...new Set(mix.tracks.map(t=>t.artist))].slice(0,3).join(' · ')}</p>
       </article>)}</div>
     </section>)}

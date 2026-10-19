@@ -4,11 +4,18 @@ import {afterEach, describe, expect, it, vi} from 'vitest';
 import {api} from '../api.js';
 import {usePersonalizedShelves} from '../hooks/usePersonalizedShelves.js';
 import {PersonalizedShelves} from '../components/PersonalizedShelves.jsx';
+import {HomeDiscovery} from '../components/HomeDiscovery.jsx';
 const tracks = Array.from({length:4},(_,i)=>({id:'shelf-'+i,title:'Song '+i,artist:'Queen',cover:'https://cover.test/'+i}));
 const rows = [{mixes:[{tracks}]}];
 afterEach(()=>{cleanup();vi.restoreAllMocks();});
 
 describe('personalized tail shelves',()=>{
+  it('uses an available mix cover when the first recording has no artwork',()=>{
+    const mixed=[{...tracks[0],cover:''},tracks[1]];
+    const {container}=render(<HomeDiscovery rows={[{section:'Test',mixes:[{label:'Mix',tracks:mixed}]}]} prefs={null} play={vi.fn()} goMix={vi.fn()}/>);
+    expect(container.querySelector('.discovery-mosaic img').getAttribute('src')).toContain('cover.test/1');
+    expect(container.querySelector('.discovery-mix-art img').getAttribute('src')).toContain('cover.test/1');
+  });
   it('plays the displayed selection in its displayed order and opens its actual mix',()=>{
     const play=vi.fn(),goMix=vi.fn();
     const card={id:'test',label:'Queen',tag:'TU BÚSQUEDA',reason:'Buscaste «Queen»',tracks};
