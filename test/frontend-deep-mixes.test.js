@@ -18,6 +18,12 @@ test('scarce catalogs do not pretend to provide a varied 50-song mix',()=>{
  assert.equal(balancedMix(scarce,'Queen').length,15);
  assert.equal(deepRecommendationRows(scarce,{genres:[{label:'Rock'}],artists:[]}).length,0);
 });
+test('uneven artist catalogs still produce 50 tracks without adjacent artist repeats',()=>{
+ const uneven=Array.from({length:16},(_,a)=>Array.from({length:a===0?5:3},(_,i)=>({id:`${a}-${i}`,title:`Song ${a} ${i}`,artist:`Artist ${a}`}))).flat();
+ const mix=balancedMix(uneven,'Artist 0');
+ assert.equal(mix.length,50);
+ assert.ok(mix.every((t,i)=>i===0||t.artist!==mix[i-1].artist));
+});
 test('artist and discovery carousels have 8–10 deep mixes, while genre rows follow selected genres',()=>{
  const genreNames=['Metal','Rock','EDM'].flatMap(label=>genreArtists([{label}]).slice(0,12).map(a=>a.name));
  const expanded=[...pool,...genreNames.flatMap(artist=>Array.from({length:8},(_,i)=>({id:'extra-'+artist+i,title:'extra '+artist+' '+i,artist})))];

@@ -29,6 +29,18 @@ export function balancedMix(pool,seed,variant=0){
       if(out.length===MIX_TARGET)break;
     }
   }
+  if(out.some((t,i)=>i>0&&artistIdentity(t.artist)===artistIdentity(out[i-1].artist))){
+    const remaining=new Map();
+    for(const track of out){const key=artistIdentity(track.artist);if(!remaining.has(key))remaining.set(key,[]);remaining.get(key).push(track);}
+    const ordered=[];
+    while(ordered.length<out.length){
+      const last=artistIdentity(ordered.at(-1)?.artist);
+      const candidates=[...remaining].filter(([key,tracks])=>key!==last&&tracks.length).sort((a,b)=>b[1].length-a[1].length);
+      if(!candidates.length)break;
+      ordered.push(candidates[0][1].shift());
+    }
+    if(ordered.length===out.length)return ordered;
+  }
   return out;
 }
 export function deepRecommendationRows(pool,prefs,variant=0){
