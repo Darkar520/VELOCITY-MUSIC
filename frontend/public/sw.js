@@ -11,7 +11,7 @@
 
 self.importScripts('/offline-artwork.js', '/downloads-db.js', '/downloads-worker.js');
 
-const CACHE = 'velocity-v99';
+const CACHE = 'velocity-v100';
 const ARTWORK_CACHE = self.VelocityOfflineArtwork.CACHE;
 const APP_SHELL = ['/', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'];
 
@@ -84,6 +84,7 @@ self.addEventListener('fetch', (event) => {
       if (response?.ok && /^image\//i.test(response.headers.get('content-type') || '')) {
         const cache = await caches.open(ARTWORK_CACHE);
         await cache.put(request, response.clone());
+        await self.VelocityOfflineArtwork.remember(ARTWORK_CACHE,request.url);
       }
     }).catch(() => {}));
     return;

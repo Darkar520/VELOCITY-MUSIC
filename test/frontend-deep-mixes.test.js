@@ -1,9 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {balancedMix,deepRecommendationRows} from '../frontend/src/feed/deepMixes.js';
+import {balancedMix,contextualPool,deepRecommendationRows} from '../frontend/src/feed/deepMixes.js';
 import {genreArtists} from '../frontend/src/feed/tasteProfile.js';
 const names=['Deftones','Metallica','Iron Maiden','Queen','Radiohead','Pink Floyd','Avicii','Calvin Harris','Skrillex','Madeon','Paramore','Korn'];
 const pool=names.flatMap(artist=>Array.from({length:20},(_,i)=>({id:artist+i,title:artist+' song '+i,artist})));
+test('an Oasis selection cannot borrow unrelated selected genres to reach its target',()=>{
+ const mixed=['Oasis','Queen','The Doors','Skrillex','Porter Robinson','José José','Unknown artist'].map((artist,i)=>({id:String(i),title:'Track '+i,artist}));
+ const qualified=contextualPool(mixed,'Oasis',{genres:[{label:'Rock'},{label:'EDM'},{label:'Baladas'}]});
+ assert.deepEqual(qualified.map(t=>t.artist),['Oasis','Queen','The Doors']);
+});
 test('deep mixes contain 50 real unique songs and different selections',()=>{
  const first=balancedMix(pool,'Deftones',0),next=balancedMix(pool,'Queen',3);
  assert.equal(first.length,50);assert.equal(new Set(first.map(t=>t.id)).size,50);

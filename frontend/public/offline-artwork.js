@@ -25,6 +25,30 @@
       return { resource: url.origin + url.pathname + '?' + url.searchParams, id };
     } catch { return null; }
   }
+  const indexes = new Map();
+  function cacheIndex(name, cache) {
+    const found=indexes.get(name);
+    if(found&&Date.now()-found.at<60000)return found.promise;
+    const promise=cache.keys().then(requests=>{
+      const index=new Map();
+      for(const request of requests){
+        const key=identity(request.url);if(!key)continue;
+        if(!index.has(key.resource))index.set(key.resource,[]);
+        index.get(key.resource).push({url:request.url,id:key.id});
+      }
+      return index;
+    });
+    indexes.set(name,{at:Date.now(),promise});return promise;
+  }
+  async function remember(name,value){
+    const saved=indexes.get(name),key=identity(value);
+    if(!saved||!key)return;
+    try{
+      const index=await saved.promise,entries=index.get(key.resource)||[];
+      if(!entries.some(entry=>entry.url===value))entries.push({url:value,id:key.id});
+      index.set(key.resource,entries);
+    }catch{indexes.delete(name);}
+  }
   async function cached(value) {
     if (!root.caches) return null;
     const key = identity(value);
@@ -35,10 +59,10 @@
         const cache = await root.caches.open(name);
         const exact = await cache.match(new URL(value, root.location?.origin || 'https://velocity.invalid').href);
         if (isImage(exact)) return exact;
-        for (const request of await cache.keys()) {
-          const candidate = identity(request.url);
-          if (!candidate || candidate.resource !== key.resource || (candidate.id && key.id && candidate.id !== key.id)) continue;
-          const response = await cache.match(request);
+        const index=await cacheIndex(name,cache);
+        for (const candidate of index.get(key.resource)||[]) {
+          if (candidate.id && key.id && candidate.id !== key.id) continue;
+          const response = await cache.match(candidate.url);
           if (isImage(response)) return response;
         }
       }
@@ -119,5 +143,5 @@
       return new Response(await image.blob(), { headers: { 'Content-Type': image.headers.get('content-type'), 'Cache-Control': 'no-store' } });
     } catch { return new Response(null, { status: 404 }); }
   }
-  root.VelocityOfflineArtwork = { CACHE, source, cached, toDataUrl, prepare, respond };
+  root.VelocityOfflineArtwork = { CACHE, source, cached, remember, toDataUrl, prepare, respond };
 })(globalThis);

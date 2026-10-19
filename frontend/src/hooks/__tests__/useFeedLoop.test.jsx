@@ -1,0 +1,20 @@
+import {renderHook,cleanup} from '@testing-library/react';
+import {afterEach,it,expect} from 'vitest';
+import {useFeedLoop} from '../useFeedLoop.js';
+afterEach(()=>{cleanup();document.body.innerHTML='';});
+it('crossing the visual bridge preserves the relative viewport position in the first cycle',()=>{
+ const scroller=document.createElement('main');scroller.style.overflowY='auto';
+ const first=document.createElement('div'),repeat=document.createElement('div');
+ scroller.append(first,repeat);document.body.append(scroller);
+ let bridgeTop=100;
+ scroller.getBoundingClientRect=()=>({top:0});
+ first.getBoundingClientRect=()=>({top:bridgeTop-1000});
+ repeat.getBoundingClientRect=()=>({top:bridgeTop});
+ const {result,rerender}=renderHook(key=>useFeedLoop(key),{initialProps:0});
+ result.current.firstRef.current=first;result.current.repeatRef.current=repeat;rerender(1);
+ scroller.scrollTop=950;scroller.dispatchEvent(new Event('scroll'));
+ expect(scroller.scrollTop).toBe(950);
+ bridgeTop=-25;scroller.scrollTop=1125;scroller.dispatchEvent(new Event('scroll'));
+ expect(scroller.scrollTop).toBe(125);
+ expect(scroller.children.length).toBe(2);
+});

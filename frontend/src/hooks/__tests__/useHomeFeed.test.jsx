@@ -39,9 +39,20 @@ function seedRecent(n) {
 const PROPS = { authed: true, libReady: true, downloaded: new Set(), recentSearches: [], onboardPrefs: [] };
 
 describe('useHomeFeed', () => {
+  it('listening and heart changes do not rebuild an explicit-taste feed mid-session',async()=>{
+    api.search.mockImplementation(q=>Promise.resolve(Array.from({length:10},(_,i)=>({id:`${q}-${i}`,title:`${q} song ${i}`,artist:q}))));
+    renderHook(()=>useHomeFeed({...PROPS,onboardPrefs:{genres:[{label:'Rock',q:'rock'}],artists:[]}}));
+    await waitFor(()=>expect(useLibraryStore.getState().homeRows.some(r=>r.section==='En tu frecuencia')).toBe(true));
+    const rows=useLibraryStore.getState().homeRows;
+    const searches=api.search.mock.calls.length;
+    const id=rows[0].mixes[0].tracks.at(-1).id;
+    act(()=>{useLibraryStore.getState().setRecent([id]);useLibraryStore.getState().toggleFav(id);});
+    expect(useLibraryStore.getState().homeRows).toBe(rows);
+    expect(api.search).toHaveBeenCalledTimes(searches);
+  });
   it('scroll demand fetches new artists and appends a 50-song section with new IDs', async () => {
     api.search.mockImplementation(q=>Promise.resolve(Array.from({length:10},(_,i)=>({id:`${q}-${i}`,title:`${q} song ${i}`,artist:q,cover:''}))));
-    api.radio.mockImplementation(()=>Promise.resolve(Array.from({length:8},(_,artist)=>Array.from({length:10},(_,i)=>({id:`more-${artist}-${i}`,title:`more ${artist} ${i}`,artist:`More ${artist}`}))).flat()));
+    api.radio.mockImplementation(()=>Promise.resolve(['Queen','Pink Floyd','The Beatles'].flatMap(artist=>Array.from({length:10},(_,i)=>({id:`more-${artist}-${i}`,title:`more ${artist} ${i}`,artist})))));
     const rock={label:'Rock',q:'rock'};
     const props={...PROPS,onboardPrefs:{genres:[rock],artists:[]}};
     const first=renderHook(()=>useHomeFeed(props));
@@ -64,7 +75,7 @@ describe('useHomeFeed', () => {
     const reopened=renderHook(()=>useHomeFeed(props));
     await waitFor(()=>expect(useLibraryStore.getState().homeLoading).toBe(false),{timeout:10000});
     expect(useLibraryStore.getState().homeRows.filter(r=>r.section==='Más por descubrir 1')).toHaveLength(1);
-    api.radio.mockImplementation(()=>Promise.resolve(Array.from({length:12},(_,artist)=>Array.from({length:10},(_,i)=>({id:`radio-${artist}-${i}`,title:`radio ${artist} ${i}`,artist:`Related ${artist}`}))).flat()));
+    api.radio.mockImplementation(()=>Promise.resolve(['Queen','Pink Floyd','The Beatles'].flatMap(artist=>Array.from({length:10},(_,i)=>({id:`radio-${artist}-${i}`,title:`radio ${artist} ${i}`,artist})))));
     act(()=>window.dispatchEvent(new Event('velocity:feed-more')));
     expect(api.search.mock.calls.filter(([q])=>q===later)).toHaveLength(priorCalls);
     await waitFor(()=>expect(useLibraryStore.getState().homeRows.some(r=>r.section==='Más por descubrir 2')).toBe(true),{timeout:10000});
@@ -73,22 +84,22 @@ describe('useHomeFeed', () => {
   });
   it('unrelated downloaded files do not become a new account taste signal', async () => {
     cacheTrack({id:'unrelated',title:'An unrelated download',artist:'Bad Bunny'});
-    api.search.mockImplementation(q=>Promise.resolve([{id:q,title:q,artist:q}]));
+    api.search.mockImplementation(q=>Promise.resolve(Array.from({length:6},(_,i)=>({id:q+i,title:q+' '+i,artist:q}))));
     renderHook(()=>useHomeFeed({...PROPS,downloaded:new Set(['unrelated']),onboardPrefs:{genres:[{label:'Metal',q:'metal hits'}],artists:[]}}));
-    await waitFor(()=>expect(useLibraryStore.getState().homeRows.some(s=>s.section==='Sigue descubriendo')).toBe(true));
+    await waitFor(()=>expect(useLibraryStore.getState().homeRows.some(s=>s.section==='El sonido que elegiste'&&s.mixes.some(m=>m.tracks.length===50&&!m.pending))).toBe(true));
     expect(api.radio).not.toHaveBeenCalled();
     expect(api.search.mock.calls.some(([q])=>q.includes('Bad Bunny'))).toBe(false);
     expect(useLibraryStore.getState().homeRows.flatMap(s=>s.mixes).flatMap(m=>m.tracks).some(t=>t.artist==='Bad Bunny')).toBe(false);
   });
   it('rejects uploaders with similar names and shares a duplicate artist search', async () => {
-    api.search.mockImplementation(q=>Promise.resolve([{id:q,title:q,artist:q},{id:q+'junk',title:'Compilation',artist:q+' Fan Uploads'}]));
+    api.search.mockImplementation(q=>Promise.resolve([...Array.from({length:6},(_,i)=>({id:q+i,title:q+' '+i,artist:q})),{id:q+'junk',title:'Compilation',artist:q+' Fan Uploads'}]));
     renderHook(()=>useHomeFeed({...PROPS,onboardPrefs:{genres:[{label:'Metal',q:'metal hits'}],artists:[{name:'Metallica'}]}}));
-    await waitFor(()=>expect(useLibraryStore.getState().homeRows.some(s=>s.section==='Sigue descubriendo')).toBe(true));
+    await waitFor(()=>expect(useLibraryStore.getState().homeRows.some(s=>s.section==='El sonido que elegiste'&&s.mixes.some(m=>m.tracks.length===50&&!m.pending))).toBe(true));
     expect(api.search.mock.calls.filter(([q])=>q==='Metallica')).toHaveLength(1);
     expect(useLibraryStore.getState().homeRows.flatMap(s=>s.mixes).flatMap(m=>m.tracks).some(t=>t.artist.includes('Fan Uploads'))).toBe(false);
   });
   it('a new account receives selected genres without any listening history', async () => {
-    api.search.mockImplementation(q => Promise.resolve(Array.from({length:4},(_,i)=>({id:q+i,title:`${q} song ${i}`,artist:q,cover:''}))));
+    api.search.mockImplementation(q => Promise.resolve(Array.from({length:6},(_,i)=>({id:q+i,title:`${q} song ${i}`,artist:q,cover:''}))));
     renderHook(()=>useHomeFeed({...PROPS,libReady:false,onboardPrefs:{genres:[{label:'Metal',q:'metal hits'}],artists:[]}}));
     await waitFor(()=>expect(useLibraryStore.getState().homeRows.some(s=>s.mixes.some(m=>m.label==='Metal'))).toBe(true));
   });
@@ -96,7 +107,8 @@ describe('useHomeFeed', () => {
     api.search.mockImplementation(q => q==='slow genre'?new Promise(()=>{}):Promise.resolve([{id:'fast',title:'Fast song',artist:q}]));
     renderHook(()=>useHomeFeed({...PROPS,onboardPrefs:{genres:[{label:'Slow',q:'slow genre'}],artists:[{name:'Deftones'}]}}));
     await waitFor(()=>expect(useLibraryStore.getState().homeRows[0]?.mixes[0]?.label).toBe('Deftones'));
-    expect(useLibraryStore.getState().homeLoading).toBe(false);
+    expect(useLibraryStore.getState().homeRows[0].mixes[0].pending).toBe(true);
+    expect(useLibraryStore.getState().homeLoading).toBe(true);
   });
   it('an artist-only preference change regenerates recommendations and rejects late old results', async () => {
     let finishOld;
@@ -104,7 +116,8 @@ describe('useHomeFeed', () => {
     const {rerender}=renderHook(p=>useHomeFeed(p),{initialProps:{...PROPS,onboardPrefs:{genres:[],artists:[{name:'Old artist'}]}}});
     await waitFor(()=>expect(typeof finishOld).toBe('function'));
     rerender({...PROPS,onboardPrefs:{genres:[],artists:[{name:'New artist'}]}});
-    await waitFor(()=>expect(useLibraryStore.getState().homeRows[0]?.mixes[0]?.label).toBe('New artist'));
+    await waitFor(()=>expect(api.search.mock.calls.some(([q])=>q==='New artist')).toBe(true));
+    await waitFor(()=>expect(useLibraryStore.getState().homeLoading).toBe(false));
     await act(async()=>finishOld([{id:'old',title:'Old',artist:'Old artist'}]));
     expect(useLibraryStore.getState().homeRows.flatMap(s=>s.mixes).some(m=>m.label==='Old artist')).toBe(false);
   });

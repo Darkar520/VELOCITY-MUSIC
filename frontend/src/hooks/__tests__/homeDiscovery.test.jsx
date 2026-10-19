@@ -34,3 +34,28 @@ it('a failed network has an actionable state rather than blank space',()=>{
  const retry=vi.fn();render(<HomeDiscovery rows={[]} retry={retry}/>);
  fireEvent.click(screen.getByRole('button',{name:'Volver a intentar'}));expect(retry).toHaveBeenCalledOnce();
 });
+it('shows a filled heart for a liked recommendation',()=>{
+ const track={id:'liked',title:'Scars',artist:'Artist'};
+ render(<HomeDiscovery rows={[{section:'Discover',mixes:[{label:'Mix',tracks:[track]}]}]} favs={['liked']} play={vi.fn()} goMix={vi.fn()}/>);
+ const heart=screen.getByRole('button',{name:'Quitar Me gusta de Scars'});
+ expect(heart.getAttribute('aria-pressed')).toBe('true');
+ expect(heart.querySelector('svg').getAttribute('fill')).toBe('currentColor');
+});
+it('does not expose an incomplete generated selection as a playable mix',()=>{
+ const rows=[{section:'Discover',mixes:[{label:'Incomplete',pending:true,tracks:[{id:'one',title:'One',artist:'Artist'}]}]}];
+ render(<HomeDiscovery rows={rows} loading play={vi.fn()} goMix={vi.fn()}/>);
+ expect(screen.queryByRole('button',{name:'Abrir Incomplete'})).toBeNull();
+ expect(screen.queryByRole('button',{name:'Reproducir selección'})).toBeNull();
+ expect(screen.getByText('Afinando tu selección…')).toBeTruthy();
+});
+it('keeps the song order after playback even when another recommendation page arrives',()=>{
+ const tracks=['First','Scars','Third'].map((title,i)=>({id:String(i),title,artist:'Artist '+i}));
+ const row={section:'Discover',mixes:[{label:'Mix',tracks}]};
+ const props={play:vi.fn(),goMix:vi.fn(),prefs:{genres:[{label:'Rock',q:'rock'}]}};
+ const {rerender}=render(<HomeDiscovery {...props} rows={[row]}/>);
+ const region=screen.getByRole('region',{name:'Tu próxima favorita'});
+ const before=[...region.querySelectorAll('.discovery-song-main')].map(x=>x.textContent);
+ fireEvent.click(screen.getByRole('button',{name:'Reproducir Scars'}));
+ rerender(<HomeDiscovery {...props} rows={[row,{section:'More',mixes:[{label:'New',tracks:[{id:'new',title:'New song',artist:'New artist'}]}]}]}/>);
+ expect([...region.querySelectorAll('.discovery-song-main')].map(x=>x.textContent)).toEqual(before);
+});
