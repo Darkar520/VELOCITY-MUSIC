@@ -146,6 +146,13 @@ actualiza la tabla si introduces un cambio.
   una descarga conocida conserva blob aunque exista firma remota. Esto prueba
   el camino de código, no demuestra continuidad física con pantalla bloqueada.
 
+- A37 (2026-10-20): en la transición oculta, una lectura de IndexedDB sin
+  resolver podía preceder la firma remota aún no preparada. Iniciar en primer
+  plano la lectura del próximo blob; si sigue pendiente al terminar la pista,
+  resolver la fuente remota en paralelo. Un blob ya leído conserva prioridad y
+  una descarga conocida sigue usando bytes locales. La prueba valida el camino
+  de transición, no sustituye la verificación física con pantalla bloqueada.
+
 | Capa | Archivo | Rol |
 |------|---------|-----|
 | Predicados | `frontend/src/audioContinuity.js` | Reglas puras A7–A14 (incluye `isAudioPipelineDead`) |
