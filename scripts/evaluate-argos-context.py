@@ -16,7 +16,7 @@ for source in ('en', 'es'):
 import ctranslate2
 import sentencepiece
 from langdetect import DetectorFactory, detect_langs
-from lyrics_context import align_translation
+from lyrics_context import align_translation, normalize_idioms
 DetectorFactory.seed = 0
 out = []
 for source in ('en', 'es'):
@@ -27,14 +27,14 @@ for source in ('en', 'es'):
     metadata = json.loads((package / 'metadata.json').read_text(encoding='utf-8'))
     if (package / 'sentencepiece.model').exists():
         tokenizer = sentencepiece.SentencePieceProcessor(model_file=str(package / 'sentencepiece.model'))
-        encode = lambda text: tokenizer.encode(text, out_type=str)
+        encode = lambda text: tokenizer.encode(normalize_idioms(text, source), out_type=str)
         decode = lambda tokens: tokenizer.decode(tokens).replace('_', ' ')
     else:
         from sacremoses import MosesTokenizer, MosesDetokenizer, MosesPunctNormalizer
         from subword_nmt.apply_bpe import BPE
         tok, detok, norm = MosesTokenizer(source), MosesDetokenizer('en'), MosesPunctNormalizer(source)
         with (package / 'bpe.model').open(encoding='utf-8') as stream: bpe = BPE(stream)
-        encode = lambda text: bpe.segment_tokens(tok.tokenize(norm.normalize(text)))
+        encode = lambda text: bpe.segment_tokens(tok.tokenize(norm.normalize(normalize_idioms(text, source))))
         decode = lambda tokens: detok.detokenize(' '.join(tokens).replace('@@ ', '').split())
     translator = ctranslate2.Translator(str(package / 'model'), device='cpu', compute_type='float32' if source == 'es' else 'int8', inter_threads=1, intra_threads=2)
     groups, current, token_count = [], [], 0

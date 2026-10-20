@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from lyrics_context import phrase_groups, align_translation, normalize_text
+from lyrics_context import phrase_groups, align_translation, normalize_text, normalize_idioms
 
 class ContextTests(unittest.TestCase):
     def test_phrases_join_continuations_but_respect_stanzas_and_punctuation(self):
@@ -13,6 +13,11 @@ class ContextTests(unittest.TestCase):
         groups = phrase_groups(['one'] * 10, lambda s: s.split(), max_lines=3)
         self.assertEqual([len(group) for group in groups], [3, 3, 3, 1])
         self.assertEqual(normalize_text('  I’m here  '), "I'm here")
+
+    def test_common_english_and_spanish_idioms_use_meaning_preserving_equivalents(self):
+        self.assertEqual(normalize_idioms('You keep brushing me off.', 'en'), 'You keep ignoring me.')
+        self.assertEqual(normalize_idioms('I need to get this off my chest.', 'en'), 'I need to talk about how I feel.')
+        self.assertEqual(normalize_idioms('No sabes la falta que me haces.', 'es'), 'no sabes cuánto te extraño.')
 
     def test_attention_alignment_keeps_every_word_once_and_does_not_split_words(self):
         tokens = ['▁Me', '▁cuesta', '▁seguir', '▁adel', 'ante', '▁sin', '▁ti', '.']

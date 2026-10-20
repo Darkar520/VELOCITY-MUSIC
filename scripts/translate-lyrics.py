@@ -6,7 +6,7 @@ import re
 import ctranslate2
 import sentencepiece
 from langdetect import detect_langs, DetectorFactory
-from lyrics_context import phrase_groups, align_translation
+from lyrics_context import phrase_groups, align_translation, normalize_idioms
 
 DetectorFactory.seed = 0
 sys.stdin.reconfigure(encoding='utf-8')
@@ -26,7 +26,7 @@ package = next(p.parent for p in root.rglob('metadata.json') if (lambda m: m.get
 metadata = json.loads((package / 'metadata.json').read_text(encoding='utf-8'))
 if (package / 'sentencepiece.model').exists():
     tokenizer = sentencepiece.SentencePieceProcessor(model_file=str(package / 'sentencepiece.model'))
-    encode = lambda line: tokenizer.encode(line, out_type=str)
+    encode = lambda line: tokenizer.encode(normalize_idioms(line, source), out_type=str)
     decode = lambda tokens: tokenizer.decode(tokens).replace('▁', ' ').replace('_', ' ')
 else:
     from sacremoses import MosesTokenizer, MosesDetokenizer, MosesPunctNormalizer
@@ -34,7 +34,7 @@ else:
     tokenizer, detokenizer, normalizer = MosesTokenizer(source), MosesDetokenizer(target), MosesPunctNormalizer(source)
     with (package / 'bpe.model').open(encoding='utf-8') as codes:
         bpe = BPE(codes)
-    encode = lambda line: bpe.segment_tokens(tokenizer.tokenize(normalizer.normalize(line)))
+    encode = lambda line: bpe.segment_tokens(tokenizer.tokenize(normalizer.normalize(normalize_idioms(line, source))))
     decode = lambda tokens: detokenizer.detokenize(' '.join(tokens).replace('@@ ', '').split(' '))
 # The OPUS ES->EN pack produces degenerate output when dynamically quantized
 # to int8 on this CPU. Keep its native float32 weights; EN->ES is int8-tested.
@@ -54,4 +54,4 @@ for group, owner, result in zip(groups, owners, results):
     aligned = align_translation(result.hypotheses[0], result.attention, owner, len(group), decode)
     for (line_index, _), translated in zip(group, aligned):
         translations[line_index] = translated
-print(json.dumps({'status': 'ready', 'sourceLanguage': source, 'targetLanguage': target, 'model': 'argos-' + source + '-' + target + '-' + metadata.get('package_version', ''), 'engineVersion': 'argos-context-v1', 'lines': translations}, ensure_ascii=False))
+print(json.dumps({'status': 'ready', 'sourceLanguage': source, 'targetLanguage': target, 'model': 'argos-' + source + '-' + target + '-' + metadata.get('package_version', ''), 'engineVersion': 'argos-context-v2', 'lines': translations}, ensure_ascii=False))

@@ -1,9 +1,29 @@
-"""Phrase grouping and monotonic attention alignment; no hand-written idiom substitutions."""
+"""Phrase-aware preprocessing and monotonic alignment for timed lyric rows."""
 import math
 import re
 import unicodedata
 
 VERSION = 'context-v2'
+
+IDIOM_EQUIVALENTS = {
+    'en': (
+        (re.compile(r'\b(?:try )?put(?:ting)? yourself in my shoes\b', re.I), 'try to understand my situation'),
+        (re.compile(r'\bbrushing me off\b', re.I), 'ignoring me'),
+        (re.compile(r'\bget this off my chest\b', re.I), 'talk about how I feel'),
+        (re.compile(r"\b(?:i'm done|i am done) walking on eggshells around you\b", re.I), 'i will not keep trying to avoid upsetting you'),
+    ),
+    'es': (
+        (re.compile(r'\bpasar página\b', re.I), 'seguir adelante'),
+        (re.compile(r'\bse me hizo un nudo en la garganta\b', re.I), 'no podía hablar por la emoción'),
+        (re.compile(r'\bno sabes la falta que me haces\b', re.I), 'no sabes cuánto te extraño'),
+        (re.compile(r'\bme da pena que esto termine así\b', re.I), 'me siento triste porque esto termine así'),
+    ),
+}
+
+def normalize_idioms(text, source):
+    for pattern, replacement in IDIOM_EQUIVALENTS.get(source, ()):
+        text = pattern.sub(replacement, text)
+    return text
 
 def normalize_text(text):
     return unicodedata.normalize('NFKC', text).replace('’', "'").replace('‘', "'").strip()
