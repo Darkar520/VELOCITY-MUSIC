@@ -10,7 +10,7 @@ import { useListSearch } from './useListSearch.js';
 import { useLibraryStore } from '../store/libraryStore.js';
 import { usePlayerStore } from '../store/playerStore.js';
 import { enrichTracksInBackground } from '../coverEnrich.js';
-import { dedupeByRelevance } from '../searchRanking.js';
+import { dedupeByRelevance, searchSectionOrder } from '../searchRanking.js';
 import {buildSeedMix, selectSearchSeed} from '../feed/seededMix.js';
 
 export function SearchTab({ T, play, addToTarget, onMenu, onToggleFav, recentSearches, addSearch, removeSearch, goArtist, goAlbum, goMix, selecting, selection, toggleSelect, startSelection, addToQueue, removeFromQueue, backendDown, setTab }) {
@@ -98,6 +98,32 @@ export function SearchTab({ T, play, addToTarget, onMenu, onToggleFav, recentSea
 
   const runGenre = (g) => { setQ(g.q); addSearch(g.label); };
   const empty = !res.songs.length && !res.albums.length && !res.artists.length;
+  const searchSections = {
+    artists: res.artists.length > 0 && <React.Fragment key="artists">
+      <SectionHeader label="Artistas" accent={T.accent} />
+      <div className="carousel" style={{ gap:15, paddingBottom:6, paddingTop:2, marginBottom:18 }}>
+        {res.artists.map(a => (
+          <div key={a.artistId} onClick={() => { goArtist(a.artistId, a.name); addSearch(a.name); }} className="card-hover" style={{ flexShrink:0, width:104, cursor:'pointer', textAlign:'center' }}>
+            <CoverImg src={a.thumbnail} alt={a.name} radius={999} style={{ width:104, height:104, borderRadius:'50%', boxShadow:'0 8px 22px #0007' }} />
+            <div style={{ fontSize:11.5, fontWeight:700, color:'var(--txt-0)', marginTop:8, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{a.name}</div>
+            <div style={{ fontSize:9.5, color:'var(--txt-2)' }}>Artista</div>
+          </div>
+        ))}
+      </div>
+    </React.Fragment>,
+    albums: res.albums.length > 0 && <React.Fragment key="albums">
+      <SectionHeader label="Álbumes" accent={T.accent} />
+      <div className="carousel" style={{ gap:15, paddingBottom:6, paddingTop:2, marginBottom:18 }}>
+        {res.albums.map(a => <MediaCard key={a.albumId} cover={a.cover} title={a.name} subtitle={`${a.artist || 'Álbum'}${a.year ? ' · ' + a.year : ''}`} T={T} onClick={() => goAlbum(a.albumId, a.name, a.artist, null, a.cover)} />)}
+      </div>
+    </React.Fragment>,
+    songs: res.songs.length > 0 && <React.Fragment key="songs">
+      <SectionHeader label="Canciones" accent={T.accent} action={!selecting && <button onClick={() => startSelection()} className="press" style={{ background:'none', border:'none', cursor:'pointer', color:T.accent, fontSize:11.5, fontWeight:800 }}>Seleccionar</button>} />
+      <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
+        {res.songs.map(t => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => { setChosenSeed({query:q.trim(),track:t}); play(t, [t.id], { radio: true }); addSearch(q.trim(),t); }} onSwipeRemove={removeFromQueue} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
+      </div>
+    </React.Fragment>,
+  };
 
   // Generar mixes relacionados en background cuando hay resultados de canciones.
   // Resolve one recording; other text-search homonyms are not radio seeds.
@@ -169,32 +195,7 @@ export function SearchTab({ T, play, addToTarget, onMenu, onToggleFav, recentSea
           )}
           {!loading && !err && empty && <div style={{ textAlign:'center', color:'var(--txt-2)', fontSize:13, paddingTop:36 }}>Sin resultados para "{q}"</div>}
 
-          {res.artists.length > 0 && (<>
-            <SectionHeader label="Artistas" accent={T.accent} />
-            <div className="carousel" style={{ gap:15, paddingBottom:6, paddingTop:2, marginBottom:18 }}>
-              {res.artists.map(a => (
-                <div key={a.artistId} onClick={() => { goArtist(a.artistId, a.name); addSearch(a.name); }} className="card-hover" style={{ flexShrink:0, width:104, cursor:'pointer', textAlign:'center' }}>
-                  <CoverImg src={a.thumbnail} alt={a.name} radius={999} style={{ width:104, height:104, borderRadius:'50%', boxShadow:'0 8px 22px #0007' }} />
-                  <div style={{ fontSize:11.5, fontWeight:700, color:'var(--txt-0)', marginTop:8, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{a.name}</div>
-                  <div style={{ fontSize:9.5, color:'var(--txt-2)' }}>Artista</div>
-                </div>
-              ))}
-            </div>
-          </>)}
-
-          {res.albums.length > 0 && (<>
-            <SectionHeader label="Álbumes" accent={T.accent} />
-            <div className="carousel" style={{ gap:15, paddingBottom:6, paddingTop:2, marginBottom:18 }}>
-              {res.albums.map(a => <MediaCard key={a.albumId} cover={a.cover} title={a.name} subtitle={`${a.artist || 'Álbum'}${a.year ? ' · ' + a.year : ''}`} T={T} onClick={() => goAlbum(a.albumId, a.name, a.artist, null, a.cover)} />)}
-            </div>
-          </>)}
-
-          {res.songs.length > 0 && (<>
-            <SectionHeader label="Canciones" accent={T.accent} action={!selecting && <button onClick={() => startSelection()} className="press" style={{ background:'none', border:'none', cursor:'pointer', color:T.accent, fontSize:11.5, fontWeight:800 }}>Seleccionar</button>} />
-            <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-              {res.songs.map(t => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => { setChosenSeed({query:q.trim(),track:t}); play(t, [t.id], { radio: true }); addSearch(q.trim(),t); }} onSwipeRemove={removeFromQueue} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
-            </div>
-          </>)}
+          {searchSectionOrder(res.context).map(section => searchSections[section])}
 
           {/* Mixes relacionados: radio de la canción top + artistas top del resultado */}
           {relatedMixes.length > 0 && (<>

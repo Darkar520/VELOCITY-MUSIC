@@ -20,7 +20,7 @@ test('an explicit multiword artist in a title query ranks its recording above co
   assert.equal(result[0].id, 'original');
 });
 
-const { dedupeByRelevance, scoreTrack } = await import('../frontend/src/searchRanking.js');
+const { dedupeByRelevance, scoreTrack, searchSectionOrder } = await import('../frontend/src/searchRanking.js');
 const { dedupeByTitle } = await import('../frontend/src/helpers.js');
 
 // Dos subidas de la MISMA canción: video musical (i.ytimg, sin álbum) primero,
@@ -63,4 +63,13 @@ test('defecto #1: el match exacto de título queda en el top-3', () => {
 
 test('defecto #1: puntúa versión de álbum por encima del video', () => {
   assert.ok(scoreTrack('toxicity', albumVersion) > scoreTrack('toxicity', videoVersion));
+});
+
+test('exact album searches show the matching album and its tracks before related artists', () => {
+  assert.deepEqual(searchSectionOrder({ kind: 'album', albumId: 'album-1' }), ['albums', 'songs', 'artists']);
+});
+
+test('exact track searches lead with songs while general searches keep the broad discovery order', () => {
+  assert.deepEqual(searchSectionOrder({ kind: 'track', trackId: 'track-1' }), ['songs', 'albums', 'artists']);
+  assert.deepEqual(searchSectionOrder(null), ['artists', 'albums', 'songs']);
 });

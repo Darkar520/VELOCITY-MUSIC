@@ -90,7 +90,7 @@ describe('AuthScreen', () => {
     const { onAuthed } = setup();
     fireEvent.click(screen.getByText(/Entrar como invitado/i));
     await waitFor(() => expect(apiMock.guestLogin).toHaveBeenCalled());
-    await waitFor(() => expect(onAuthed).toHaveBeenCalledWith('invitado@velocity.guest', 'Invitado'));
+    await waitFor(() => expect(onAuthed).toHaveBeenCalledWith('invitado@velocity.guest', 'Invitado', true));
   });
 
   it('si el modo invitado falla lo dice y no entra', async () => {
@@ -109,7 +109,17 @@ describe('AuthScreen', () => {
     const { onAuthed } = setup();
     const btn = await screen.findByText('Entrar a mi biblioteca');
     fireEvent.click(btn);
-    expect(onAuthed).toHaveBeenCalledWith('a@b.c', 'Tester');
+    expect(onAuthed).toHaveBeenCalledWith('a@b.c', 'Tester', false);
+  });
+
+  it('con backend caído conserva la identidad invitada local', async () => {
+    apiMock.pingBackend.mockResolvedValue(false);
+    authedMock.value = true;
+    localStorage.setItem('velocity.name', 'Invitado');
+    localStorage.setItem('velocity.guest', 'true');
+    const { onAuthed } = setup();
+    fireEvent.click(await screen.findByText('Entrar a mi biblioteca'));
+    expect(onAuthed).toHaveBeenCalledWith('', 'Invitado', true);
   });
 
   it('con backend caído y sin sesión previa no ofrece acceso offline', async () => {

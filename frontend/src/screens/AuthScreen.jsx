@@ -63,7 +63,7 @@ export function AuthScreen({ onAuthed, T }) {
 
   const guestLogin = async () => {
     setErr(''); setBusy(true);
-    try { const data = await api.guestLogin(); onAuthed(data.email || '', data.displayName || 'Invitado'); }
+    try { const data = await api.guestLogin(); onAuthed(data.email || '', data.displayName || 'Invitado', true); }
     catch (e2) { setErr(e2.message || 'No se pudo entrar como invitado.'); setBusy(false); }
   };
 
@@ -132,7 +132,7 @@ export function AuthScreen({ onAuthed, T }) {
             <div style={{ fontSize:12, fontWeight:700, color:T.accent, marginBottom:6 }}>Servidor sin conexión</div>
             <div style={{ fontSize:11, color:'var(--txt-2)', marginBottom:12, lineHeight:1.5 }}>El backend no está respondiendo. Si ya tienes una sesión previa, puedes entrar a tu biblioteca offline.</div>
             {isAuthed() ? (
-              <button onClick={() => onAuthed(localStorage.getItem('velocity.email') || '', localStorage.getItem('velocity.name') || 'Usuario')} className="btn-tap" style={{ width:'100%', background:grad(T), border:'none', borderRadius:12, padding:'12px 0', cursor:'pointer', color:'#04060a', fontSize:13, fontWeight:800 }}>Entrar a mi biblioteca</button>
+              <button onClick={() => onAuthed(localStorage.getItem('velocity.email') || '', localStorage.getItem('velocity.name') || 'Usuario', localStorage.getItem('velocity.guest') === 'true')} className="btn-tap" style={{ width:'100%', background:grad(T), border:'none', borderRadius:12, padding:'12px 0', cursor:'pointer', color:'#04060a', fontSize:13, fontWeight:800 }}>Entrar a mi biblioteca</button>
             ) : (
               <div style={{ fontSize:11, color:'var(--txt-3)' }}>Inicia sesión cuando el servidor vuelva para acceder a tu biblioteca.</div>
             )}

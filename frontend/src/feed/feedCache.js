@@ -17,6 +17,15 @@ const MAX_SECTIONS = 8;
 const MAX_MIXES = 10;
 const MAX_TRACKS = 60;
 
+export function isFeaturedMix(section, mix) {
+  const sectionName = (typeof section === 'string' ? section : section?.section || '').trim();
+  const frequencyName = /^(?:en\s+)?tu frecuencia(?:\s*[:—–-]|\s*$)|^un mundo por escuchar(?:\s*[:—–-]|\s*$)/i;
+  const canonicalSection = frequencyName.test(sectionName);
+  const playlistRow = /^tus playlists$/i.test(sectionName);
+  return mix?.featured === true || canonicalSection
+    || (!playlistRow && frequencyName.test(String(mix?.label || '').trim()));
+}
+
 function slimTrack(t) {
   if (!t || !t.id) return null;
   return {
@@ -39,9 +48,9 @@ export function slimSections(sections) {
     .slice(0, MAX_SECTIONS)
     .map((sec) => ({
       section: sec.section,
-      mixes: (sec.mixes || []).filter(m=>!m.pending).slice(0, MAX_MIXES).map((m) => ({
+      mixes: (sec.mixes || []).filter(m=>!m.pending&&(!isFeaturedMix(sec,m)||(m.tracks||[]).length===50)).slice(0, MAX_MIXES).map((m) => ({
         label: m.label,
-        featured: m.featured === true,
+        featured: isFeaturedMix(sec,m),
         tracks: (m.tracks || []).slice(0, MAX_TRACKS).map(slimTrack).filter(Boolean),
       })).filter((m) => m.tracks.length > 0),
     }))
@@ -76,11 +85,13 @@ export function loadFeedCache(context = '') {
     if (Date.now() - (Number(parsed.ts) || 0) > MAX_AGE_MS) return null;
     if(parsed.format===2){
       if(!parsed.tracksById || typeof parsed.tracksById!=='object')return null;
-      return parsed.sections.map(sec=>({...sec,mixes:(sec.mixes||[]).map(m=>({
-        ...m,tracks:(m.tracks||[]).map(id=>parsed.tracksById[id]).filter(Boolean),
-      })).filter(m=>m.tracks.length)})).filter(sec=>sec.mixes.length);
+      const sections=parsed.sections.map(sec=>({...sec,mixes:(sec.mixes||[]).filter(m=>!isFeaturedMix(sec,m)||m.tracks?.length===50).map(m=>({
+        ...m,featured:isFeaturedMix(sec,m),tracks:(m.tracks||[]).map(id=>parsed.tracksById[id]).filter(Boolean),
+      })).filter(m=>m.tracks.length&&(!m.featured||m.tracks.length===50))})).filter(sec=>sec.mixes.length);
+      return sections.length?sections:null;
     }
-    return parsed.sections;
+    const sections=parsed.sections.map(sec=>({...sec,mixes:(sec.mixes||[]).filter(m=>!isFeaturedMix(sec,m)||(m.tracks||[]).length===50).map(m=>({...m,featured:isFeaturedMix(sec,m)}))})).filter(sec=>sec.mixes.length);
+    return sections.length?sections:null;
   } catch {
     return null;
   }

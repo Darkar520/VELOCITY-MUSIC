@@ -80,11 +80,28 @@ describe('ProfileTab', () => {
   it('renderiza sin crashear y muestra el correo del usuario', () => {
     setup();
     expect(screen.getByText('a@b.c')).toBeTruthy();
+    expect(screen.getByText('CUENTA')).toBeTruthy();
+  });
+
+  it('representa la sesión invitada sin mostrar el correo técnico', () => {
+    setup({ isGuest: true, email: 'invitado-123@velocity.guest', displayName: 'Invitado' });
+    expect(screen.getByText('INVITADO')).toBeTruthy();
+    expect(screen.queryByText('invitado-123@velocity.guest')).toBeNull();
+    expect(screen.queryByText('PRO MEMBER')).toBeNull();
   });
 
   it('muestra la versión de la app (trazabilidad visible)', () => {
     setup();
     expect(screen.getByText(/VELOCITY MUSIC · v\d+\.\d+/)).toBeTruthy();
+  });
+
+  it('agrupa los ajustes con secciones visibles', () => {
+    setup();
+    const sections = ['Apariencia', 'Audio', 'Descargas', 'Cuenta'].map(section => screen.getByText(section));
+    for (const section of sections) expect(section).toBeTruthy();
+    for (let i = 0; i < sections.length - 1; i++) {
+      expect(sections[i].compareDocumentPosition(sections[i + 1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
   });
 
   // "cerrar sesión" también aparece en el texto informativo de Descargas, así

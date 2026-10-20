@@ -11,8 +11,8 @@ afterEach(()=>{cleanup();vi.restoreAllMocks();});
 
 describe('personalized tail shelves',()=>{
   it('uses an available mix cover when the first recording has no artwork',()=>{
-    const mixed=[{...tracks[0],cover:''},tracks[1]];
-    const {container}=render(<HomeDiscovery rows={[{section:'Test',mixes:[{label:'Mix',tracks:mixed}]}]} prefs={null} play={vi.fn()} goMix={vi.fn()}/>);
+    const mixed=tracks.map((track,index)=>index===0?{...track,cover:''}:track);
+    const {container}=render(<HomeDiscovery rows={[{section:'Test',mixes:[{label:'Mix',tracks:mixed}]}]} prefs={null} offline play={vi.fn()} goMix={vi.fn()}/>);
     expect(container.querySelector('.discovery-mosaic img').getAttribute('src')).toContain('cover.test/1');
     expect(container.querySelector('.discovery-mix-art img').getAttribute('src')).toContain('cover.test/1');
   });

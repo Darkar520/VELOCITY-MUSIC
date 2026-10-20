@@ -53,7 +53,25 @@ export default {
       if (isAudio) init.cache = 'no-store';
       // No combinar Request.cache='no-store' con cf.cacheTtl: workerd rechaza
       // esa combinación, aunque las dos opciones funcionen por separado.
-      const response = await fetch(new Request(request.url, init));
+      // Reintentar solo lecturas idempotentes: los 503 del túnel suelen traer
+      // una página de error HTML que el cliente espera como JSON. Nunca repetir
+      // el stream firmado: un Range/audio es una transferencia costosa.
+      const retryableReadGet = request.method === 'GET'
+        && (path === '/img' || (path.startsWith('/api/') && path !== '/api/stream-proxy'));
+      const transientStatuses = new Set([502, 503, 504, 520, 521, 522, 523, 524]);
+      let response;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          response = await fetch(new Request(request.url, init));
+        } catch (error) {
+          if (!retryableReadGet || attempt >= 2) throw error;
+          await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
+          continue;
+        }
+        if (!retryableReadGet || !transientStatuses.has(response.status) || attempt >= 2) break;
+        await response.body?.cancel().catch(() => {});
+        await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
+      }
       if (!isAudio) return response;
       const headers = new Headers(response.headers);
       headers.set('Cache-Control', 'private, no-store, no-transform');

@@ -40,6 +40,52 @@ test('Cloudflare: las demás rutas API conservan su enrutamiento', async (t) => 
   assert.equal(forwarded.method, 'GET');
 });
 
+test('Cloudflare: el proxy de imágenes reintenta fallos transitorios y luego devuelve la imagen', async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls++;
+    return calls < 3
+      ? new Response('backend temporalmente no disponible', { status: 503 })
+      : new Response('image bytes', { status: 200, headers: { 'content-type': 'image/jpeg' } });
+  });
+  const response = await router.fetch(new Request('https://velocitymusic.uk/img?u=https%3A%2F%2Fi.ytimg.com%2Fvi%2Fabc123%2Fhqdefault.jpg'), {});
+  assert.equal(calls, 3);
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), 'image bytes');
+});
+
+test('Cloudflare: limita a dos reintentos los fallos persistentes de imagen', async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => { calls++; return new Response('unavailable', { status: 503 }); });
+  const image = await router.fetch(new Request('https://velocitymusic.uk/img?u=https%3A%2F%2Fi.ytimg.com%2Fvi%2Fabc123%2Fhqdefault.jpg'), {});
+  assert.equal(image.status, 503);
+  assert.equal(calls, 3);
+});
+
+test('Cloudflare: recupera un GET API tras una página HTML 503 del túnel', async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls++;
+    return calls === 1
+      ? new Response('<html>temporarily unavailable</html>', { status: 503, headers: { 'content-type': 'text/html' } })
+      : Response.json({ items: ['ok'] });
+  });
+  const response = await router.fetch(new Request('https://velocitymusic.uk/api/search?q=radiohead'), {});
+  assert.equal(calls, 2);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { items: ['ok'] });
+});
+
+test('Cloudflare: un stream firmado nunca se reintenta aunque el origen devuelva 503', async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => { calls++; return new Response('unavailable', { status: 503 }); });
+  const response = await router.fetch(new Request('https://velocitymusic.uk/api/stream-proxy?sig=test', {
+    headers: { Range: 'bytes=0-' },
+  }), {});
+  assert.equal(response.status, 503);
+  assert.equal(calls, 1);
+});
+
 test('Cloudflare: los assets estáticos siguen en Pages', async (t) => {
   let forwarded;
   t.mock.method(globalThis, 'fetch', async (request) => {

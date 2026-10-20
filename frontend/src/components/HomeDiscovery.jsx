@@ -8,6 +8,7 @@ import {preferenceKey} from '../feed/tasteProfile.js';
 import {PersonalizedShelves} from './PersonalizedShelves.jsx';
 import {bestCoverFor} from '../catalog.js';
 import {settlePendingShelves} from '../feed/personalizedShelves.js';
+import {isFeaturedMix} from '../feed/feedCache.js';
 
 const mixArtwork = tracks => {
   const track = tracks.find(t => t.cover) || tracks[0];
@@ -32,7 +33,7 @@ export function HomeDiscovery({rows,prefs,personalShelves=[],shelfKey='',play,go
   },[]);
   useEffect(()=>{
     const node=moreRef.current;
-    if(!node||loading||pending||offline||typeof IntersectionObserver==='undefined')return;
+    if(!node||!rows.some(row=>row.mixes?.some(m=>!m.pending&&m.tracks?.length))||loading||pending||offline||typeof IntersectionObserver==='undefined')return;
     const observer=new IntersectionObserver(entries=>{
       if(entries.every(e=>!e.isIntersecting)){armedRef.current=true;return;}
       if(armedRef.current&&observedCount.current!==rowCountRef.current){
@@ -44,10 +45,13 @@ export function HomeDiscovery({rows,prefs,personalShelves=[],shelfKey='',play,go
     },{rootMargin:'300px'});
     observer.observe(node);return()=>observer.disconnect();
   },[rows.length,loading,pending,offline]);
-  const readyRows=rows.map(row=>({...row,mixes:(row.mixes||[]).filter(m=>!m.pending)})).filter(row=>row.mixes.length);
+  const readyRows=rows.map(row=>({...row,mixes:(row.mixes||[])
+    .filter(m=>!m.pending&&(!isFeaturedMix(row,m)||m.tracks?.length===50))
+    .map(m=>isFeaturedMix(row,m)?{...m,featured:true}:m)})).filter(row=>row.mixes.length);
   const mixes=readyRows.flatMap(s=>s.mixes).filter(m=>m.tracks?.length);
   const preferred=(prefs?.artists||[]).map(a=>a.name.toLocaleLowerCase());
-  const featured=mixes.find(m=>m.featured)||mixes.find(m=>preferred.includes(m.label.toLocaleLowerCase()))||mixes[0];
+  const fullMixes=mixes.filter(m=>m.tracks.length===50);
+  const featured=fullMixes.find(m=>m.featured)||fullMixes.find(m=>preferred.includes(m.label.toLocaleLowerCase()))||fullMixes[0]||null;
   const ordered=featured?[featured,...mixes.filter(m=>m!==featured)]:mixes;
   const candidates=[],seenSongs=new Set(),artistCounts=new Map();
   for(let i=0;i<60&&candidates.length<72;i++)for(const mix of ordered){
@@ -68,14 +72,15 @@ export function HomeDiscovery({rows,prefs,personalShelves=[],shelfKey='',play,go
   const heroArt=uniqueArt.length===4?uniqueArt:[uniqueArt[0]||featured?.tracks[0]].filter(Boolean);
   const genres=Array.isArray(prefs)?prefs:prefs?.genres || [];
   const start=m=>play(m.tracks[0],m.tracks.map(t=>t.id),{mixLabel:m.label});
-  if(!featured)return <section className="discovery-empty" aria-live="polite">
-    <span className="discovery-eyebrow">TU SELECCIÓN PERSONAL</span>
-    <h2>{loading?'Afinando tu selección…':'Tu música empieza contigo.'}</h2>
-    <p>{loading?'Buscamos canciones de los géneros y artistas que elegiste.':'No pudimos cargar las recomendaciones. Tus preferencias están guardadas.'}</p>
-    {loading?<div className="discovery-skeleton" aria-label="Cargando recomendaciones"/>:<button onClick={retry}>Volver a intentar</button>}
-  </section>;
   const content=<>
-    <section className="discovery-hero" aria-label="Selección destacada">
+    {!featured&&<section className="discovery-empty" aria-live="polite">
+      <span className="discovery-eyebrow">TU SELECCIÓN PERSONAL</span>
+      <h2 style={{color:'#f4f7f5'}}>{loading?'Afinando tu selección…':offline?'Tu frecuencia volverá al conectar.':'Tu música empieza contigo.'}</h2>
+      <p>{loading?'Buscamos canciones de los géneros y artistas que elegiste.':offline?'Tus playlists guardadas siguen disponibles abajo. La mezcla personalizada necesita conexión para completar 50 canciones.':'No pudimos cargar las recomendaciones. Tus preferencias están guardadas.'}</p>
+      {onEditPrefs&&<button onClick={onEditPrefs}>Ajustar gustos</button>}
+      {loading?<div className="discovery-skeleton" aria-label="Cargando recomendaciones"/>:<button onClick={retry}>Volver a intentar</button>}
+    </section>}
+    {featured&&<section className="discovery-hero" aria-label="Selección destacada">
       <div className="discovery-hero-copy">
         <span className="discovery-eyebrow">EN TU FRECUENCIA</span>
         <h2>Un mundo por<br/><em>escuchar.</em></h2>
@@ -87,8 +92,8 @@ export function HomeDiscovery({rows,prefs,personalShelves=[],shelfKey='',play,go
         {heroArt.map((t,i)=><CoverImg key={t.id+i} src={bestCoverFor(t.id,t.cover)} alt="" size={256} eager priority="high" radius={0}/>) }
         <span className="discovery-mosaic-caption"><small>SELECCIÓN PARA TI</small><strong>{featured.label}</strong><span>{featured.tracks.length} canciones</span></span>
       </button>
-    </section>
-    <DiscoverySongs tracks={songs.slice(0,36)} play={playSong} onMenu={songMenu} onToggleFav={toggleSongFav} favs={favs}/>
+    </section>}
+    {featured&&<DiscoverySongs tracks={songs.slice(0,36)} play={playSong} onMenu={songMenu} onToggleFav={toggleSongFav} favs={favs}/>}
     {readyRows.filter(s=>!s.mixes.every(m=>m.featured)).map(section=><section className="discovery-section" key={section.section}>
       <header><div><span className="discovery-eyebrow">EXPLORA TU SONIDO</span><h2>{section.section}</h2></div><span className="discovery-detail">{section.mixes.length} selecciones</span></header>
       <div className="discovery-mixes">{section.mixes.map((mix,i)=><article className="discovery-mix" key={mix.label+i}>
@@ -96,7 +101,7 @@ export function HomeDiscovery({rows,prefs,personalShelves=[],shelfKey='',play,go
         <button className="discovery-mix-title" onClick={()=>goMix(mix)}>{mix.label}</button><p>{[...new Set(mix.tracks.map(t=>t.artist))].slice(0,3).join(' · ')}</p>
       </article>)}</div>
     </section>)}
-    <DiscoverySongs tracks={songs.slice(36,72)} title="Más canciones para ti" eyebrow="SIGUE ESCUCHANDO" play={playSong} onMenu={songMenu} onToggleFav={toggleSongFav} favs={favs}/>
+    {featured&&<DiscoverySongs tracks={songs.slice(36,72)} title="Más canciones para ti" eyebrow="SIGUE ESCUCHANDO" play={playSong} onMenu={songMenu} onToggleFav={toggleSongFav} favs={favs}/>}
     <PersonalizedShelves shelves={tailShelves} play={playSong} goMix={goMix} onInteract={lockShelves}/>
   </>;
   return <div className="discovery">

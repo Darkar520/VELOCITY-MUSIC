@@ -2,13 +2,14 @@
  * Inicio: preferences first, bounded work, progressive publication.
  * Download availability is not a listening preference.
  */
-import {useEffect,useMemo,useRef} from 'react';
+import {useEffect,useMemo,useRef,useState} from 'react';
 import {api,getToken} from '../api.js';
 import {cacheIdentity} from '../favoriteOutbox.js';
 import {dedupeByTitle,capPerArtist} from '../helpers.js';
 import {SEED_ROWS} from '../constants.js';
 import {trackById,normalizeTrack,cacheTrack} from '../catalog.js';
 import {loadFeedCache,saveFeedCache} from '../feed/feedCache.js';
+import {readFeedMixCycle} from '../feed/feedCycle.js';
 import {preferenceKey,starterQueries,genreArtists,artistIdentity} from '../feed/tasteProfile.js';
 import {balancedMix,contextualPool,deepRecommendationRows,MIX_TARGET} from '../feed/deepMixes.js';
 import {offlineMixes,favArtistMixes,recentSliceMixes} from '../feed/mixBuilders.js';
@@ -27,16 +28,25 @@ export function useHomeFeed({authed,downloaded,recentSearches=[],onboardPrefs,of
   const storedDownloads=usePlayerStore(s=>s.downloaded);
   const downloads=downloaded||storedDownloads;
   const hasExplicitTaste=starterQueries(onboardPrefs).length>0;
+  const baseProfile=account+':home5:'+preferenceKey(onboardPrefs);
+  const [rotation,setRotation]=useState(()=>({profile:baseProfile,...readFeedMixCycle(baseProfile)}));
+  const mixCycle=rotation.profile===baseProfile?rotation.cycle:readFeedMixCycle(baseProfile).cycle;
+  useEffect(()=>{
+    const current=readFeedMixCycle(baseProfile);
+    if(rotation.profile!==baseProfile||rotation.cycle!==current.cycle)setRotation({profile:baseProfile,...current});
+    const timer=setTimeout(()=>setRotation({profile:baseProfile,...readFeedMixCycle(baseProfile)}),Math.max(1,current.nextAt-Date.now()+25));
+    return()=>clearTimeout(timer);
+  },[baseProfile,mixCycle]);
   const signature=useMemo(()=>JSON.stringify({
     account,preferences:preferenceKey(onboardPrefs),favs:hasExplicitTaste?null:lib.favs,recent:hasExplicitTaste?null:lib.recent,
     playlists:lib.playlists.map(p=>[p.id,p.trackIds]),saved:lib.savedPlaylists.map(p=>[p.playlistId,p.trackIds]),
-    downloads:offline?[...downloads]:[],nonce:lib.feedNonce,offline,
-  }),[account,onboardPrefs,hasExplicitTaste,lib.favs,lib.recent,lib.playlists,lib.savedPlaylists,downloads,recentSearches,lib.feedNonce,offline]);
+    downloads:offline?[...downloads]:[],nonce:lib.feedNonce,offline,mixCycle,
+  }),[account,onboardPrefs,hasExplicitTaste,lib.favs,lib.recent,lib.playlists,lib.savedPlaylists,downloads,recentSearches,lib.feedNonce,offline,mixCycle]);
   const previousProfile=useRef(null);
   useEffect(()=>{
     if(!authed)return;
     const store=useLibraryStore.getState();
-    const profile=account+':home4:'+preferenceKey(onboardPrefs);
+    const profile=baseProfile+':cycle:'+mixCycle;
     const savedExtra=(loadFeedCache(profile)||[]).filter(s=>/^Más por descubrir \d+$/.test(s.section));
     if(previousProfile.current!==null && previousProfile.current!==profile)store.setHomeRows([]);
     previousProfile.current=profile;
@@ -148,7 +158,10 @@ export function useHomeFeed({authed,downloaded,recentSearches=[],onboardPrefs,of
         });
         if(alive()){
           const catalog=dedupeByTitle(rows.filter(s=>!['Tus playlists','Escuchado recientemente','De tus Me gusta'].includes(s.section)).flatMap(s=>s.mixes).flatMap(m=>m.tracks));
-          const expanded=deepRecommendationRows(catalog,onboardPrefs,store.feedNonce);
+          const familiarTracks=[...store.recent.slice(0,10),...store.favs.slice(0,10)].map(trackById).filter(Boolean);
+          // A retry or reconnect may refresh the catalog, but it must not rotate
+          // the user's featured selection before the persisted three-day cycle.
+          const expanded=deepRecommendationRows(catalog,onboardPrefs,mixCycle,{familiarTracks});
           const local=rows.filter(s=>['Tus playlists','Escuchado recientemente','De tus Me gusta'].includes(s.section));
           rows.splice(0,rows.length,...local,...expanded,...savedExtra);
           if(rows.length)publish();else store.setHomeRows([]);
@@ -159,7 +172,7 @@ export function useHomeFeed({authed,downloaded,recentSearches=[],onboardPrefs,of
       }
     })();
     return ()=>{cancelled=true;clearTimeout(safety);controllers.forEach(c=>c.abort());};
-  },[authed,signature]); // signature covers semantic values, not transient object identity
+  },[authed,signature,baseProfile,mixCycle]); // signature covers semantic values, not transient object identity
   useEffect(()=>{
     const refresh=()=>useLibraryStore.getState().setFeedNonce(useLibraryStore.getState().feedNonce+1);
     window.addEventListener('online',refresh);return()=>window.removeEventListener('online',refresh);
@@ -224,7 +237,7 @@ export function useHomeFeed({authed,downloaded,recentSearches=[],onboardPrefs,of
           const sectionNo=current.filter(r=>/^Más por descubrir \d+$/.test(r.section)).length+1;
           const next=[...current,{section:'Más por descubrir '+sectionNo,mixes}];
           useLibraryStore.getState().setHomeRows(next);
-          if(current.length<8)saveFeedCache(next,account+':home4:'+preferenceKey(onboardPrefs));
+          if(current.length<8)saveFeedCache(next,baseProfile+':cycle:'+mixCycle);
           added=true;
         }
       }
@@ -233,6 +246,6 @@ export function useHomeFeed({authed,downloaded,recentSearches=[],onboardPrefs,of
     };
     window.addEventListener('velocity:feed-more',loadMore);
     return()=>{disposed=true;controllers.forEach(c=>c.abort());window.removeEventListener('velocity:feed-more',loadMore);};
-  },[authed,account,preferenceKey(onboardPrefs),offline]);
+  },[authed,account,preferenceKey(onboardPrefs),offline,mixCycle]);
 }
 export default useHomeFeed;
