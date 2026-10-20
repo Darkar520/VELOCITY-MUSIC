@@ -36,3 +36,14 @@ it('an unavailable translator preserves lyrics and leaves migration pending', as
   expect(result.translationPending).toBe(true);
   expect(state.records.get('plain').plain).toBe(plain);
 });
+
+it('an unavailable context upgrade preserves an older aligned offline translation', async () => {
+  const plain = 'A first original sentence\nA second original sentence';
+  const old = { status:'ready', sourceText:JSON.stringify(plain.split('\n')), lines:['Old one','Old two'] };
+  state.records.set('cached', { plain, translation:old });
+  api.lyrics.mockRejectedValue(new Error('offline'));
+  api.translateLyrics.mockRejectedValue(new Error('unavailable'));
+  const result = await ensureLyricsOffline({ id:'cached' });
+  expect(result.translationPending).toBe(true);
+  expect(state.records.get('cached').translation).toEqual(old);
+});

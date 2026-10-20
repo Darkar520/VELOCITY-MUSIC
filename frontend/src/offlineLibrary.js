@@ -43,11 +43,12 @@ export async function ensureLyricsOffline(track) {
       plain: d.plain || existing?.plain || null,
       source: d.source || existing?.source || null,
     };
-    const translation = await translateRecord(lyrics, api).catch(() => null);
+    const translationResult = await translateRecord({ ...lyrics, translation: existing?.translation }, api).catch(() => existing?.translation || null);
+    const translation = translationResult?.upgradePending ? existing?.translation : translationResult;
     const saved = await offline.saveLyrics(track.id, { ...lyrics, translation });
     if (!saved) return { status: 'failed', error: 'storage_error' };
     const record = await offline.getLyrics(track.id);
-    return { status: record?.synced ? 'synced' : 'plain', record, translationPending: !translation };
+    return { status: record?.synced ? 'synced' : 'plain', record, translationPending: !translation || Boolean(translationResult?.upgradePending) };
   } catch (error) {
     return { status: 'failed', error: error?.message || 'lyrics_request_failed' };
   }
