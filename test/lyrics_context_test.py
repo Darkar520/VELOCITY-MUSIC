@@ -15,6 +15,10 @@ class ContextTests(unittest.TestCase):
         self.assertEqual(normalize_text('  I’m here  '), "I'm here")
 
     def test_common_english_and_spanish_idioms_use_meaning_preserving_equivalents(self):
+        self.assertEqual(
+            normalize_idioms('Now I finally understand what you were trying to tell me.', 'en'),
+            'At last I understand what you meant.',
+        )
         self.assertEqual(normalize_idioms('Try putting yourself in my shoes.', 'en'), 'Try to understand how I feel.')
         self.assertEqual(normalize_idioms('You keep brushing me off.', 'en'), 'You keep not taking me seriously.')
         self.assertEqual(normalize_idioms('I need to get this off my chest.', 'en'), 'I need to tell you something that has been weighing on me.')
@@ -39,6 +43,13 @@ class ContextTests(unittest.TestCase):
             transform_group=lambda text: normalize_idioms(text, 'en'),
         )
         self.assertEqual([token for _, row in chest[0] for token in row], 'I need to tell you something that has been weighing on me.'.split())
+
+        continuation = phrase_groups(
+            ['Now I finally understand', 'what you were trying to tell me.'],
+            lambda text: text.split(),
+            transform_group=lambda text: normalize_idioms(text, 'en'),
+        )
+        self.assertEqual([token for _, row in continuation[0] for token in row], 'At last I understand what you meant.'.split())
 
     def test_idiom_equivalences_do_not_cross_blank_stanza_boundaries(self):
         groups = phrase_groups(
