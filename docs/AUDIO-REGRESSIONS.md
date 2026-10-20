@@ -136,6 +136,16 @@ actualiza la tabla si introduces un cambio.
   apps, pausa manual, reanudación de sesión y cero plays ocultos tras yield.
   Evidencia y límites: audits/2026-10-18-notification-next-recurrence.md.
 
+- A36 (2026-10-20, validación física pendiente): incluso con firma remota
+  precargada, ensureStream esperaba IndexedDB antes de emitir STREAM_READY.
+  Una lectura suspendida dejaba la siguiente pista sin fuente. Usar la firma
+  fresca en la misma tarea si hay conexión y la pista no figura descargada;
+  conservar lectura local para descargas conocidas y ausencia de conexión.
+  Regresión: IndexedDB pendiente indefinidamente impide el play antes del
+  cambio; después monta la fuente preparada y reproduce sin esperar. Control:
+  una descarga conocida conserva blob aunque exista firma remota. Esto prueba
+  el camino de código, no demuestra continuidad física con pantalla bloqueada.
+
 | Capa | Archivo | Rol |
 |------|---------|-----|
 | Predicados | `frontend/src/audioContinuity.js` | Reglas puras A7–A14 (incluye `isAudioPipelineDead`) |

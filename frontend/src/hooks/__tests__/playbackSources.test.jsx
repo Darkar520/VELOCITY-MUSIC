@@ -98,6 +98,27 @@ it('starts a cached signed source once, without a second STREAM_READY from the c
   expect(mocks.ensure).not.toHaveBeenCalled();
 });
 
+it('starts a prepared remote queue track synchronously even when IndexedDB is suspended', () => {
+  mocks.peek.mockReturnValue('/api/stream-proxy?cached');
+  mocks.blob.mockImplementation(() => new Promise(() => {}));
+  const { result, track, audio } = setup();
+  act(() => result.current.play(track, [track.id], { keepMix: true }));
+  expect(audio.getAttribute('src')).toBe('/api/stream-proxy?cached');
+  expect(audio.play).toHaveBeenCalledOnce();
+  expect(mocks.blob).not.toHaveBeenCalled();
+  expect(mocks.ensure).not.toHaveBeenCalled();
+});
+
+it('keeps a known download local even with a prepared remote URL', async () => {
+  mocks.peek.mockReturnValue('/api/stream-proxy?cached');
+  mocks.blob.mockResolvedValue(new Blob(['audio'], { type: 'audio/webm' }));
+  const { result, track, audio } = setup(true);
+  await act(async () => { result.current.play(track); });
+  expect(audio.getAttribute('src')).toContain('blob:');
+  expect(mocks.blob).toHaveBeenCalledOnce();
+  expect(mocks.ensure).not.toHaveBeenCalled();
+});
+
 it('does not publish an offline blob that finishes reading after unmount', async () => {
   let resolve;
   mocks.blob.mockImplementation(() => new Promise(r => { resolve = r; }));
