@@ -17,8 +17,13 @@ const MAX_SECTIONS = 8;
 const MAX_MIXES = 10;
 const MAX_TRACKS = 60;
 
-function isFeaturedMix(section, mix) {
-  return mix?.featured === true || /^(en tu frecuencia|tu frecuencia)$/i.test(section?.section || '');
+export function isFeaturedMix(section, mix) {
+  const sectionName = (typeof section === 'string' ? section : section?.section || '').trim();
+  const frequencyName = /^(?:en\s+)?tu frecuencia(?:\s*[:—–-]|\s*$)|^un mundo por escuchar(?:\s*[:—–-]|\s*$)/i;
+  const canonicalSection = frequencyName.test(sectionName);
+  const playlistRow = /^tus playlists$/i.test(sectionName);
+  return mix?.featured === true || canonicalSection
+    || (!playlistRow && frequencyName.test(String(mix?.label || '').trim()));
 }
 
 function slimTrack(t) {

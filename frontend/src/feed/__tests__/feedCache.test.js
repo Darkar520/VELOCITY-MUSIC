@@ -17,6 +17,15 @@ it('rejects a legacy 12-track frequency mix even when it has no featured marker'
   expect(loadFeedCache('profile')).toBeNull();
 });
 
+it('rejects a partial frequency mix when its section has a descriptive suffix',()=>{
+  const tracks=Array.from({length:12},(_,i)=>({id:String(i),title:'Track '+i,artist:'Artist'}));
+  localStorage.setItem('velocity.feedCache',JSON.stringify({
+    ts:Date.now(),context:'profile',format:1,
+    sections:[{section:'En tu frecuencia: Un mundo por escuchar',mixes:[{label:'Linkin Park',tracks}]}],
+  }));
+  expect(loadFeedCache('profile')).toBeNull();
+});
+
 it('upgrades a complete legacy frequency mix to the featured identity',()=>{
   const tracks=Array.from({length:50},(_,i)=>({id:String(i),title:'Track '+i,artist:'Artist'}));
   localStorage.setItem('velocity.feedCache',JSON.stringify({

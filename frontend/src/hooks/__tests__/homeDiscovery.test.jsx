@@ -66,6 +66,21 @@ it('does not render a legacy partial frequency mix as a normal carousel',()=>{
  expect(main.querySelector('.discovery-section')).toBeNull();
  expect(main.querySelector('.discovery-empty h2').textContent).toBe('Afinando tu selección…');
 });
+it('hides a partial frequency mix if its legacy section title includes a subtitle',()=>{
+ const tracks=Array.from({length:12},(_,i)=>({id:String(i),title:'Track '+i,artist:'Linkin Park'}));
+ const {container}=render(<HomeDiscovery rows={[{section:'En tu frecuencia: Un mundo por escuchar',mixes:[{label:'Linkin Park',tracks}]}]} loading play={vi.fn()} goMix={vi.fn()}/>);
+ const main=container.querySelector('.discovery-cycle:not(.discovery-repeat)');
+ expect(main.textContent).not.toContain('12 canciones');
+ expect(main.querySelector('.discovery-section')).toBeNull();
+ expect(main.querySelector('.discovery-empty h2').textContent).toBe('Afinando tu selección…');
+});
+it('opens the complete 50-track frequency mix from the hero action',()=>{
+ const goMix=vi.fn(),tracks=fullTracks();
+ render(<HomeDiscovery rows={[{section:'En tu frecuencia: Un mundo por escuchar',mixes:[{label:'Linkin Park',tracks}]}]} prefs={{genres:[]}} play={vi.fn()} goMix={goMix}/>);
+ fireEvent.click(screen.getByRole('button',{name:/Explorar mix/}));
+ expect(goMix).toHaveBeenCalledOnce();
+ expect(goMix.mock.calls[0][0].tracks).toHaveLength(50);
+});
 it('keeps a short offline playlist in its own section instead of promoting it as Tu frecuencia',()=>{
  const tracks=Array.from({length:12},(_,i)=>({id:'local-'+i,title:'Local '+i,artist:'Linkin Park'}));
  const {container}=render(<HomeDiscovery rows={[{section:'Tus playlists',mixes:[{label:'Linkin Park',tracks}]}]} offline play={vi.fn()} goMix={vi.fn()}/>);
