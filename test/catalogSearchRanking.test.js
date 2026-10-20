@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { belongsToArtist, exactArtistMatch, rankArtistResults } from '../src/lib/catalogSearchRanking.js';
+import { belongsToArtist, exactArtistMatch, rankAlbumsByTopSongs, rankArtistResults } from '../src/lib/catalogSearchRanking.js';
 import { SEARCH_FILTERS } from '../src/lib/searchPagination.js';
 
 const browsePage = (contents) => ({ contents: { singleColumnBrowseResultsRenderer: {
@@ -30,6 +30,22 @@ test('artist search membership uses the catalog ID or an exact credited name', (
   assert.equal(belongsToArtist({ artistId: 'UC-other', artist: 'Pink Floyd' }, artist), false);
   assert.equal(belongsToArtist({ artist: 'Pink Floyd, David Gilmour' }, { name: 'Pink Floyd' }), true);
   assert.equal(belongsToArtist({ artist: 'Pink Floyd Floydhead' }, { name: 'Pink Floyd' }), false);
+});
+
+test('artist albums follow the strongest provider-ranked song before album track counts', () => {
+  const albums = [
+    { albumId: 'wall', name: 'The Wall' },
+    { albumId: 'wish', name: 'Wish You Were Here' },
+    { albumId: 'dark', name: 'The Dark Side of the Moon' },
+  ];
+  const songs = [
+    { id: 'wish-1', albumId: 'wish' },
+    { id: 'dark-1', albumId: 'dark' },
+    { id: 'wall-1', albumId: 'wall' },
+    { id: 'wall-2', albumId: 'wall' },
+    { id: 'wall-3', albumId: 'wall' },
+  ];
+  assert.deepEqual(rankAlbumsByTopSongs(albums, songs).map((album) => album.albumId), ['wish', 'dark', 'wall']);
 });
 
 test('combined exact artist search suppresses title homonyms and returns the real catalog', async () => {

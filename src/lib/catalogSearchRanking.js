@@ -39,3 +39,29 @@ export function rankArtistResults(query, artists = []) {
     .sort((a, b) => b.score - a.score || a.index - b.index)
     .map(({ artist }) => artist);
 }
+
+/**
+ * Rank an artist's albums by the provider order of its Top songs shelf.
+ * Each distinct song contributes a reciprocal-log rank weight to its real
+ * albumId, so the most prominent track matters most while several popular
+ * tracks can lift the same album. Original catalog order breaks ties.
+ */
+export function rankAlbumsByTopSongs(albums = [], songs = []) {
+  const albumScores = new Map();
+  const seenSongs = new Set();
+  songs.forEach((song, index) => {
+    const songId = song?.videoId || song?.id;
+    const albumId = song?.album?.albumId || song?.albumId;
+    if (!albumId || (songId && seenSongs.has(songId))) return;
+    if (songId) seenSongs.add(songId);
+    const score = albumScores.get(albumId) || { firstRank: index, weight: 0 };
+    score.firstRank = Math.min(score.firstRank, index);
+    score.weight += 1 / Math.log2(index + 2);
+    albumScores.set(albumId, score);
+  });
+
+  return albums
+    .map((album, index) => ({ album, index, score: albumScores.get(album?.albumId) || { firstRank: Infinity, weight: 0 } }))
+    .sort((a, b) => a.score.firstRank - b.score.firstRank || b.score.weight - a.score.weight || a.index - b.index)
+    .map(({ album }) => album);
+}

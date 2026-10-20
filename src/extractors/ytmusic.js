@@ -13,7 +13,7 @@
 import YTMusic from 'ytmusic-api';
 import { verifiedArtistProfile } from '../lib/artistRelations.js';
 import { artistDiscographyCards, artistDiscographyEndpoints, artistTopSongsEndpoint, artistTopSongsItems, mapArtistDiscographyItems, mapArtistTopSongs } from '../lib/artistDiscography.js';
-import { belongsToArtist, exactArtistMatch, rankArtistResults } from '../lib/catalogSearchRanking.js';
+import { belongsToArtist, exactArtistMatch, rankAlbumsByTopSongs, rankArtistResults } from '../lib/catalogSearchRanking.js';
 
 import { normalizeText } from '../lib/normalize.js';
 import { artistNameMatches } from '../lib/lyricsMatch.js';
@@ -366,13 +366,8 @@ export async function getArtistDataWithClient(client, artistId) {
         return alArtist === key || alArtist.startsWith(key + ' ') || alArtist.split(/,\s*/).some(p => p === key);
       })
       .filter((al) => { if (seenAlb.has(al.albumId)) return false; seenAlb.add(al.albumId); return true; });
-    const topSongAlbums = new Map();
-    for (const song of [...(a.topSongs || []), ...catalog.songs]) {
-      const albumId = song?.album?.albumId || song?.albumId;
-      if (albumId) topSongAlbums.set(albumId, (topSongAlbums.get(albumId) || 0) + 1);
-    }
-    mappedAlbums.sort((left, right) =>
-      (topSongAlbums.get(right.albumId) || 0) - (topSongAlbums.get(left.albumId) || 0));
+    const rankedSongs = [...(a.topSongs || []), ...catalog.songs];
+    const rankedAlbums = rankAlbumsByTopSongs(mappedAlbums, rankedSongs);
 
     // La lib getArtistSongs está rota para el browseId Top songs actual (HTTP
     // 400); conservamos topSongs y completamos con una búsqueda por nombre,
@@ -407,7 +402,7 @@ export async function getArtistDataWithClient(client, artistId) {
       name: artistName,
       thumbnail: pickBestThumb(a.thumbnails),
       topSongs,
-      albums: mappedAlbums,
+      albums: rankedAlbums,
       similarArtists: Array.isArray(a.similarArtists)
         ? a.similarArtists
           .map((x) => ({ id: x?.artistId ?? null, name: x?.name ?? null }))
