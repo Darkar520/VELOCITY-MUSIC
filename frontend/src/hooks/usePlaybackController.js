@@ -93,6 +93,7 @@ export function usePlaybackController(deps) {
   const resolveAbortRef = useRef(null);
   const playGenRef = useRef(0);
   const prefetchedRef = useRef(new Set());
+  const prefetchedOfflineRef = useRef(new Map());
   /** Fallos de firma por trackId — evita bucle PLAY_FAILED↔ensureStream y toasts falsos. */
   const signFailRef = useRef({ id: null, n: 0 });
   /** Snapshot de la pista pedida en play() (por si trackById aún no la tiene). */
@@ -245,11 +246,21 @@ export function usePlaybackController(deps) {
     const resolveController = new AbortController();
     resolveAbortRef.current = resolveController;
     try {
+      const online = !backendDown && navigator.onLine !== false;
+      const qParam = QUALITY_MAP[quality] || 'high';
+      const sp = t?.title && t?.artist ? streamParamsFor(t, qParam) : null;
+      const prefetchedBlob = prefetchedOfflineRef.current.get(trackId);
+      prefetchedOfflineRef.current.delete(trackId);
+      const readyLocalBlob = prefetchedBlob?.ready
+        && prefetchedBlob.blob
+        && canUseOfflineAudio(prefetchedBlob.blob)
+        ? prefetchedBlob.blob
+        : null;
       // Keep prepared remote playback inside the ended/Media Session task:
       // IndexedDB callbacks can be deferred while a mobile PWA is hidden.
       // Known downloads and disconnected playback still use local bytes first.
-      if (!downloaded.has(trackId) && !backendDown && navigator.onLine !== false && t?.title && t?.artist) {
-        const preparedUrl = api.peekStreamUrl(streamParamsFor(t, QUALITY_MAP[quality] || 'high'), 30);
+      if (!downloaded.has(trackId) && online && sp && !readyLocalBlob) {
+        const preparedUrl = api.peekStreamUrl(sp, 30);
         if (preparedUrl) {
           signFailRef.current = { id: null, n: 0 };
           dispatchAudio({ type: 'STREAM_READY', trackId, url: preparedUrl });
@@ -257,8 +268,38 @@ export function usePlaybackController(deps) {
         }
       }
       // IndexedDB owns availability; the React badge can lag a worker write.
-      // Local bytes require neither artist metadata nor a signed stream URL.
-      const b = await offline.getBlob(trackId).catch(() => null);
+      const blobPromise = prefetchedBlob?.promise || offline.getBlob(trackId).catch(() => null);
+      // For an online, non-downloaded next track, do not serialize remote
+      // preparation behind IndexedDB: mobile browsers can suspend that read
+      // after the page is hidden. Queue prefetch gives local bytes a head
+      // start; if it is still pending at transition, let remote preparation
+      // race it so storage cannot block the queue.
+      const localResultPromise = prefetchedBlob?.ready
+        ? null
+        : blobPromise.then((blob) => ({ blob }));
+      const remotePromise = prefetchedBlob && !downloaded.has(trackId) && online && sp && !readyLocalBlob
+        ? api.ensureStreamUrl(sp, { signal: resolveController.signal })
+          .then((url) => ({ url }), (error) => ({ error }))
+        : null;
+      let b;
+      if (prefetchedBlob?.ready) {
+        // A completed foreground read is synchronous at the end boundary;
+        // do not add another microtask before mounting its object URL.
+        b = prefetchedBlob.blob;
+      } else if (remotePromise) {
+        const first = await Promise.race([localResultPromise, remotePromise]);
+        if (first.url) {
+          if (resolveController.signal.aborted || !mountedRef.current) return;
+          if (getMachine().trackId !== trackId || getMachine().intent !== 'play') return;
+          signFailRef.current = { id: null, n: 0 };
+          dispatchAudio({ type: 'STREAM_READY', trackId, url: first.url });
+          return;
+        }
+        if (first.error) throw first.error;
+        b = first.blob;
+      } else {
+        b = await blobPromise;
+      }
       if (resolveController.signal.aborted || !mountedRef.current) return;
       if (b && canUseOfflineAudio(b) && getMachine().trackId === trackId && getMachine().intent === 'play') {
         const previousUrl = objUrlRef.current;
@@ -292,13 +333,19 @@ export function usePlaybackController(deps) {
         showToast?.('Falta el artista de esta pista. Prueba buscarla de nuevo.');
         return;
       }
-      const qParam = QUALITY_MAP[quality] || 'high';
-      const sp = streamParamsFor(t, qParam);
       // Usar solo la firma de la pista actual. Si una precarga anterior ya dejó
       // la firma en caché, peek evita otra petición; si no, ensureStreamUrl es
       // la única resolución del camino crítico.
       let url = api.peekStreamUrl(sp, 30);
-      if (!url) url = await api.ensureStreamUrl(sp, { signal: resolveController.signal });
+      if (!url) {
+        if (remotePromise) {
+          const result = await remotePromise;
+          if (result.error) throw result.error;
+          url = result.url;
+        } else {
+          url = await api.ensureStreamUrl(sp, { signal: resolveController.signal });
+        }
+      }
       if (resolveController.signal.aborted) return;
       if (getMachine().trackId !== trackId || getMachine().intent !== 'play') return;
       setTrack((prev) => (prev && prev.id === trackId ? { ...prev, url } : { ...t, url }));
@@ -339,7 +386,23 @@ export function usePlaybackController(deps) {
     if (i === -1) return;
     // Solo la siguiente (antes 4 pistas en paralelo → lag de red/CPU).
     const nextId = ids[(i + 1) % ids.length];
-    if (!nextId || nextId === currentId || downloaded.has(nextId)) return;
+    if (!nextId || nextId === currentId) return;
+    for (const id of prefetchedOfflineRef.current.keys()) {
+      if (id !== nextId) prefetchedOfflineRef.current.delete(id);
+    }
+    if (!prefetchedOfflineRef.current.has(nextId)) {
+      const entry = { ready: false, blob: null, promise: null };
+      entry.promise = offline.getBlob(nextId).then((blob) => {
+        entry.blob = blob;
+        entry.ready = true;
+        return blob;
+      }, () => {
+        entry.ready = true;
+        return null;
+      });
+      prefetchedOfflineRef.current.set(nextId, entry);
+    }
+    if (downloaded.has(nextId)) return;
     const nt = trackById(nextId);
     if (!nt) return;
     const key = nextId + ':' + qParam;
