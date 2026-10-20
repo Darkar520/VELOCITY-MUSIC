@@ -3,26 +3,32 @@ import math
 import re
 import unicodedata
 
-VERSION = 'context-v2'
+VERSION = 'context-v3'
 
 IDIOM_EQUIVALENTS = {
     'en': (
-        (re.compile(r'\b(?:try )?put(?:ting)? yourself in my shoes\b', re.I), 'try to understand my situation'),
+        (re.compile(r'\b(?:try )?put(?:ting)? yourself in my shoes\b', re.I), 'try to understand how I feel'),
         (re.compile(r'\bbrushing me off\b', re.I), 'not taking me seriously'),
-        (re.compile(r'\bget this off my chest\b', re.I), 'talk about how I feel'),
-        (re.compile(r"\b(?:i'm done|i am done) walking on eggshells around you\b", re.I), 'i will not keep trying to avoid upsetting you'),
+        (re.compile(r'\bget this off my chest\b', re.I), 'tell you something that has been weighing on me'),
+        (re.compile(r"\b(?:i'm done|i am done) walking on eggshells around you\b", re.I), 'i cannot keep trying to avoid upsetting you'),
     ),
     'es': (
         (re.compile(r'\bpasar página\b', re.I), 'seguir adelante'),
-        (re.compile(r'\bse me hizo un nudo en la garganta\b', re.I), 'la emoción me dejó sin palabras'),
+        (re.compile(r'\bse me hizo un nudo en la garganta\b', re.I), 'sentí un nudo en la garganta'),
         (re.compile(r'\bno sabes la falta que me haces\b', re.I), 'no sabes cuánto te extraño'),
-        (re.compile(r'\bme da pena que esto termine así\b', re.I), 'me siento triste porque esto termine así'),
+        (re.compile(r'\bme da pena que esto termine así\b', re.I), 'me entristece que esto tenga que terminar así'),
     ),
 }
 
 def normalize_idioms(text, source):
     for pattern, replacement in IDIOM_EQUIVALENTS.get(source, ()):
-        text = pattern.sub(replacement, text)
+        def preserve_sentence_case(match):
+            before = text[:match.start()]
+            at_sentence_start = not before.strip() or re.search(r'[.!?…]["\')]*\s*$', before)
+            if at_sentence_start and match.group(0)[:1].isupper():
+                return replacement[:1].upper() + replacement[1:]
+            return replacement
+        text = pattern.sub(preserve_sentence_case, text)
     return text
 
 def normalize_text(text):

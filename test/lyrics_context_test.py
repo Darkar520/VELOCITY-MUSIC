@@ -15,10 +15,13 @@ class ContextTests(unittest.TestCase):
         self.assertEqual(normalize_text('  I’m here  '), "I'm here")
 
     def test_common_english_and_spanish_idioms_use_meaning_preserving_equivalents(self):
+        self.assertEqual(normalize_idioms('Try putting yourself in my shoes.', 'en'), 'Try to understand how I feel.')
         self.assertEqual(normalize_idioms('You keep brushing me off.', 'en'), 'You keep not taking me seriously.')
-        self.assertEqual(normalize_idioms('I need to get this off my chest.', 'en'), 'I need to talk about how I feel.')
-        self.assertEqual(normalize_idioms('No sabes la falta que me haces.', 'es'), 'no sabes cuánto te extraño.')
-        self.assertEqual(normalize_idioms('Se me hizo un nudo en la garganta.', 'es'), 'la emoción me dejó sin palabras.')
+        self.assertEqual(normalize_idioms('I need to get this off my chest.', 'en'), 'I need to tell you something that has been weighing on me.')
+        self.assertEqual(normalize_idioms("I'm done walking on eggshells around you.", 'en'), 'I cannot keep trying to avoid upsetting you.')
+        self.assertEqual(normalize_idioms('No sabes la falta que me haces.', 'es'), 'No sabes cuánto te extraño.')
+        self.assertEqual(normalize_idioms('Se me hizo un nudo en la garganta.', 'es'), 'Sentí un nudo en la garganta.')
+        self.assertEqual(normalize_idioms('Me da pena que esto termine así.', 'es'), 'Me entristece que esto tenga que terminar así.')
 
     def test_idiom_equivalence_is_applied_across_timed_rows_without_losing_alignment_tokens(self):
         groups = phrase_groups(
@@ -29,6 +32,13 @@ class ContextTests(unittest.TestCase):
         self.assertEqual([index for index, _ in groups[0]], [0, 1])
         self.assertEqual([token for _, row in groups[0] for token in row], 'You keep not taking me seriously.'.split())
         self.assertTrue(all(row for _, row in groups[0]))
+
+        chest = phrase_groups(
+            ['I need to get', 'this off my chest.'],
+            lambda text: text.split(),
+            transform_group=lambda text: normalize_idioms(text, 'en'),
+        )
+        self.assertEqual([token for _, row in chest[0] for token in row], 'I need to tell you something that has been weighing on me.'.split())
 
     def test_idiom_equivalences_do_not_cross_blank_stanza_boundaries(self):
         groups = phrase_groups(
