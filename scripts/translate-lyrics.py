@@ -6,6 +6,7 @@ import re
 import ctranslate2
 import sentencepiece
 from langdetect import detect_langs, DetectorFactory
+from lyrics_context import phrase_groups, align_translation
 
 DetectorFactory.seed = 0
 sys.stdin.reconfigure(encoding='utf-8')
@@ -38,15 +39,19 @@ else:
 # The OPUS ES->EN pack produces degenerate output when dynamically quantized
 # to int8 on this CPU. Keep its native float32 weights; EN->ES is int8-tested.
 translator = ctranslate2.Translator(str(package / 'model'), device='cpu', compute_type='float32' if source == 'es' else 'int8', inter_threads=1, intra_threads=2)
-unique = list(dict.fromkeys(line for line in lines if line.strip()))
+groups = phrase_groups(lines, encode, max_lines=3, max_tokens=96)
 prefix = metadata.get('target_prefix', '')
-results = translator.translate_batch([encode(line) for line in unique], target_prefix=[[prefix]] * len(unique) if prefix else None, beam_size=4, replace_unknowns=True, max_batch_size=256, batch_type='tokens', length_penalty=.2, max_decoding_length=256)
-translations = {}
-for line, result in zip(unique, results):
+inputs = [[token for _, row in group for token in row] for group in groups]
+owners = [[owner for owner, (_, row) in enumerate(group) for _ in row] for group in groups]
+results = translator.translate_batch(inputs, target_prefix=[[prefix]] * len(inputs) if prefix else None, beam_size=4, replace_unknowns=True, max_batch_size=256, batch_type='tokens', length_penalty=.2, max_decoding_length=256, return_attention=True)
+translations = [''] * len(lines)
+for group, owner, result in zip(groups, owners, results):
     text = decode(result.hypotheses[0])
     if len(result.hypotheses[0]) >= 256 or re.search(r'(.{4,24})\1{6,}', text):
         raise ValueError('Degenerate or truncated model output')
     if prefix and text.startswith(prefix):
         text = text[len(prefix):]
-    translations[line] = text.strip()
-print(json.dumps({'status': 'ready', 'sourceLanguage': source, 'targetLanguage': target, 'model': 'argos-' + source + '-' + target + '-' + metadata.get('package_version', ''), 'lines': [translations.get(line, '') for line in lines]}, ensure_ascii=False))
+    aligned = align_translation(result.hypotheses[0], result.attention, owner, len(group), decode)
+    for (line_index, _), translated in zip(group, aligned):
+        translations[line_index] = translated
+print(json.dumps({'status': 'ready', 'sourceLanguage': source, 'targetLanguage': target, 'model': 'argos-' + source + '-' + target + '-' + metadata.get('package_version', ''), 'engineVersion': 'argos-context-v1', 'lines': translations}, ensure_ascii=False))

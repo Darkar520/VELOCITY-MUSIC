@@ -7,7 +7,7 @@
 import { api } from './api.js';
 import * as offline from './offline.js';
 import { trackById } from './catalog.js';
-import { translateRecord, matchingTranslation } from './lyricsTranslation.js';
+import { translateRecord, matchingTranslation, TRANSLATION_ENGINE_VERSION } from './lyricsTranslation.js';
 
 export function isTrackInLibrary(trackId, { favs = [], playlists = [], savedPlaylists = [] } = {}) {
   if (!trackId) return false;
@@ -21,7 +21,7 @@ export async function ensureLyricsOffline(track) {
   if (!track?.id) return { status: 'failed', error: 'missing_track' };
   try {
     const existing = await offline.getLyrics(track.id);
-    if (existing?.synced && matchingTranslation(existing)) return { status: 'synced', record: existing };
+    if (existing?.synced && matchingTranslation(existing)?.engineVersion === TRANSLATION_ENGINE_VERSION) return { status: 'synced', record: existing };
 
     const base = {
       artist: track.artist,
@@ -58,7 +58,7 @@ export async function ensureLyricsOffline(track) {
  * @param {string|string[]} trackIds
  */
 const activeSyncs = new Map();
-const BACKFILL_STATE_PREFIX = 'velocity.lyricsBackfill.v3.';
+const BACKFILL_STATE_PREFIX = 'velocity.lyricsBackfill.v4.';
 
 function syncScope(scope) {
   const value = String(scope || (() => {

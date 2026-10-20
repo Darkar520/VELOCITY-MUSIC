@@ -1,4 +1,5 @@
 import { parseLRC } from './helpers.js';
+export const TRANSLATION_ENGINE_VERSION = 'argos-context-v1';
 
 export function lyricLines(record) {
   const synced = parseLRC(record?.synced);
@@ -13,9 +14,15 @@ export function matchingTranslation(record) {
 
 export async function translateRecord(record, api, signal) {
   const cached = matchingTranslation(record);
-  if (cached) return cached;
+  if (cached && (cached.engineVersion === TRANSLATION_ENGINE_VERSION || globalThis.navigator?.onLine === false)) return cached;
   const lines = lyricLines(record);
-  const result = await api.translateLyrics(lines, signal);
+  let result;
+  try { result = await api.translateLyrics(lines, signal); }
+  catch (error) {
+    if (signal?.aborted) throw error;
+    if (cached) return { ...cached, upgradePending:true };
+    throw error;
+  }
   if (result?.status !== 'ready' && result?.status !== 'unsupported') throw new Error('translation_unavailable');
   if (result.status === 'ready' && (result.lines?.length !== lines.length || result.lines.some(line => typeof line !== 'string'))) throw new Error('translation_alignment');
   return { ...result, sourceText: JSON.stringify(lines), lines: result.status === 'unsupported' ? lines.map(() => '') : result.lines };

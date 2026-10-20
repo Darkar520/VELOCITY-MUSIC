@@ -13,14 +13,14 @@ beforeEach(() => { localStorage.clear(); state.records.clear(); vi.resetAllMocks
 it('a failed lyric request is not marked complete merely because its result is an object', async () => {
   api.lyrics.mockResolvedValue(null);
   expect(await scheduleLibraryOfflineSync(['failed'], { scope: 'negative-control' })).toEqual([]);
-  const saved = JSON.parse(localStorage.getItem('velocity.lyricsBackfill.v3.negative-control'));
+  const saved = JSON.parse(localStorage.getItem('velocity.lyricsBackfill.v4.negative-control'));
   expect(saved.completed).toEqual([]);
   expect(saved.failed.failed.attempts).toBe(1);
 });
 
 it('existing synchronized lyrics gain an aligned offline translation without refetching lyrics', async () => {
   state.records.set('saved', { synced: '[00:01.00]A first original sentence\n[00:02.00]A second original sentence' });
-  api.translateLyrics.mockResolvedValue({ status: 'ready', sourceLanguage: 'en', targetLanguage: 'es', lines: ['Primera frase', 'Segunda frase'] });
+  api.translateLyrics.mockResolvedValue({ status: 'ready', engineVersion:'argos-context-v1', sourceLanguage: 'en', targetLanguage: 'es', lines: ['Primera frase', 'Segunda frase'] });
   expect(await scheduleLibraryOfflineSync(['saved'], { scope: 'migration' })).toEqual(['saved']);
   expect(api.lyrics).not.toHaveBeenCalled();
   expect(state.records.get('saved').translation.lines).toEqual(['Primera frase', 'Segunda frase']);
