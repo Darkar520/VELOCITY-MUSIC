@@ -18,6 +18,41 @@ test('deep mixes contain 50 real unique songs and different selections',()=>{
  assert.ok(first.every((t,i)=>i===0||t.artist!==first[i-1].artist));
  assert.notDeepEqual(new Set(first.map(t=>t.id)),new Set(next.map(t=>t.id)));
 });
+test('recommendations prefer studio recordings over duplicate live and remastered versions',()=>{
+ const candidates=[
+  {id:'live-first',title:'Hit Song (Live)',artist:'Artist 0'},
+  {id:'studio',title:'Hit Song',artist:'Artist 0',albumId:'album-hit'},
+  {id:'dash-remaster',title:'Track A - 2011 Remastered',artist:'Artist 1'},
+  {id:'track-a',title:'Track A',artist:'Artist 1'},
+  ...Array.from({length:50},(_,i)=>({id:'ordinary-'+i,title:'Ordinary '+i,artist:'Artist '+(i%10)})),
+ ];
+ const mix=balancedMix(candidates,'Artist 0');
+ const ids=new Set(mix.map(track=>track.id));
+ assert.equal(mix.length,50);
+ assert.ok(ids.has('studio'));
+ assert.ok(ids.has('track-a'));
+ assert.ok(!ids.has('live-first'));
+ assert.ok(!ids.has('dash-remaster'));
+});
+test('an alternative recording remains available when it is the only catalog version',()=>{
+ const candidates=[...Array.from({length:48},(_,i)=>({id:'normal-'+i,title:'Normal '+i,artist:'Artist '+(i%10)})),
+  {id:'only-live',title:'Song - Live',artist:'Artist 9'},
+  {id:'live-forever',title:'Live Forever',artist:'Artist 8'}];
+ const mix=balancedMix(candidates,'Artist 0');
+ assert.equal(mix.length,50);
+ assert.ok(mix.some(track=>track.id==='only-live'));
+ assert.ok(mix.some(track=>track.id==='live-forever'));
+});
+test('the featured mix puts recent and liked songs into its familiar opening before discovery',()=>{
+ const familiar=Array.from({length:10},(_,i)=>({id:'familiar-'+i,title:'Known '+i,artist:names[i]}));
+ const unseen=pool.filter(track=>!familiar.some(known=>known.artist===track.artist&&known.title===track.title));
+ const rows=deepRecommendationRows(unseen,{genres:[],artists:[]},0,{familiarTracks:familiar});
+ const featured=rows.find(row=>row.section==='En tu frecuencia').mixes[0].tracks;
+ const ids=new Set(featured.map(track=>track.id));
+ for(const track of familiar)assert.ok(ids.has(track.id),track.title+' should stay in the personalized mix');
+ assert.equal(featured.length,50);
+ assert.ok(featured.some(track=>!familiar.some(known=>known.id===track.id)),'the mix should still include discoveries');
+});
 test('scarce catalogs do not pretend to provide a varied 50-song mix',()=>{
  const scarce=pool.filter(t=>['Queen','Radiohead','Pink Floyd'].includes(t.artist));
  assert.equal(balancedMix(scarce,'Queen').length,15);

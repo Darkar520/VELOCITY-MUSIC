@@ -1,8 +1,28 @@
 import {artistIdentity,genreArtists} from './tasteProfile.js';
-import {dedupeByTitle} from '../helpers.js';
 export const MIX_TARGET=50;
 const hash=value=>{let h=2166136261;for(const char of String(value)){h=Math.imul(h^char.charCodeAt(0),16777619);}return h>>>0;};
 const gcd=(a,b)=>b?gcd(b,a%b):a;
+const ALTERNATE_RECORDING_RE=/\b(?:live|en\s+vivo|en\s+directo|remix(?:ed)?|remaster(?:ed)?|acoustic|ac[uú]stic|unplugged|session|sped[\s-]?up|slowed(?:\s+down)?|karaoke|instrumental|demo|bootleg|unreleased|rare|rarity|alternate\s+take|alt\s+take|b[\s-]?side|radio\s+edit|deluxe\s+edition|bonus\s+track)\b/i;
+const recordingBaseTitle=title=>{
+  const value=String(title||'').trim();
+  const bracket=/^(.*?)(?:\s*[([]([^\])]+)[)\]])$/.exec(value);
+  if(bracket&&ALTERNATE_RECORDING_RE.test(bracket[2]))return bracket[1].trim();
+  const suffix=/^(.*)\s+[-–—:|]\s+(.+)$/.exec(value);
+  if(suffix&&ALTERNATE_RECORDING_RE.test(suffix[2]))return suffix[1].trim();
+  return value;
+};
+const isAlternateRecording=track=>ALTERNATE_RECORDING_RE.test(String(track?.title||''));
+function uniqueRecommendationTracks(pool){
+  const best=new Map();
+  for(const track of pool||[]){
+    if(!track?.id||!track.title||!track.artist)continue;
+    const key=artistIdentity(track.artist)+'|'+recordingBaseTitle(track.title).normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase();
+    const score=(isAlternateRecording(track)?-100:0)+(track.albumId?20:0)+(track.album&&track.album!=='Sencillo'?5:0);
+    const current=best.get(key);
+    if(!current||score>current.score)best.set(key,{track,score});
+  }
+  return [...best.values()].map(entry=>entry.track);
+}
 export function contextualPool(pool,seed,prefs){
   const genres=Array.isArray(prefs)?prefs:prefs?.genres||[];
   const key=artistIdentity(seed);
@@ -11,10 +31,12 @@ export function contextualPool(pool,seed,prefs){
   allowed.add(key);
   return pool.filter(t=>allowed.has(artistIdentity(t.artist)));
 }
-export function balancedMix(pool,seed,variant=0){
-  const unique=dedupeByTitle(pool).filter(t=>t?.id&&t.title);
+export function balancedMix(pool,seed,variant=0,preferredIds=new Set()){
+  const unique=uniqueRecommendationTracks(pool);
   const groups=new Map();
+  const preferredSet=preferredIds instanceof Set?preferredIds:new Set(preferredIds||[]);
   for(const track of unique){const key=artistIdentity(track.artist);if(!key)continue;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(track);}
+  for(const tracks of groups.values())tracks.sort((a,b)=>Number(preferredSet.has(b.id))-Number(preferredSet.has(a.id)));
   const keys=[...groups.keys()];
   const preferred=artistIdentity(seed);
   const start=keys.indexOf(preferred);
@@ -22,7 +44,7 @@ export function balancedMix(pool,seed,variant=0){
   if(keys.length>1){const offset=variant%keys.length;keys.push(...keys.splice(0,offset));}
   const out=[];
   const cap=5;
-  const offsets=new Map(keys.map(key=>[key,hash(key+':'+variant)%groups.get(key).length]));
+  const offsets=new Map(keys.map(key=>[key,groups.get(key).some(track=>preferredSet.has(track.id))?0:hash(key+':'+variant)%groups.get(key).length]));
   const strides=new Map(keys.map(key=>{
     const length=groups.get(key).length;
     let stride=Math.min(7,length-1);
@@ -51,7 +73,7 @@ export function balancedMix(pool,seed,variant=0){
   }
   return out;
 }
-export function deepRecommendationRows(pool,prefs,variant=0){
+export function deepRecommendationRows(pool,prefs,variant=0,{familiarTracks=[]}={}){
   const genres=Array.isArray(prefs)?prefs:prefs?.genres||[];
   const selected=(prefs?.artists||[]).map(a=>a.name);
   const known=[...new Set(pool.map(t=>t.artist).filter(Boolean))];
@@ -72,7 +94,10 @@ export function deepRecommendationRows(pool,prefs,variant=0){
     return mixes;
   };
   const rows=[];
-  const featured=balancedMix(pool,selected[0]||names[0],variant);
+  const familiarCatalog=uniqueRecommendationTracks(familiarTracks);
+  const featuredPool=uniqueRecommendationTracks([...familiarCatalog,...pool]);
+  const familiarIds=new Set(familiarCatalog.map(t=>t.id));
+  const featured=balancedMix(featuredPool,selected[0]||names[0],variant,familiarIds);
   if(featured.length===MIX_TARGET)rows.push({section:'En tu frecuencia',mixes:[{label:'Tu frecuencia',featured:true,tracks:featured}]});
   const artistMixes=build(names,'Con ',0);
   if(artistMixes.length)rows.push({section:'Tus artistas y nuevas conexiones',mixes:artistMixes});
