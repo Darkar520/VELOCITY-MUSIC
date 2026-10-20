@@ -8,7 +8,7 @@ import { normalizeText } from './src/lib/normalize.js';
 import { resolveActiveMode, createModeWatchdog } from './src/services/resolutionMode.js';
 import { probeYtDlp, getYtDlpDiagnostics, getYtDlpLoad, createYtDlpExtractor, createYtDlpCatalog, createSoundCloudCatalog, createSoundCloudExtractor, YT_DLP_BIN_DIR, resolveYtDlpBin } from './src/extractors/ytdlp.js';
 import { startYtDlpAutoUpdate } from './src/services/ytdlpUpdater.js';
-import { createYTMusicCatalog, createYTMusicVideoSearch, createYTMusicArtist, createYTMusicAlbum, createYTMusicLyrics, createYTMusicSearchAll, createYTMusicRadio, createYTMusicSong, readyPromise as ytMusicReadyPromise } from './src/extractors/ytmusic.js';
+import { createYTMusicCatalog, createYTMusicVideoSearch, createYTMusicArtist, createYTMusicAlbum, createYTMusicLyrics, createYTMusicSearchAll, createYTMusicSearchMore, createYTMusicRadio, createYTMusicSong, readyPromise as ytMusicReadyPromise } from './src/extractors/ytmusic.js';
 import { installYtDlpByDownload } from './src/services/extractorSetup.js';
 import {
   createJsonUserRepo,
@@ -333,6 +333,7 @@ export async function bootstrap() {
         };
       };
     })(),
+    searchMoreImpl: createYTMusicSearchMore(),
     songByIdImpl: createYTMusicSong(),
     getActiveMode: () => activeMode,
     setActiveMode: refreshMode,

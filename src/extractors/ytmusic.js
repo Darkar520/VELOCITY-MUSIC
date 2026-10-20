@@ -25,6 +25,7 @@ import {
   buildNeighborArtistSet,
   requestedRadioLength,
 } from '../lib/radioCohesion.js';
+import { SEARCH_FILTERS, parseSearchRows } from '../lib/searchPagination.js';
 
 let _client = null;
 // Mutex de inicialización: una sola Promise compartida entre peticiones concurrentes
@@ -875,11 +876,10 @@ export async function searchAllYTMusic(query, limit = 20) {
 // contiene la lógica pura de combinar songs/álbumes/artistas + el invariante
 // "si las 3 sub-consultas fallan → lanzar".
 export async function searchAllWithClient(client, query, limit = 20) {
-  const [songsR, albumsR, artistsR] = await Promise.allSettled([
-    client.searchSongs(query),
-    client.searchAlbums(query),
-    client.searchArtists(query),
-  ]);
+  const pageCalls = typeof client.constructRequest === 'function'
+    ? Object.entries(SEARCH_FILTERS).map(async ([type, params]) => parseSearchRows(await client.constructRequest('search', { query, params }), type))
+    : [client.searchSongs(query), client.searchAlbums(query), client.searchArtists(query)].map((promise, index) => Promise.resolve(promise).then((results) => ({ results, continuation: null, type: ['songs', 'albums', 'artists'][index] })));
+  const [songsR, albumsR, artistsR] = await Promise.allSettled(pageCalls);
   // Si las TRES sub-consultas fallan, el cliente/red está caído: lanzar para
   // que withClient() re-inicialice y reintente, y si aun así falla, que el
   // endpoint active su retry/fallback. Antes se devolvía {songs:[],albums:[],
@@ -887,11 +887,16 @@ export async function searchAllWithClient(client, query, limit = 20) {
   if (songsR.status === 'rejected' && albumsR.status === 'rejected' && artistsR.status === 'rejected') {
     throw songsR.reason || albumsR.reason || artistsR.reason || new Error('searchAll: todas las sub-consultas fallaron');
   }
-  let songs = songsR.status === 'fulfilled' ? songsR.value.slice(0, Math.max(limit, 30)).map(mapYTMusicSong).filter(t => t.id && t.title) : [];
-  let albums = albumsR.status === 'fulfilled' ? albumsR.value.map(mapAlbumDetailed).filter(a => a.albumId) : [];
+  const continuations = {
+    songs: songsR.status === 'fulfilled' ? songsR.value.continuation : null,
+    albums: albumsR.status === 'fulfilled' ? albumsR.value.continuation : null,
+    artists: artistsR.status === 'fulfilled' ? artistsR.value.continuation : null,
+  };
+  let songs = songsR.status === 'fulfilled' ? songsR.value.results.slice(0, Math.max(limit, 30)).map(mapYTMusicSong).filter(t => t.id && t.title) : [];
+  let albums = albumsR.status === 'fulfilled' ? albumsR.value.results.map(mapAlbumDetailed).filter(a => a.albumId) : [];
   const artists = rankArtistResults(
     query,
-    artistsR.status === 'fulfilled' ? artistsR.value.map(mapArtistDetailed).filter(a => a.artistId) : [],
+    artistsR.status === 'fulfilled' ? artistsR.value.results.map(mapArtistDetailed).filter(a => a.artistId) : [],
   );
 
   // An exact artist search is entity navigation, not a fuzzy song/album query.
@@ -914,11 +919,12 @@ export async function searchAllWithClient(client, query, limit = 20) {
       songs: [...songById.values()].slice(0, Math.max(limit, 30)),
       albums: [...albumById.values()],
       artists: [primaryArtist],
+      continuations: { songs: null, albums: null, artists: null },
       context: { kind: 'artist', artistId: primaryArtist.artistId, name: primaryArtist.name },
     };
   }
-  albums = albums.slice(0, 12);
-  const visibleArtists = artists.slice(0, 12);
+  albums = albums.slice(0, 20);
+  const visibleArtists = artists.slice(0, 20);
 
   // Mejora para búsquedas de género/estilo: cuando los resultados de canciones
   // no son representativos (artistas poco conocidos dominan el top), enriquecer
@@ -958,18 +964,35 @@ export async function searchAllWithClient(client, query, limit = 20) {
   }
 
   songs = rankSearchSongs(query, songs, artists).slice(0, limit);
-  const direct = { songs, albums, artists: visibleArtists };
+  const direct = { songs, albums, artists: visibleArtists, continuations };
   let timer;
   try {
     const { enrichSearchContext } = await import('../lib/searchContext.js');
     return await Promise.race([
-      enrichSearchContext(client, query, direct, { normalize: normalizeText, mapSong: mapYTMusicSong, mapAlbum: mapAlbumDetailed, mapArtist: mapArtistDetailed, loadAlbum: getAlbumDataWithClient }).then(result => ({ ...result, songs: result.songs.slice(0, limit), albums: result.albums.slice(0, 12), artists: result.artists.slice(0, 12) })),
+      enrichSearchContext(client, query, direct, { normalize: normalizeText, mapSong: mapYTMusicSong, mapAlbum: mapAlbumDetailed, mapArtist: mapArtistDetailed, loadAlbum: getAlbumDataWithClient }).then(result => ({ ...result, songs: result.songs.slice(0, limit), albums: result.albums.slice(0, 20), artists: result.artists.slice(0, 20) })),
       new Promise(resolve => { timer = setTimeout(() => resolve(direct), 5000); }),
     ]);
   } finally { clearTimeout(timer); }
 }
 
+export async function searchMoreYTMusic(query, type, continuation) {
+  if (!SEARCH_FILTERS[type] || typeof continuation !== 'string' || !continuation || continuation.length > 8192) {
+    throw new Error('Parámetros de continuación inválidos.');
+  }
+  return withClient(async (client) => {
+    if (typeof client.constructRequest !== 'function') throw new Error('El proveedor no admite paginación.');
+    const page = parseSearchRows(await client.constructRequest('search', {}, { continuation }), type);
+    const mapped = type === 'songs'
+      ? page.results.map(mapYTMusicSong).filter((item) => item.id && item.title)
+      : type === 'albums'
+        ? page.results.map(mapAlbumDetailed).filter((item) => item.albumId)
+        : page.results.map(mapArtistDetailed).filter((item) => item.artistId);
+    return { results: mapped, continuation: page.continuation };
+  });
+}
+
 export function createYTMusicSearchAll() { return (query, limit) => searchAllYTMusic(query, limit); }
+export function createYTMusicSearchMore() { return (query, type, continuation) => searchMoreYTMusic(query, type, continuation); }
 
 // Eager initialization on module load.
 // startInit() arranca la inicialización inmediatamente al importar el módulo,

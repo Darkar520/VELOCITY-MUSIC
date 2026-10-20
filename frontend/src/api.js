@@ -152,6 +152,11 @@ export const api = {
     const res = await this._fetchWithRetry(`/api/search/all?q=${encodeURIComponent(q)}`, { signal });
     return jsonOrThrow(res);
   },
+  async searchMore(q, type, continuation, signal) {
+    const params = new URLSearchParams({ q, type, continuation });
+    const res = await this._fetchWithRetry(`/api/search/more?${params}`, { signal });
+    return jsonOrThrow(res);
+  },
   // URL base del proxy (sin firma). Preferir ensureStreamUrl para <audio>/descargas.
   // quality: 'high' | 'medium' | 'low' (mapeado desde la preferencia del usuario)
   // stream: URL directa (opcional, para SoundCloud/fuentes sin resolución).

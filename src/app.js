@@ -91,6 +91,7 @@ export function createApp(deps = {}) {
     radioImpl = null,
     lyricsByIdImpl = null,
     searchAllImpl = null,
+    searchMoreImpl = null,
     getActiveMode = () => 'degraded',
     setActiveMode = null,
     extractorProbe = null,
@@ -655,6 +656,21 @@ export function createApp(deps = {}) {
       }
     }
     return res.json(data);
+  });
+
+  app.get('/api/search/more', async (req, res) => {
+    const q = String(req.query.q || '').trim();
+    const type = String(req.query.type || '');
+    const continuation = String(req.query.continuation || '');
+    if (!q) return res.status(400).json({ error: 'Falta el parámetro q.' });
+    if (!['songs', 'albums', 'artists'].includes(type)) return res.status(400).json({ error: 'Tipo de resultado inválido.' });
+    if (!continuation || continuation.length > 8192) return res.status(400).json({ error: 'Cursor de resultados inválido.' });
+    if (typeof searchMoreImpl !== 'function') return res.status(501).json({ error: 'Paginación no disponible.' });
+    try {
+      return res.json(await withTimeout(searchMoreImpl(q, type, continuation), 20000));
+    } catch {
+      return res.status(502).json({ error: 'No se pudieron cargar más resultados.' });
+    }
   });
 
   // ---- Artista (perfil: top canciones + álbumes reales) ----

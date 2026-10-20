@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { api } from '../api.js';
 import { hex2rgba, grad, hiResCover } from '../helpers.js';
 import { GENRES, FALLBACK_COVER } from '../constants.js';
@@ -25,6 +25,11 @@ export function SearchTab({ T, play, addToTarget, onMenu, onToggleFav, recentSea
   const [q, setQ] = useState('');
   const [res, setRes] = useState({ songs: [], albums: [], artists: [] });
   const [activeResultSection, setActiveResultSection] = useState('all');
+  const [moreLoading, setMoreLoading] = useState(false);
+  const [moreError, setMoreError] = useState('');
+  const queryRef = useRef('');
+  const resultEpochRef = useRef(0);
+  queryRef.current = q.trim();
   const [relatedMixes, setRelatedMixes] = useState([]);
   const [chosenSeed,setChosenSeed] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -35,8 +40,10 @@ export function SearchTab({ T, play, addToTarget, onMenu, onToggleFav, recentSea
 
   useEffect(() => {
     const term = q.trim();
+    const resultEpoch = ++resultEpochRef.current;
     setActiveResultSection('all');
-    if (!term) { setRes({ songs: [], albums: [], artists: [] }); setErr(''); setLoading(false); setSlowWarning(false); return; }
+    setMoreLoading(false); setMoreError('');
+    if (!term) { setRes({ songs: [], albums: [], artists: [], continuations: {} }); setErr(''); setLoading(false); setSlowWarning(false); setMoreLoading(false); setMoreError(''); return; }
     setLoading(true); setErr(''); setSlowWarning(false);
     const ctrl = new AbortController();
     let alive = true;                                  // solo la búsqueda vigente actualiza la UI
@@ -49,11 +56,11 @@ export function SearchTab({ T, play, addToTarget, onMenu, onToggleFav, recentSea
       const attempt = async () => {
         try {
           const d = await api.searchAll(term, ctrl.signal);
-          return { context: d.context, songs: dedupeByRelevance(term, (d.songs || []).map(normalizeTrack), d.context), albums: d.albums || [], artists: d.artists || [] };
+          return { context: d.context, continuations: d.continuations || {}, songs: dedupeByRelevance(term, (d.songs || []).map(normalizeTrack), d.context), albums: d.albums || [], artists: d.artists || [] };
         } catch (e) {
           if (aborted(e)) throw e;                      // cancelada: no es error real
           const raw = await api.search(term, ctrl.signal); // respaldo
-          return { songs: dedupeByRelevance(term, raw.map(normalizeTrack)), albums: [], artists: [] };
+          return { songs: dedupeByRelevance(term, raw.map(normalizeTrack)), albums: [], artists: [], continuations: {} };
         }
       };
       try {
@@ -66,7 +73,7 @@ export function SearchTab({ T, play, addToTarget, onMenu, onToggleFav, recentSea
           data = await attempt();
         }
         if (!alive || ctrl.signal.aborted) return;
-        setRes(data); setErr(''); setSlowWarning(false);
+        setRes(data); setErr(''); setSlowWarning(false); setMoreError('');
         // Enriquecer carátulas de YouTube en background: no bloquea la UI.
         enrichTracksInBackground(data.songs, (id, coverUrl) => {
           const existing = trackById(id);
@@ -97,6 +104,29 @@ export function SearchTab({ T, play, addToTarget, onMenu, onToggleFav, recentSea
     }, 380);
     return () => { alive = false; clearTimeout(id); clearTimeout(slowTimer); ctrl.abort(); };
   }, [q, retryKey]);
+
+  const loadMore = async (type) => {
+    const continuation = res.continuations?.[type];
+    const term = q.trim();
+    const resultEpoch = resultEpochRef.current;
+    if (!continuation || moreLoading || !term) return;
+    setMoreLoading(true); setMoreError('');
+    try {
+      const page = await api.searchMore(term, type, continuation);
+      if (queryRef.current !== term || resultEpochRef.current !== resultEpoch) return;
+      const rows = type === 'songs' ? (page.results || []).map(normalizeTrack) : (page.results || []);
+      const key = type === 'songs' ? 'id' : type === 'albums' ? 'albumId' : 'artistId';
+      setRes((current) => ({
+        ...current,
+        [type]: [...(current[type] || []), ...rows.filter((row) => row?.[key] && !current[type].some((existing) => existing?.[key] === row[key]))],
+        continuations: { ...(current.continuations || {}), [type]: page.continuation || null },
+      }));
+    } catch (error) {
+      if (queryRef.current === term && resultEpochRef.current === resultEpoch) setMoreError(error?.message || 'No se pudieron cargar más resultados.');
+    } finally {
+      if (queryRef.current === term && resultEpochRef.current === resultEpoch) setMoreLoading(false);
+    }
+  };
 
   const runGenre = (g) => { setQ(g.q); addSearch(g.label); };
   const empty = !res.songs.length && !res.albums.length && !res.artists.length;
@@ -201,6 +231,12 @@ export function SearchTab({ T, play, addToTarget, onMenu, onToggleFav, recentSea
             {[['all','Todo',res.artists.length + res.albums.length + res.songs.length],['artists','Artistas',res.artists.length],['albums','Álbumes',res.albums.length],['songs','Canciones',res.songs.length]].map(([id,label,count]) => count > 0 && <button key={id} role="tab" aria-selected={activeResultSection === id} onClick={() => setActiveResultSection(id)} className="press" style={{flexShrink:0,background:activeResultSection === id ? hex2rgba(T.accent,.16) : 'var(--surf-1)',border:`1px solid ${activeResultSection === id ? hex2rgba(T.accent,.5) : 'var(--line)'}`,borderRadius:999,padding:'8px 13px',cursor:'pointer',color:activeResultSection === id ? T.accent : 'var(--txt-1)',fontSize:11.5,fontWeight:800}}>{label} · {count}</button>)}
           </div>}
           {(activeResultSection === 'all' ? searchSectionOrder(res.context) : [activeResultSection]).map(section => searchSections[section])}
+          {activeResultSection !== 'all' && res.continuations?.[activeResultSection] && <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:8,margin:'8px 0 24px'}}>
+            {moreError && <div role="status" style={{color:'#fb7185',fontSize:12}}>{moreError}</div>}
+            <button type="button" onClick={() => loadMore(activeResultSection)} disabled={moreLoading} className="btn-tap" style={{background:'var(--surf-1)',border:'1px solid var(--line)',borderRadius:999,padding:'10px 22px',cursor:moreLoading?'wait':'pointer',color:'var(--txt-0)',fontSize:12,fontWeight:800,opacity:moreLoading ? 0.7 : 1}}>
+              {moreLoading ? 'Cargando…' : 'Cargar más resultados'}
+            </button>
+          </div>}
 
           {/* Mixes relacionados: radio de la canción top + artistas top del resultado */}
           {relatedMixes.length > 0 && (<>

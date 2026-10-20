@@ -1,10 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { belongsToArtist, exactArtistMatch, rankArtistResults } from '../src/lib/catalogSearchRanking.js';
+import { SEARCH_FILTERS } from '../src/lib/searchPagination.js';
 
 const browsePage = (contents) => ({ contents: { singleColumnBrowseResultsRenderer: {
   tabs: [{ tabRenderer: { content: { sectionListRenderer: { contents } } } }],
 } } });
+const searchPage = (row, continuation) => {
+  const shelf = { musicShelfRenderer: { contents: [row], continuations: [{ nextContinuationData: { continuation } }] } };
+  const sectionListRenderer = { contents: [shelf] };
+  const tabRenderer = { content: { sectionListRenderer } };
+  return { contents: { tabbedSearchResultsRenderer: { tabs: [{ tabRenderer }] } } };
+};
 
 test('exact artist result ranks above a channel whose name merely contains the query', () => {
   const results = [
@@ -68,6 +75,9 @@ test('combined exact artist search suppresses title homonyms and returns the rea
     ],
     getArtist: async () => ({ name: 'PINK FLOYD', artistId: 'UC-pink', thumbnails: [], topSongs: [], topAlbums: [] }),
     constructRequest: async (_endpoint, body) => {
+      if (body.params === SEARCH_FILTERS.songs) return searchPage(track, 'song-next');
+      if (body.params === SEARCH_FILTERS.albums) return searchPage(card('MPREb_wall', 'The Wall'), 'album-next');
+      if (body.params === SEARCH_FILTERS.artists) return searchPage(card('UC-pink', 'PINK FLOYD'), 'artist-next');
       if (body.browseId === 'MPAD-pink') return albumPage;
       if (body.browseId === 'VLOLAK5uy-top') return browsePage([{ musicPlaylistShelfRenderer: { contents: [track] } }]);
       return artistPage;
