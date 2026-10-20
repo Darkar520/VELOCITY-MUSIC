@@ -181,9 +181,9 @@ export function DetailView({ view, T, play, addToTarget, onMenu, onToggleFav, go
         ) : (
           <>
             {albums.length > 0 && <>
-              <SectionHeader label="Álbumes" accent={T.accent} />
-              <div className="carousel" style={{ gap:15, paddingBottom:6, marginBottom:20 }}>
-                {albums.map(a => <MediaCard key={a.albumId} cover={a.cover} title={a.name} subtitle={a.year ? String(a.year) : 'Álbum'} T={T} onClick={() => goAlbum(a.albumId, a.name, name, null, a.cover)} />)}
+              <SectionHeader label={`Discografía (${albums.length})`} accent={T.accent} />
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(140px, 1fr))', gap:15, marginBottom:22 }}>
+                {albums.map(a => <MediaCard key={a.albumId} cover={a.cover} title={a.name} subtitle={[a.year, a.type === 'SINGLE' ? 'Sencillo' : null].filter(Boolean).join(' · ') || 'Álbum'} T={T} onClick={() => goAlbum(a.albumId, a.name, name, null, a.cover)} />)}
               </div>
             </>}
             <SectionHeader label="Canciones populares" accent={T.accent} action={!selecting && <button onClick={() => startSelection()} className="press" style={{ background:'none', border:'none', cursor:'pointer', color:T.accent, fontSize:11.5, fontWeight:800 }}>Seleccionar</button>} />

@@ -24,6 +24,7 @@ export function SearchTab({ T, play, addToTarget, onMenu, onToggleFav, recentSea
   const toggleFav = onToggleFav || (() => {});
   const [q, setQ] = useState('');
   const [res, setRes] = useState({ songs: [], albums: [], artists: [] });
+  const [activeResultSection, setActiveResultSection] = useState('all');
   const [relatedMixes, setRelatedMixes] = useState([]);
   const [chosenSeed,setChosenSeed] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -34,6 +35,7 @@ export function SearchTab({ T, play, addToTarget, onMenu, onToggleFav, recentSea
 
   useEffect(() => {
     const term = q.trim();
+    setActiveResultSection('all');
     if (!term) { setRes({ songs: [], albums: [], artists: [] }); setErr(''); setLoading(false); setSlowWarning(false); return; }
     setLoading(true); setErr(''); setSlowWarning(false);
     const ctrl = new AbortController();
@@ -100,8 +102,8 @@ export function SearchTab({ T, play, addToTarget, onMenu, onToggleFav, recentSea
   const empty = !res.songs.length && !res.albums.length && !res.artists.length;
   const searchSections = {
     artists: res.artists.length > 0 && <React.Fragment key="artists">
-      <SectionHeader label="Artistas" accent={T.accent} />
-      <div className="carousel" style={{ gap:15, paddingBottom:6, paddingTop:2, marginBottom:18 }}>
+      <SectionHeader label="Artistas" accent={T.accent} action={activeResultSection === 'all' && <button onClick={() => setActiveResultSection('artists')} className="press" style={{ background:'none', border:'none', cursor:'pointer', color:T.accent, fontSize:11.5, fontWeight:800 }}>Ver todos ({res.artists.length})</button>} />
+      <div className={activeResultSection === 'all' ? 'carousel' : ''} style={activeResultSection === 'all' ? { gap:15, paddingBottom:6, paddingTop:2, marginBottom:18 } : { display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(104px, 1fr))', gap:18, marginBottom:20 }}>
         {res.artists.map(a => (
           <div key={a.artistId} onClick={() => { goArtist(a.artistId, a.name); addSearch(a.name); }} className="card-hover" style={{ flexShrink:0, width:104, cursor:'pointer', textAlign:'center' }}>
             <CoverImg src={a.thumbnail} alt={a.name} radius={999} style={{ width:104, height:104, borderRadius:'50%', boxShadow:'0 8px 22px #0007' }} />
@@ -112,13 +114,13 @@ export function SearchTab({ T, play, addToTarget, onMenu, onToggleFav, recentSea
       </div>
     </React.Fragment>,
     albums: res.albums.length > 0 && <React.Fragment key="albums">
-      <SectionHeader label="Álbumes" accent={T.accent} />
-      <div className="carousel" style={{ gap:15, paddingBottom:6, paddingTop:2, marginBottom:18 }}>
+      <SectionHeader label="Álbumes" accent={T.accent} action={activeResultSection === 'all' && <button onClick={() => setActiveResultSection('albums')} className="press" style={{ background:'none', border:'none', cursor:'pointer', color:T.accent, fontSize:11.5, fontWeight:800 }}>Ver todos ({res.albums.length})</button>} />
+      <div className={activeResultSection === 'all' ? 'carousel' : ''} style={activeResultSection === 'all' ? { gap:15, paddingBottom:6, paddingTop:2, marginBottom:18 } : { display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(140px, 1fr))', gap:15, marginBottom:20 }}>
         {res.albums.map(a => <MediaCard key={a.albumId} cover={a.cover} title={a.name} subtitle={`${a.artist || 'Álbum'}${a.year ? ' · ' + a.year : ''}`} T={T} onClick={() => goAlbum(a.albumId, a.name, a.artist, null, a.cover)} />)}
       </div>
     </React.Fragment>,
     songs: res.songs.length > 0 && <React.Fragment key="songs">
-      <SectionHeader label="Canciones" accent={T.accent} action={!selecting && <button onClick={() => startSelection()} className="press" style={{ background:'none', border:'none', cursor:'pointer', color:T.accent, fontSize:11.5, fontWeight:800 }}>Seleccionar</button>} />
+      <SectionHeader label="Canciones" accent={T.accent} action={<div style={{display:'flex',gap:12,alignItems:'center'}}>{activeResultSection === 'all' && <button onClick={() => setActiveResultSection('songs')} className="press" style={{ background:'none', border:'none', cursor:'pointer', color:T.accent, fontSize:11.5, fontWeight:800 }}>Ver todas ({res.songs.length})</button>}{!selecting && <button onClick={() => startSelection()} className="press" style={{ background:'none', border:'none', cursor:'pointer', color:T.accent, fontSize:11.5, fontWeight:800 }}>Seleccionar</button>}</div>} />
       <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
         {res.songs.map(t => <TrackRow key={t.id} track={t} active={t.id===track?.id} playing={playing} T={T} onClick={() => { setChosenSeed({query:q.trim(),track:t}); play(t, [t.id], { radio: true }); addSearch(q.trim(),t); }} onSwipeRemove={removeFromQueue} onFav={toggleFav} faved={favs.includes(t.id)} onAdd={addToTarget} onMenu={onMenu} downloaded={downloaded.has(t.id)} downloading={downloading.has(t.id)} selecting={selecting} selected={selection.has(t.id)} onSelect={toggleSelect} onSwipeQueue={addToQueue} />)}
       </div>
@@ -195,7 +197,10 @@ export function SearchTab({ T, play, addToTarget, onMenu, onToggleFav, recentSea
           )}
           {!loading && !err && empty && <div style={{ textAlign:'center', color:'var(--txt-2)', fontSize:13, paddingTop:36 }}>Sin resultados para "{q}"</div>}
 
-          {searchSectionOrder(res.context).map(section => searchSections[section])}
+          {!empty && <div role="tablist" aria-label="Tipo de resultado" style={{display:'flex',gap:8,overflowX:'auto',paddingBottom:12,marginBottom:10}}>
+            {[['all','Todo',res.artists.length + res.albums.length + res.songs.length],['artists','Artistas',res.artists.length],['albums','Álbumes',res.albums.length],['songs','Canciones',res.songs.length]].map(([id,label,count]) => count > 0 && <button key={id} role="tab" aria-selected={activeResultSection === id} onClick={() => setActiveResultSection(id)} className="press" style={{flexShrink:0,background:activeResultSection === id ? hex2rgba(T.accent,.16) : 'var(--surf-1)',border:`1px solid ${activeResultSection === id ? hex2rgba(T.accent,.5) : 'var(--line)'}`,borderRadius:999,padding:'8px 13px',cursor:'pointer',color:activeResultSection === id ? T.accent : 'var(--txt-1)',fontSize:11.5,fontWeight:800}}>{label} · {count}</button>)}
+          </div>}
+          {(activeResultSection === 'all' ? searchSectionOrder(res.context) : [activeResultSection]).map(section => searchSections[section])}
 
           {/* Mixes relacionados: radio de la canción top + artistas top del resultado */}
           {relatedMixes.length > 0 && (<>

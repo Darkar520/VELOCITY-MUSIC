@@ -12,6 +12,8 @@
 
 import YTMusic from 'ytmusic-api';
 import { verifiedArtistProfile } from '../lib/artistRelations.js';
+import { artistDiscographyCards, artistDiscographyEndpoints, artistTopSongsEndpoint, artistTopSongsItems, mapArtistDiscographyItems, mapArtistTopSongs } from '../lib/artistDiscography.js';
+import { belongsToArtist, exactArtistMatch, rankArtistResults } from '../lib/catalogSearchRanking.js';
 
 import { normalizeText } from '../lib/normalize.js';
 import { artistNameMatches } from '../lib/lyricsMatch.js';
@@ -311,22 +313,44 @@ export function createYTMusicVideoSearch() {
 
 /** Perfil de artista: nombre, portada, canciones más escuchadas y álbumes. */
 export async function getArtistData(artistId) {
-  return withClient(async (client) => {
+  return withClient((client) => getArtistDataWithClient(client, artistId));
+}
+
+async function getArtistCatalogWithClient(client, artistId, artistName) {
+  if (typeof client.constructRequest !== 'function') return { albums: [], songs: [] };
+  try {
+    const artistPage = await client.constructRequest('browse', { browseId: artistId });
+    const endpoints = artistDiscographyEndpoints(artistPage);
+    const topEndpoint = artistTopSongsEndpoint(artistPage);
+    const pages = await Promise.all([
+      ...endpoints.map(({ endpoint }) => client.constructRequest('browse', endpoint).catch(() => null)),
+      topEndpoint?.browseId
+        ? client.constructRequest('browse', { browseId: topEndpoint.browseId, params: topEndpoint.params }).catch(() => null)
+        : Promise.resolve(null),
+    ]);
+    const discographyPages = pages.slice(0, endpoints.length);
+    const songsPage = pages[endpoints.length];
+    return {
+      albums: mapArtistDiscographyItems(discographyPages.flatMap(artistDiscographyCards), artistName),
+      songs: mapArtistTopSongs(artistTopSongsItems(songsPage), artistId, artistName),
+    };
+  } catch {
+    return { albums: [], songs: [] };
+  }
+}
+
+export async function getArtistDataWithClient(client, artistId) {
     const a = await verifiedArtistProfile(client, artistId);
     const artistName = a.name ?? null;
     const key = normalizeText(artistName || '');
 
-    // Álbumes fiables: getArtist().topAlbums suele ser correcto. getArtistAlbums()
-    // a veces devuelve playlists/recomendaciones ajenas, así que reforzamos con una
-    // búsqueda directa y filtramos por artista coincidente, descartando playlists.
+    // `getArtistAlbums()` de ytmusic-api 5.3.1 asigna el artistId como albumId
+    // para todo el estante. Leer los browse IDs reales del estante evita abrir
+    // perfiles de artista como si fueran álbumes y permite servir toda la lista.
     let albums = Array.isArray(a.topAlbums) ? a.topAlbums.slice() : [];
-    if (albums.length < 4 && artistName) {
-      try { const s = await client.searchAlbums(artistName); if (Array.isArray(s)) albums = albums.concat(s); } catch {}
-    }
-    if (albums.length < 2) {
-      try { const more = await client.getArtistAlbums(artistId); if (Array.isArray(more)) albums = albums.concat(more); } catch {}
-    }
-    const isAlbumId = (id) => typeof id === 'string' && !/^(VL|PL|RDCLAK)/.test(id);
+    const catalog = await getArtistCatalogWithClient(client, artistId, artistName);
+    albums = [...albums, ...catalog.albums];
+    const isAlbumId = (id) => typeof id === 'string' && /^MPREb_[\w-]+$/.test(id);
     const seenAlb = new Set();
     const mappedAlbums = albums
       .map(mapAlbumDetailed)
@@ -341,27 +365,34 @@ export async function getArtistData(artistId) {
         return alArtist === key || alArtist.startsWith(key + ' ') || alArtist.split(/,\s*/).some(p => p === key);
       })
       .filter((al) => { if (seenAlb.has(al.albumId)) return false; seenAlb.add(al.albumId); return true; });
+    const topSongAlbums = new Map();
+    for (const song of [...(a.topSongs || []), ...catalog.songs]) {
+      const albumId = song?.album?.albumId || song?.albumId;
+      if (albumId) topSongAlbums.set(albumId, (topSongAlbums.get(albumId) || 0) + 1);
+    }
+    mappedAlbums.sort((left, right) =>
+      (topSongAlbums.get(right.albumId) || 0) - (topSongAlbums.get(left.albumId) || 0));
 
-    // Canciones: topSongs suele ser fiable. getArtistSongs a veces mete
-    // recomendaciones ajenas ("Dale Don Dale" en System of a Down). Filtramos
-    // siempre por coincidencia de artista y priorizamos el orden de topSongs.
+    // La lib getArtistSongs está rota para el browseId Top songs actual (HTTP
+    // 400); conservamos topSongs y completamos con una búsqueda por nombre,
+    // aceptando sólo créditos del artista exacto.
     let rawSongs = Array.isArray(a.topSongs) ? a.topSongs.slice() : [];
-    try {
-      const full = await client.getArtistSongs(artistId);
-      if (Array.isArray(full) && full.length) {
-        const seen = new Set(rawSongs.map((s) => s.videoId || s.id).filter(Boolean));
-        for (const s of full) {
-          const vid = s.videoId || s.id;
-          if (vid && seen.has(vid)) continue;
-          if (vid) seen.add(vid);
-          rawSongs.push(s);
+    const mappedCatalogSongs = catalog.songs;
+    if (artistName && typeof client.searchSongs === 'function') {
+      try {
+        const searched = await client.searchSongs(artistName);
+        const seen = new Set(rawSongs.map((song) => song.videoId || song.id).filter(Boolean));
+        for (const song of searched || []) {
+          const id = song.videoId || song.id;
+          if (id && !seen.has(id)) { seen.add(id); rawSongs.push(song); }
         }
-      }
-    } catch {}
+      } catch {}
+    }
     const mappedSongs = rawSongs
       .map(mapYTMusicSong)
       .filter((s) => s.id && s.title)
-      .filter((s) => !key || artistNameMatches(s.artist, artistName));
+      .filter((s) => !key || belongsToArtist(s, { artistId, name: artistName }));
+    for (const song of mappedCatalogSongs) mappedSongs.push(song);
     // Deduplicar por título normalizado (misma canción, distintas subidas).
     const seenTitle = new Set();
     const topSongs = mappedSongs.filter((s) => {
@@ -382,7 +413,6 @@ export async function getArtistData(artistId) {
           .filter((x) => x.id && x.name)
         : [],
     };
-  });
 }
 
 /** Álbum completo: metadatos + lista de pistas. */
@@ -858,15 +888,44 @@ export async function searchAllWithClient(client, query, limit = 20) {
     throw songsR.reason || albumsR.reason || artistsR.reason || new Error('searchAll: todas las sub-consultas fallaron');
   }
   let songs = songsR.status === 'fulfilled' ? songsR.value.slice(0, Math.max(limit, 30)).map(mapYTMusicSong).filter(t => t.id && t.title) : [];
-  const albums = albumsR.status === 'fulfilled' ? albumsR.value.slice(0, 12).map(mapAlbumDetailed).filter(a => a.albumId) : [];
-  const artists = artistsR.status === 'fulfilled' ? artistsR.value.slice(0, 12).map(mapArtistDetailed).filter(a => a.artistId) : [];
+  let albums = albumsR.status === 'fulfilled' ? albumsR.value.map(mapAlbumDetailed).filter(a => a.albumId) : [];
+  const artists = rankArtistResults(
+    query,
+    artistsR.status === 'fulfilled' ? artistsR.value.map(mapArtistDetailed).filter(a => a.artistId) : [],
+  );
+
+  // An exact artist search is entity navigation, not a fuzzy song/album query.
+  // Resolve its real profile first, then suppress text homonyms and tribute
+  // channels from all three result groups.
+  const primaryArtist = exactArtistMatch(query, artists);
+  if (primaryArtist) {
+    let profile = null;
+    try { profile = await getArtistDataWithClient(client, primaryArtist.artistId); } catch {}
+    const ownSongs = profile?.topSongs || [];
+    const directSongs = songs.filter((song) => belongsToArtist(song, primaryArtist));
+    const songById = new Map();
+    for (const song of [...ownSongs, ...directSongs]) if (song?.id && !songById.has(song.id)) songById.set(song.id, song);
+    const ownAlbums = profile?.albums || albums.filter((album) => belongsToArtist(album, primaryArtist));
+    const albumById = new Map();
+    for (const album of [...ownAlbums, ...albums]) {
+      if (album?.albumId && belongsToArtist(album, primaryArtist) && !albumById.has(album.albumId)) albumById.set(album.albumId, album);
+    }
+    return {
+      songs: [...songById.values()].slice(0, Math.max(limit, 30)),
+      albums: [...albumById.values()],
+      artists: [primaryArtist],
+      context: { kind: 'artist', artistId: primaryArtist.artistId, name: primaryArtist.name },
+    };
+  }
+  albums = albums.slice(0, 12);
+  const visibleArtists = artists.slice(0, 12);
 
   // Mejora para búsquedas de género/estilo: cuando los resultados de canciones
   // no son representativos (artistas poco conocidos dominan el top), enriquecer
   // con canciones de los artistas más representativos de los álbumes encontrados.
   // Solo si la query NO parece un artista concreto (evita contaminar "System of a Down").
   const nq = normalizeText(query);
-  const looksLikeArtist = artists.some((a) => {
+  const looksLikeArtist = visibleArtists.some((a) => {
     const na = normalizeText(a.name || '');
     return na === nq || artistNameMatches(a.name, query);
   });
@@ -899,7 +958,7 @@ export async function searchAllWithClient(client, query, limit = 20) {
   }
 
   songs = rankSearchSongs(query, songs, artists).slice(0, limit);
-  const direct = { songs, albums, artists };
+  const direct = { songs, albums, artists: visibleArtists };
   let timer;
   try {
     const { enrichSearchContext } = await import('../lib/searchContext.js');
