@@ -21,6 +21,14 @@ IDIOM_EQUIVALENTS = {
     ),
 }
 
+# Keep common multiword connective/adverbial units attached to the clause they
+# introduce when assigning a translation across timed rows. Attention still
+# chooses among all other word boundaries.
+UNSPLITTABLE_PHRASES = {
+    'es': (('por', 'fin'), ('sin', 'embargo'), ('a', 'pesar', 'de')),
+    'en': (('at', 'last'), ('even', 'though'), ('in', 'spite', 'of')),
+}
+
 def normalize_idioms(text, source):
     for pattern, replacement in IDIOM_EQUIVALENTS.get(source, ()):
         def preserve_sentence_case(match):
@@ -97,7 +105,7 @@ def phrase_groups(lines, encode, max_lines=3, max_tokens=96, transform_group=Non
         groups.append(finish(current))
     return groups
 
-def align_translation(tokens, attention, owners, line_count, decode):
+def align_translation(tokens, attention, owners, line_count, decode, target_language=None):
     # CTranslate2 4.8 returns hypothesis/target/source attention.
     while len(attention) == 1 and attention[0] and isinstance(attention[0][0], (list, tuple)):
         attention = attention[0]
@@ -105,6 +113,7 @@ def align_translation(tokens, attention, owners, line_count, decode):
         return [decode(tokens).strip()]
     # Break only at target word boundaries: never bisect a SentencePiece word.
     words = _token_words(tokens)
+    count = len(words)
     if len(words) < line_count or len(attention) < len(tokens):
         raise ValueError('Insufficient target alignment')
     scores = []
@@ -114,8 +123,21 @@ def align_translation(tokens, attention, owners, line_count, decode):
             value = sum(float(attention[t][s]) for t in word for s, owner in enumerate(owners) if owner == line and s < len(attention[t]))
             row.append(value / len(word))
         scores.append(row)
+    forbidden_cuts = set()
+    if target_language in UNSPLITTABLE_PHRASES:
+        text_words = [normalize_text(decode([tokens[index] for index in word])).lower() for word in words]
+        for phrase in UNSPLITTABLE_PHRASES[target_language]:
+            width = len(phrase)
+            for start in range(len(text_words) - width + 1):
+                if tuple(text_words[start:start + width]) == phrase:
+                    forbidden_cuts.update(range(start + 1, start + width))
+                    if start + width < len(text_words):
+                        forbidden_cuts.add(start + width)
+    if count - 1 - len(forbidden_cuts) < line_count - 1:
+        # Preserve the nonempty-row invariant if lexical constraints leave too
+        # few legal cuts for this unusually short translation.
+        forbidden_cuts.clear()
     # Maximize attention captured by contiguous, nonempty translated rows.
-    count = len(words)
     dp = [[-math.inf] * (count + 1) for _ in range(line_count + 1)]
     previous = {}
     dp[0][0] = 0
@@ -124,7 +146,11 @@ def align_translation(tokens, attention, owners, line_count, decode):
         for row in scores:
             prefix.append(prefix[-1] + row[line])
         for end in range(line + 1, count - (line_count - line - 1) + 1):
+            if end in forbidden_cuts:
+                continue
             for start in range(line, end):
+                if start in forbidden_cuts:
+                    continue
                 candidate = dp[line][start] + prefix[end] - prefix[start]
                 if candidate > dp[line + 1][end]:
                     dp[line + 1][end] = candidate

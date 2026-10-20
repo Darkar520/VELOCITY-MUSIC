@@ -75,6 +75,25 @@ class ContextTests(unittest.TestCase):
         self.assertEqual(' '.join(result), decode(tokens))
         self.assertEqual(align_translation(tokens, [attention], [0, 1], 2, decode), result)
 
+    def test_attention_alignment_keeps_common_connective_units_together(self):
+        tokens = ['▁Por', '▁fin', '▁entiendo', '▁lo', '▁que', '▁querías', '▁decir']
+        # Attention alone prefers a cut after "fin", which strands the adverbial.
+        attention = [[.9, .1], [.9, .1], [.1, .9], [.1, .9], [.1, .9], [.1, .9], [.1, .9]]
+        decode = lambda xs: ''.join(xs).replace('▁', ' ').strip()
+        self.assertEqual(
+            align_translation(tokens, attention, [0, 1], 2, decode, 'es'),
+            ['Por fin entiendo', 'lo que querías decir'],
+        )
+
+    def test_connective_constraint_falls_back_when_it_cannot_fill_all_rows(self):
+        tokens = ['▁por', '▁fin']
+        attention = [[.9, .1], [.1, .9]]
+        decode = lambda xs: ''.join(xs).replace('▁', ' ').strip()
+        self.assertEqual(
+            align_translation(tokens, attention, [0, 1], 2, decode, 'es'),
+            ['por', 'fin'],
+        )
+
     def test_alignment_rejects_too_few_words_instead_of_inventing_a_row(self):
         with self.assertRaises(ValueError):
             align_translation(['▁Yes'], [[1]], [0], 2, lambda xs: ''.join(xs))
