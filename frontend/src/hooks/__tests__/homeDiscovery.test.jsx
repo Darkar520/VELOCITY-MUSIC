@@ -36,29 +36,39 @@ it('a failed network has an actionable state rather than blank space',()=>{
  fireEvent.click(screen.getByRole('button',{name:'Volver a intentar'}));expect(retry).toHaveBeenCalledOnce();
 });
 it('shows a filled heart for a liked recommendation',()=>{
- const track={id:'liked',title:'Scars',artist:'Artist'};
- render(<HomeDiscovery rows={[{section:'Discover',mixes:[{label:'Mix',tracks:[track]}]}]} favs={['liked']} offline play={vi.fn()} goMix={vi.fn()}/>);
+ const tracks=fullTracks();tracks[0]={id:'liked',title:'Scars',artist:'Artist'};
+ render(<HomeDiscovery rows={[{section:'Discover',mixes:[{label:'Mix',tracks}]}]} favs={['liked']} play={vi.fn()} goMix={vi.fn()}/>);
  const heart=screen.getByRole('button',{name:'Quitar Me gusta de Scars'});
  expect(heart.getAttribute('aria-pressed')).toBe('true');
  expect(heart.querySelector('svg').getAttribute('fill')).toBe('currentColor');
 });
 it('does not expose an incomplete generated selection as a playable mix',()=>{
  const rows=[{section:'Discover',mixes:[{label:'Incomplete',pending:true,tracks:[{id:'one',title:'One',artist:'Artist'}]}]}];
- render(<HomeDiscovery rows={rows} loading play={vi.fn()} goMix={vi.fn()}/>);
+ const {container}=render(<HomeDiscovery rows={rows} loading play={vi.fn()} goMix={vi.fn()}/>);
  expect(screen.queryByRole('button',{name:'Abrir Incomplete'})).toBeNull();
  expect(screen.queryByRole('button',{name:'Reproducir selección'})).toBeNull();
- expect(screen.getByText('Afinando tu selección…')).toBeTruthy();
+ expect(container.querySelector('.discovery-cycle:not(.discovery-repeat) h2').textContent).toBe('Afinando tu selección…');
 });
 it('does not show a cached 12-song selection as the featured 50-song mix',()=>{
  const tracks=Array.from({length:12},(_,i)=>({id:String(i),title:'Track '+i,artist:'Artist'}));
- render(<HomeDiscovery rows={[{section:'En tu frecuencia',mixes:[{label:'Tu frecuencia',featured:true,tracks}]}]} loading play={vi.fn()} goMix={vi.fn()}/>);
- expect(screen.getByText('Afinando tu selección…')).toBeTruthy();
- expect(getComputedStyle(screen.getByText('Afinando tu selección…')).color).toBe('rgb(244, 247, 245)');
+ const {container}=render(<HomeDiscovery rows={[{section:'En tu frecuencia',mixes:[{label:'Tu frecuencia',featured:true,tracks}]}]} loading play={vi.fn()} goMix={vi.fn()}/>);
+ const heading=container.querySelector('.discovery-cycle:not(.discovery-repeat) h2');
+ expect(heading.textContent).toBe('Afinando tu selección…');
+ expect(getComputedStyle(heading).color).toBe('rgb(244, 247, 245)');
  expect(screen.queryByText('12 canciones')).toBeNull();
  expect(screen.queryByRole('button',{name:'Reproducir selección'})).toBeNull();
 });
+it('keeps a short offline playlist in its own section instead of promoting it as Tu frecuencia',()=>{
+ const tracks=Array.from({length:12},(_,i)=>({id:'local-'+i,title:'Local '+i,artist:'Linkin Park'}));
+ const {container}=render(<HomeDiscovery rows={[{section:'Tus playlists',mixes:[{label:'Linkin Park',tracks}]}]} offline play={vi.fn()} goMix={vi.fn()}/>);
+ const main=container.querySelector('.discovery-cycle:not(.discovery-repeat)');
+ expect(screen.queryByRole('region',{name:'Selección destacada'})).toBeNull();
+ expect(main.querySelector('h2').textContent).toBe('Tu frecuencia volverá al conectar.');
+ expect(main.textContent).toContain('Tus playlists');
+ expect(main.textContent).toContain('Linkin Park');
+});
 it('keeps the song order after playback even when another recommendation page arrives',()=>{
- const tracks=['First','Scars','Third'].map((title,i)=>({id:String(i),title,artist:'Artist '+i}));
+ const tracks=fullTracks();tracks[0]={id:'0',title:'First',artist:'Artist 0'};tracks[1]={id:'1',title:'Scars',artist:'Artist 1'};tracks[2]={id:'2',title:'Third',artist:'Artist 2'};
  const row={section:'Discover',mixes:[{label:'Mix',tracks}]};
  const props={play:vi.fn(),goMix:vi.fn(),prefs:{genres:[{label:'Rock',q:'rock'}]},offline:true};
  const {rerender}=render(<HomeDiscovery {...props} rows={[row]}/>);
