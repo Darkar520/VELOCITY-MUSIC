@@ -10,6 +10,7 @@ vi.mock('../../api.js', () => ({ api: {
 vi.mock('../../offline.js', () => ({ getBlob: mocks.blob }));
 vi.mock('../../coverEnrich.js', () => ({ enrichCoverIfNeeded: vi.fn() }));
 import { usePlaybackController } from '../usePlaybackController.js';
+import { useAudioElement } from '../useAudioElement.js';
 import { usePlayerStore } from '../../store/playerStore.js';
 import { initialState } from '../../audio/audioMachine.js';
 import { cacheTrack } from '../../catalog.js';
@@ -96,6 +97,57 @@ it('starts a cached signed source once, without a second STREAM_READY from the c
   await act(async () => { result.current.play(track); });
   expect(audio.play).toHaveBeenCalledOnce();
   expect(mocks.ensure).not.toHaveBeenCalled();
+});
+
+it('starts a prepared remote queue track synchronously even when IndexedDB is suspended', () => {
+  mocks.peek.mockReturnValue('/api/stream-proxy?cached');
+  mocks.blob.mockImplementation(() => new Promise(() => {}));
+  const { result, track, audio } = setup();
+  act(() => result.current.play(track, [track.id], { keepMix: true }));
+  expect(audio.getAttribute('src')).toBe('/api/stream-proxy?cached');
+  expect(audio.play).toHaveBeenCalledOnce();
+  expect(mocks.blob).not.toHaveBeenCalled();
+  expect(mocks.ensure).not.toHaveBeenCalled();
+});
+
+it('keeps a known download local even with a prepared remote URL', async () => {
+  mocks.peek.mockReturnValue('/api/stream-proxy?cached');
+  mocks.blob.mockResolvedValue(new Blob(['audio'], { type: 'audio/webm' }));
+  const { result, track, audio } = setup(true);
+  await act(async () => { result.current.play(track); });
+  expect(audio.getAttribute('src')).toContain('blob:');
+  expect(mocks.blob).toHaveBeenCalledOnce();
+  expect(mocks.ensure).not.toHaveBeenCalled();
+});
+
+it('advances two ended events while hidden without waiting for storage or React ref mirrors', () => {
+  mocks.peek.mockImplementation(params => '/api/stream-proxy?track=' + params.id);
+  mocks.blob.mockImplementation(() => new Promise(() => {}));
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+  const { result, track, audio, deps } = setup();
+  const tracks = [track, { ...track, id: 'second' }, { ...track, id: 'third' }];
+  tracks.forEach(cacheTrack);
+  const queue = tracks.map(t => t.id);
+  Object.defineProperties(audio, {
+    readyState: { configurable: true, get: () => 4 },
+    currentSrc: { configurable: true, get: () => audio.getAttribute('src') ? new URL(audio.getAttribute('src'), location.href).href : '' },
+    ended: { configurable: true, get: () => true },
+  });
+  const handlers = renderHook(() => useAudioElement({
+    ...deps, getMachine: result.current.getMachine,
+    dispatchAudio: result.current.dispatchAudio, onTrackEnded: result.current.next,
+  }));
+  act(() => result.current.play(track, queue));
+  for (const nextTrack of tracks.slice(1)) {
+    act(() => handlers.result.current.onEnded());
+    expect(usePlayerStore.getState().track.id).toBe(nextTrack.id);
+    expect(audio.getAttribute('src')).toBe('/api/stream-proxy?track=' + nextTrack.id);
+    expect(result.current.getMachine()).toMatchObject({ trackId: nextTrack.id, intent: 'play', focus: 'own', srcStatus: 'ready' });
+  }
+  expect(audio.play).toHaveBeenCalledTimes(3);
+  expect(mocks.blob).not.toHaveBeenCalled();
+  expect(mocks.ensure).not.toHaveBeenCalled();
+  expect(deps.trackRef.current.id).toBe(track.id);
 });
 
 it('does not publish an offline blob that finishes reading after unmount', async () => {

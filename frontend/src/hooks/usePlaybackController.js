@@ -245,6 +245,17 @@ export function usePlaybackController(deps) {
     const resolveController = new AbortController();
     resolveAbortRef.current = resolveController;
     try {
+      // Keep prepared remote playback inside the ended/Media Session task:
+      // IndexedDB callbacks can be deferred while a mobile PWA is hidden.
+      // Known downloads and disconnected playback still use local bytes first.
+      if (!downloaded.has(trackId) && !backendDown && navigator.onLine !== false && t?.title && t?.artist) {
+        const preparedUrl = api.peekStreamUrl(streamParamsFor(t, QUALITY_MAP[quality] || 'high'), 30);
+        if (preparedUrl) {
+          signFailRef.current = { id: null, n: 0 };
+          dispatchAudio({ type: 'STREAM_READY', trackId, url: preparedUrl });
+          return;
+        }
+      }
       // IndexedDB owns availability; the React badge can lag a worker write.
       // Local bytes require neither artist metadata nor a signed stream URL.
       const b = await offline.getBlob(trackId).catch(() => null);
