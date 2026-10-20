@@ -18,6 +18,16 @@ test('deep mixes contain 50 real unique songs and different selections',()=>{
  assert.ok(first.every((t,i)=>i===0||t.artist!==first[i-1].artist));
  assert.notDeepEqual(new Set(first.map(t=>t.id)),new Set(next.map(t=>t.id)));
 });
+test('the same profile cycle reproduces the same featured list and the next cycle rotates it',()=>{
+ const preferences={genres:[],artists:[]};
+ const first=deepRecommendationRows(pool,preferences,0).find(row=>row.section==='En tu frecuencia').mixes[0].tracks;
+ const sameCycle=deepRecommendationRows(pool,preferences,0).find(row=>row.section==='En tu frecuencia').mixes[0].tracks;
+ const nextCycle=deepRecommendationRows(pool,preferences,1).find(row=>row.section==='En tu frecuencia').mixes[0].tracks;
+ const ids=tracks=>tracks.map(track=>track.id);
+ assert.deepEqual(ids(first),ids(sameCycle));
+ assert.equal(first.length,50);assert.equal(nextCycle.length,50);
+ assert.notDeepEqual(new Set(ids(first)),new Set(ids(nextCycle)));
+});
 test('recommendations prefer studio recordings over duplicate live and remastered versions',()=>{
  const candidates=[
   {id:'live-first',title:'Hit Song (Live)',artist:'Artist 0'},

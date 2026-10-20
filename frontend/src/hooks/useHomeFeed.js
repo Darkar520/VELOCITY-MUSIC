@@ -159,7 +159,9 @@ export function useHomeFeed({authed,downloaded,recentSearches=[],onboardPrefs,of
         if(alive()){
           const catalog=dedupeByTitle(rows.filter(s=>!['Tus playlists','Escuchado recientemente','De tus Me gusta'].includes(s.section)).flatMap(s=>s.mixes).flatMap(m=>m.tracks));
           const familiarTracks=[...store.recent.slice(0,10),...store.favs.slice(0,10)].map(trackById).filter(Boolean);
-          const expanded=deepRecommendationRows(catalog,onboardPrefs,store.feedNonce+mixCycle,{familiarTracks});
+          // A retry or reconnect may refresh the catalog, but it must not rotate
+          // the user's featured selection before the persisted three-day cycle.
+          const expanded=deepRecommendationRows(catalog,onboardPrefs,mixCycle,{familiarTracks});
           const local=rows.filter(s=>['Tus playlists','Escuchado recientemente','De tus Me gusta'].includes(s.section));
           rows.splice(0,rows.length,...local,...expanded,...savedExtra);
           if(rows.length)publish();else store.setHomeRows([]);
