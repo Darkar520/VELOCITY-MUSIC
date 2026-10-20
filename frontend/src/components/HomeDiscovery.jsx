@@ -44,7 +44,10 @@ export function HomeDiscovery({rows,prefs,personalShelves=[],shelfKey='',play,go
     },{rootMargin:'300px'});
     observer.observe(node);return()=>observer.disconnect();
   },[rows.length,loading,pending,offline]);
-  const readyRows=rows.map(row=>({...row,mixes:(row.mixes||[]).filter(m=>!m.pending)})).filter(row=>row.mixes.length);
+  const featuredSection=section=>/^(en tu frecuencia|tu frecuencia)$/i.test(section||'');
+  const readyRows=rows.map(row=>({...row,mixes:(row.mixes||[])
+    .filter(m=>!m.pending&&(!(m.featured||featuredSection(row.section))||m.tracks?.length===50))
+    .map(m=>m.featured||featuredSection(row.section)?{...m,featured:true}:m)})).filter(row=>row.mixes.length);
   const mixes=readyRows.flatMap(s=>s.mixes).filter(m=>m.tracks?.length);
   const preferred=(prefs?.artists||[]).map(a=>a.name.toLocaleLowerCase());
   const fullMixes=mixes.filter(m=>m.tracks.length===50);

@@ -58,6 +58,14 @@ it('does not show a cached 12-song selection as the featured 50-song mix',()=>{
  expect(screen.queryByText('12 canciones')).toBeNull();
  expect(screen.queryByRole('button',{name:'Reproducir selección'})).toBeNull();
 });
+it('does not render a legacy partial frequency mix as a normal carousel',()=>{
+ const tracks=Array.from({length:12},(_,i)=>({id:String(i),title:'Track '+i,artist:'Artist'}));
+ const {container}=render(<HomeDiscovery rows={[{section:'En tu frecuencia',mixes:[{label:'Tu frecuencia',tracks}]}]} loading play={vi.fn()} goMix={vi.fn()}/>);
+ const main=container.querySelector('.discovery-cycle:not(.discovery-repeat)');
+ expect(main.textContent).not.toContain('12 canciones');
+ expect(main.querySelector('.discovery-section')).toBeNull();
+ expect(main.querySelector('.discovery-empty h2').textContent).toBe('Afinando tu selección…');
+});
 it('keeps a short offline playlist in its own section instead of promoting it as Tu frecuencia',()=>{
  const tracks=Array.from({length:12},(_,i)=>({id:'local-'+i,title:'Local '+i,artist:'Linkin Park'}));
  const {container}=render(<HomeDiscovery rows={[{section:'Tus playlists',mixes:[{label:'Linkin Park',tracks}]}]} offline play={vi.fn()} goMix={vi.fn()}/>);
