@@ -1,9 +1,17 @@
 # Traducción local de letras
 
-El backend usa los paquetes Argos EN→ES 1.0 y ES→EN 1.9. Es traducción
-automática, no una traducción editorial oficial. Cada línea se traduce por
-separado para conservar sincronización, repeticiones y separadores; esto limita
-la interpretación del contexto poético y las frases que continúan en otra línea.
+El backend conserva los paquetes locales Argos EN→ES 1.0 y ES→EN 1.9. No envía
+letras a un servicio de traducción externo. Es traducción automática, no una
+traducción editorial oficial.
+
+Antes de inferir, agrupa hasta tres líneas contiguas (máximo 96 tokens) y no cruza
+estrofas vacías ni finales de oración. Una lista explícita de equivalencias
+reformula algunos modismos frecuentes en inglés y español; después el modelo
+traduce el grupo con contexto. La atención del decodificador distribuye la
+salida entre las líneas originales, respetando límites de palabra y evitando
+cortar ciertas expresiones adverbiales o conectivas registradas. El decodificador
+usa parámetros distintos por dirección. Esta adaptación es una lista acotada,
+no una comprensión general de metáforas o contexto poético.
 
 ## Instalación Windows
 
@@ -46,6 +54,24 @@ de una traducción ya guardada funciona sin conexión.
 
 Las pruebas Node validan límites y correspondencia de filas; las pruebas React
 validan el interruptor, la colocación bajo el original y la lectura de una
-traducción guardada sin solicitarla a la red. Verificar además ambos modelos
-con frases originales antes de desplegar un runtime nuevo. No hay una evaluación
-humana de calidad sobre un corpus de letras: no se afirma equivalencia con Spotify.
+traducción guardada sin solicitarla a la red. `scripts/evaluate-argos-context.py`
+compara ambos sentidos con `test/fixtures/translation-naturalness.json`, incluidos
+modismos, continuaciones y controles negativos. El conjunto es pequeño y
+determinista; cero fallos de alineación solo confirma que no se perdió ni
+reordenó ninguna fila, no que la traducción sea natural.
+
+En la revisión 2026-10-19 se ejecutaron 17 ejemplos sintéticos en las dos
+direcciones: Argos tuvo cero fallos de alineación. Se comprobó que normalizar
+«Give it a shot», «Estoy hasta las narices de tus mentiras» y «Me quedé de piedra
+cuando lo vi» produce respectivamente «Pruébalo», «I can't stand your lies» e
+«I was very surprised when I saw him». Estos son casos medidos, no una garantía
+para expresiones no incluidas.
+
+También se probó localmente un candidato OPUS-MT big fijado a revisiones
+concretas. En este fixture tradujo literalmente varios de esos modismos (por
+ejemplo, “I'm up to the noses of your lies” y “I was stoned when I saw him”), por
+lo que no reemplaza al Argos actualmente instalado. No hay todavía una evaluación
+ciega realizada por hablantes nativos ni un corpus amplio de letras; no se afirma
+calidad equivalente a una traducción editorial o a Spotify. Una evaluación de
+calidad más amplia requiere ejemplos con permiso de uso y revisión humana por
+dirección e idioma.
