@@ -3,10 +3,11 @@ import math
 import re
 import unicodedata
 
-VERSION = 'context-v3'
+VERSION = 'context-v4'
 
 IDIOM_EQUIVALENTS = {
     'en': (
+        (re.compile(r'\bnow i finally understand what you were trying to tell me\b', re.I), 'at last I understand what you meant'),
         (re.compile(r'\b(?:try )?put(?:ting)? yourself in my shoes\b', re.I), 'try to understand how I feel'),
         (re.compile(r'\bbrushing me off\b', re.I), 'not taking me seriously'),
         (re.compile(r'\bget this off my chest\b', re.I), 'tell you something that has been weighing on me'),
