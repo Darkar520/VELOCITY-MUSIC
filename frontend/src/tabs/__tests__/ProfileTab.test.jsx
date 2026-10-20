@@ -97,7 +97,11 @@ describe('ProfileTab', () => {
 
   it('agrupa los ajustes con secciones visibles', () => {
     setup();
-    for (const section of ['Apariencia', 'Descargas', 'Audio', 'Cuenta']) expect(screen.getByText(section)).toBeTruthy();
+    const sections = ['Apariencia', 'Audio', 'Descargas', 'Cuenta'].map(section => screen.getByText(section));
+    for (const section of sections) expect(section).toBeTruthy();
+    for (let i = 0; i < sections.length - 1; i++) {
+      expect(sections[i].compareDocumentPosition(sections[i + 1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
   });
 
   // "cerrar sesión" también aparece en el texto informativo de Descargas, así

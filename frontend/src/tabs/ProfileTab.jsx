@@ -155,14 +155,6 @@ export function ProfileTab({
         )}
       </SettingCard>
 
-      <SectionHeader label="Descargas" accent={T.accent} />
-      <SettingCard title="Descargas (offline)">
-        <div style={{ fontSize:11.5, color:'var(--txt-2)', lineHeight:1.5, marginBottom:12 }}>Tus descargas se guardan en este dispositivo y no se pierden al actualizar la app ni al cerrar sesión.</div>
-        <button onClick={openDownloads} className="btn-tap" style={{ width:'100%', display:'flex', alignItems:'center', justifyContent:'center', gap:9, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:14, padding:'12px 0', cursor:'pointer', color:'var(--txt-0)', fontSize:13, fontWeight:800 }}>
-          <Icon.Down c={T.accent} sz={17} /> Administrar descargas
-        </button>
-      </SettingCard>
-
       {dlOpen && createPortal(
         <>
           <div onClick={() => setDlOpen(false)} style={{ position:'fixed', inset:0, background:'#04060acc', backdropFilter:'blur(10px)', WebkitBackdropFilter:'blur(10px)', zIndex:130 }} />
@@ -218,6 +210,14 @@ export function ProfileTab({
       <SettingCard title="Reproducción">
         <ToggleRow label="Reproducción automática" desc="Continúa al terminar la pista" on={settings.autoplay} onToggle={() => set('autoplay', !settings.autoplay)} T={T} />
         <ToggleRow label="Normalizar volumen" desc="Mismo nivel en todas las pistas" on={settings.normalize} onToggle={() => set('normalize', !settings.normalize)} T={T} />
+      </SettingCard>
+
+      <SectionHeader label="Descargas" accent={T.accent} />
+      <SettingCard title="Descargas (offline)">
+        <div style={{ fontSize:11.5, color:'var(--txt-2)', lineHeight:1.5, marginBottom:12 }}>Tus descargas se guardan en este dispositivo y no se pierden al actualizar la app ni al cerrar sesión.</div>
+        <button onClick={openDownloads} className="btn-tap" style={{ width:'100%', display:'flex', alignItems:'center', justifyContent:'center', gap:9, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:14, padding:'12px 0', cursor:'pointer', color:'var(--txt-0)', fontSize:13, fontWeight:800 }}>
+          <Icon.Down c={T.accent} sz={17} /> Administrar descargas
+        </button>
       </SettingCard>
 
       {!isStandalone && (
