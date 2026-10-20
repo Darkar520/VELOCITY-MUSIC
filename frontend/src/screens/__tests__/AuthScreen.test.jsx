@@ -90,7 +90,7 @@ describe('AuthScreen', () => {
     const { onAuthed } = setup();
     fireEvent.click(screen.getByText(/Entrar como invitado/i));
     await waitFor(() => expect(apiMock.guestLogin).toHaveBeenCalled());
-    await waitFor(() => expect(onAuthed).toHaveBeenCalledWith('invitado@velocity.guest', 'Invitado'));
+    await waitFor(() => expect(onAuthed).toHaveBeenCalledWith('invitado@velocity.guest', 'Invitado', true));
   });
 
   it('si el modo invitado falla lo dice y no entra', async () => {

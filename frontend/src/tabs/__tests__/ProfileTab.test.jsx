@@ -80,6 +80,14 @@ describe('ProfileTab', () => {
   it('renderiza sin crashear y muestra el correo del usuario', () => {
     setup();
     expect(screen.getByText('a@b.c')).toBeTruthy();
+    expect(screen.getByText('CUENTA')).toBeTruthy();
+  });
+
+  it('representa la sesión invitada sin mostrar el correo técnico', () => {
+    setup({ isGuest: true, email: 'invitado-123@velocity.guest', displayName: 'Invitado' });
+    expect(screen.getByText('INVITADO')).toBeTruthy();
+    expect(screen.queryByText('invitado-123@velocity.guest')).toBeNull();
+    expect(screen.queryByText('PRO MEMBER')).toBeNull();
   });
 
   it('muestra la versión de la app (trazabilidad visible)', () => {

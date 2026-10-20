@@ -63,7 +63,7 @@ export function AuthScreen({ onAuthed, T }) {
 
   const guestLogin = async () => {
     setErr(''); setBusy(true);
-    try { const data = await api.guestLogin(); onAuthed(data.email || '', data.displayName || 'Invitado'); }
+    try { const data = await api.guestLogin(); onAuthed(data.email || '', data.displayName || 'Invitado', true); }
     catch (e2) { setErr(e2.message || 'No se pudo entrar como invitado.'); setBusy(false); }
   };
 

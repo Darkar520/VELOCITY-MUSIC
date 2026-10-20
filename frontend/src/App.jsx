@@ -112,6 +112,7 @@ export default function App() {
 
   const [authed, setAuthed] = useState(isAuthed());
   const [email, setEmail] = useState(() => localStorage.getItem('velocity.email') || '');
+  const [isGuest, setIsGuest] = useState(() => localStorage.getItem('velocity.guest') === 'true');
   const [displayName, setDisplayName] = useState(() => localStorage.getItem('velocity.name') || '');
   const [avatar, setAvatar] = useState(() => localStorage.getItem('velocity.avatar') || '');
   const [backendDown, setBackendDown] = useState(false);
@@ -139,7 +140,7 @@ export default function App() {
   }, [authed]);
 
   // Sincronizar el perfil (nombre + avatar) desde el backend al abrir sesión.
-  useEffect(() => { if (!authed) return; api.me().then(p => { if (p) { setDisplayName(p.displayName || ''); localStorage.setItem('velocity.name', p.displayName || ''); setAvatar(p.avatar || ''); localStorage.setItem('velocity.avatar', p.avatar || ''); if (p.email) { setEmail(p.email); localStorage.setItem('velocity.email', p.email); } } }).catch(() => {}); }, [authed]);
+  useEffect(() => { if (!authed) return; api.me().then(p => { if (p) { const guest = p.guest === true; setIsGuest(guest); localStorage.setItem('velocity.guest', String(guest)); setDisplayName(p.displayName || ''); localStorage.setItem('velocity.name', p.displayName || ''); setAvatar(p.avatar || ''); localStorage.setItem('velocity.avatar', p.avatar || ''); if (guest) { setEmail(''); localStorage.removeItem('velocity.email'); } else if (p.email) { setEmail(p.email); localStorage.setItem('velocity.email', p.email); } } }).catch(() => {}); }, [authed]);
   const saveProfileName = async (newName) => {
     const p = await api.updateProfile({ displayName: newName });
     setDisplayName(p.displayName || '');
@@ -720,14 +721,17 @@ export default function App() {
     api.logout();
     useLibraryStore.getState().reset();
     localStorage.removeItem('velocity.email');
+    localStorage.removeItem('velocity.guest');
     localStorage.removeItem('velocity.name');
     localStorage.removeItem('velocity.avatar');
     localStorage.removeItem('velocity.home');
     // Recargar la página evita renders intermedios con estado inconsistente.
     window.location.reload();
   };
-  const handleAuthed = (em, name) => {
-    if (em) { setEmail(em); localStorage.setItem('velocity.email', em); }
+  const handleAuthed = (em, name, guest = false) => {
+    setIsGuest(guest); localStorage.setItem('velocity.guest', String(guest));
+    if (guest) { setEmail(''); localStorage.removeItem('velocity.email'); }
+    else if (em) { setEmail(em); localStorage.setItem('velocity.email', em); }
     if (name != null) { setDisplayName(name); localStorage.setItem('velocity.name', name); }
     // Registrar inicio de sesión en PG para trazabilidad de tiempo de sesión activa.
     api.sessionStart();
@@ -807,7 +811,7 @@ export default function App() {
       {tab === 'home' && <HomeTab T={T} play={play} track={track} playing={playing} onMenu={setMenuTarget} onToggleFav={toggleFav} goMix={goMix} displayName={displayName} avatar={avatar} email={email} setTab={setTab} startAiDj={startAiDj} onboardPrefs={onboardPrefs} setOnboardPrefs={setOnboardPrefs} recentSearches={recentSearches} backendDown={backendDown} />}
       {tab === 'search' && <SearchTab T={T} play={play} addToTarget={setAddTarget} onMenu={setMenuTarget} onToggleFav={toggleFav} recentSearches={recentSearches} addSearch={addSearch} removeSearch={removeSearch} goArtist={goArtist} goAlbum={goAlbum} goMix={goMix} selecting={selecting} selection={selection} toggleSelect={toggleSelect} startSelection={startSelection} addToQueue={addToQueue} removeFromQueue={removeFromQueueToast} backendDown={backendDown} setTab={setTab} />}
       {tab === 'library' && <LibraryTab T={T} play={play} openPlaylist={openPlaylist} setOpenPlaylist={setOpenPlaylist} addToTarget={setAddTarget} onMenu={setMenuTarget} onToggleFav={toggleFav} downloadMany={downloadMany} goAlbum={goAlbum} goMix={goMix} selecting={selecting} selection={selection} toggleSelect={toggleSelect} startSelection={startSelection} addToQueue={addToQueue} removeFromQueue={removeFromQueueToast} setShowImport={setShowImport} hydrateTracks={hydrateTracks} createPlaylist={createPlaylist} removeFromPlaylist={removeFromPlaylist} deletePlaylist={deletePlaylist} savePlaylist={savePlaylist} unsavePlaylist={unsavePlaylist} />}
-      {tab === 'profile' && <ProfileTab T={T} themeKey={themeKey} setThemeKey={setThemeKey} quality={quality} setQuality={setQuality} glow={glow} setGlow={setGlow} eq={eq} setEq={setEq} settings={settings} setSettings={setSettings} setOpenPlaylist={setOpenPlaylist} setTab={setTab} email={email} onLogout={onLogout} installApp={installApp} canInstall={!!installEvt} isIOS={isIOS} isStandalone={isStandalone} goWrapped={goWrapped} customPalettes={customPalettes} activeCustomId={activeCustomId} setActiveCustomId={setActiveCustomId} activePalette={activePalette} addPalette={addPalette} updatePalette={updatePalette} deletePalette={deletePalette} displayName={displayName} saveProfileName={saveProfileName} deleteAccount={deleteAccount} avatar={avatar} saveAvatar={saveAvatar} removeDownload={removeDownload} clearDownloads={clearDownloads} getDownloads={getDownloads} />}
+      {tab === 'profile' && <ProfileTab T={T} themeKey={themeKey} setThemeKey={setThemeKey} quality={quality} setQuality={setQuality} glow={glow} setGlow={setGlow} eq={eq} setEq={setEq} settings={settings} setSettings={setSettings} setOpenPlaylist={setOpenPlaylist} setTab={setTab} email={email} isGuest={isGuest} onLogout={onLogout} installApp={installApp} canInstall={!!installEvt} isIOS={isIOS} isStandalone={isStandalone} goWrapped={goWrapped} customPalettes={customPalettes} activeCustomId={activeCustomId} setActiveCustomId={setActiveCustomId} activePalette={activePalette} addPalette={addPalette} updatePalette={updatePalette} deletePalette={deletePalette} displayName={displayName} saveProfileName={saveProfileName} deleteAccount={deleteAccount} avatar={avatar} saveAvatar={saveAvatar} removeDownload={removeDownload} clearDownloads={clearDownloads} getDownloads={getDownloads} />}
     </>
   );
   const Content = view ? (view.type === 'wrapped' ? <WrappedView T={T} setView={setView} play={play} playStats={playStatsRef.current} /> : <DetailView view={view} T={T} play={play} addToTarget={setAddTarget} onMenu={setMenuTarget} onToggleFav={toggleFav} goArtist={goArtist} goAlbum={goAlbum} setView={setView} detailLoading={detailLoading} detailData={detailData} downloadMany={downloadMany} saveAlbum={saveAlbum} unsaveAlbum={unsaveAlbum} savePlaylist={savePlaylist} unsavePlaylist={unsavePlaylist} selecting={selecting} selection={selection} toggleSelect={toggleSelect} startSelection={startSelection} addToQueue={addToQueue} removeFromQueue={removeFromQueueToast} />) : TabContent;

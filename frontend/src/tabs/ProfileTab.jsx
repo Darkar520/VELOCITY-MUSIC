@@ -13,7 +13,7 @@ import { usePlayerStore } from '../store/playerStore.js';
 
 export function ProfileTab({
   T, themeKey, setThemeKey, quality, setQuality, glow, setGlow, eq, setEq,
-  settings, setSettings, setOpenPlaylist, setTab, email, onLogout,
+  settings, setSettings, setOpenPlaylist, setTab, email, isGuest = false, onLogout,
   installApp, canInstall, isIOS, isStandalone, goWrapped,
   customPalettes, activeCustomId, setActiveCustomId, activePalette, addPalette, updatePalette, deletePalette,
   displayName, saveProfileName, deleteAccount, avatar, saveAvatar,
@@ -39,7 +39,8 @@ export function ProfileTab({
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
   const [savingName, setSavingName] = useState(false);
-  const shownName = displayName || (email ? email.split('@')[0] : 'Usuario');
+  const shownName = displayName || (isGuest ? 'Invitado' : (email ? email.split('@')[0] : 'Usuario'));
+  const profileEmail = isGuest || String(email || '').endsWith('@velocity.guest') ? '' : email;
   const startEditName = () => { setNameDraft(displayName || ''); setEditingName(true); };
   const commitName = async () => {
     const v = nameDraft.trim();
@@ -70,8 +71,8 @@ export function ProfileTab({
               <button aria-label="Editar nombre" onClick={startEditName} className="press" style={{ background:'none', border:'none', cursor:'pointer', padding:2, flexShrink:0 }}><Icon.Edit c="var(--txt-2)" sz={15} /></button>
             </div>
           )}
-          {!editingName && <div style={{ fontSize:10.5, color:'var(--txt-2)', marginTop:3, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', maxWidth:180 }}>{email}</div>}
-          <span style={{ display:'inline-block', marginTop:8, fontSize:8.5, fontWeight:900, color:'#04060a', background:grad(T), borderRadius:20, padding:'3px 11px', letterSpacing:1.5, textTransform:'uppercase' }}>PRO MEMBER</span>
+          {!editingName && profileEmail && <div style={{ fontSize:10.5, color:'var(--txt-2)', marginTop:3, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', maxWidth:180 }}>{profileEmail}</div>}
+          <span style={{ display:'inline-block', marginTop:8, fontSize:8.5, fontWeight:900, color:'#04060a', background:grad(T), borderRadius:20, padding:'3px 11px', letterSpacing:1.5, textTransform:'uppercase' }}>{isGuest || !profileEmail ? 'INVITADO' : 'CUENTA'}</span>
         </div>
       </div>
 
