@@ -35,6 +35,11 @@ def normalize_idioms(text, source):
 def normalize_text(text):
     return unicodedata.normalize('NFKC', text).replace('’', "'").replace('‘', "'").strip()
 
+def argos_decoding_parameters(source):
+    if source not in ('en', 'es'):
+        raise ValueError('Unsupported translation direction')
+    return {'beam_size': 4, 'length_penalty': .6 if source == 'es' else .2}
+
 def _token_words(tokens):
     words = []
     for index, token in enumerate(tokens):

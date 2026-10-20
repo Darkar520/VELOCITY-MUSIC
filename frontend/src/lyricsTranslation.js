@@ -1,5 +1,5 @@
 import { parseLRC } from './helpers.js';
-export const TRANSLATION_ENGINE_VERSION = 'argos-context-v5';
+export const TRANSLATION_ENGINE_VERSION = 'argos-context-v6';
 
 export function lyricLines(record) {
   const synced = parseLRC(record?.synced);

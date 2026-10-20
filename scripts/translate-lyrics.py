@@ -6,7 +6,7 @@ import re
 import ctranslate2
 import sentencepiece
 from langdetect import detect_langs, DetectorFactory
-from lyrics_context import phrase_groups, align_translation, normalize_idioms
+from lyrics_context import phrase_groups, align_translation, normalize_idioms, argos_decoding_parameters
 
 DetectorFactory.seed = 0
 sys.stdin.reconfigure(encoding='utf-8')
@@ -43,7 +43,7 @@ groups = phrase_groups(lines, encode, max_lines=3, max_tokens=96, transform_grou
 prefix = metadata.get('target_prefix', '')
 inputs = [[token for _, row in group for token in row] for group in groups]
 owners = [[owner for owner, (_, row) in enumerate(group) for _ in row] for group in groups]
-results = translator.translate_batch(inputs, target_prefix=[[prefix]] * len(inputs) if prefix else None, beam_size=4, replace_unknowns=True, max_batch_size=256, batch_type='tokens', length_penalty=.2, max_decoding_length=256, return_attention=True)
+results = translator.translate_batch(inputs, target_prefix=[[prefix]] * len(inputs) if prefix else None, **argos_decoding_parameters(source), replace_unknowns=True, max_batch_size=256, batch_type='tokens', max_decoding_length=256, return_attention=True)
 translations = [''] * len(lines)
 for group, owner, result in zip(groups, owners, results):
     text = decode(result.hypotheses[0])
@@ -54,4 +54,4 @@ for group, owner, result in zip(groups, owners, results):
     aligned = align_translation(result.hypotheses[0], result.attention, owner, len(group), decode)
     for (line_index, _), translated in zip(group, aligned):
         translations[line_index] = translated
-print(json.dumps({'status': 'ready', 'sourceLanguage': source, 'targetLanguage': target, 'model': 'argos-' + source + '-' + target + '-' + metadata.get('package_version', ''), 'engineVersion': 'argos-context-v5', 'lines': translations}, ensure_ascii=False))
+print(json.dumps({'status': 'ready', 'sourceLanguage': source, 'targetLanguage': target, 'model': 'argos-' + source + '-' + target + '-' + metadata.get('package_version', ''), 'engineVersion': 'argos-context-v6', 'lines': translations}, ensure_ascii=False))

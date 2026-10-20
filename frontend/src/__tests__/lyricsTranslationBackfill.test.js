@@ -20,7 +20,7 @@ it('a failed lyric request is not marked complete merely because its result is a
 
 it('existing synchronized lyrics gain an aligned offline translation without refetching lyrics', async () => {
   state.records.set('saved', { synced: '[00:01.00]A first original sentence\n[00:02.00]A second original sentence' });
-  api.translateLyrics.mockResolvedValue({ status: 'ready', engineVersion:'argos-context-v5', sourceLanguage: 'en', targetLanguage: 'es', lines: ['Primera frase', 'Segunda frase'] });
+  api.translateLyrics.mockResolvedValue({ status: 'ready', engineVersion:'argos-context-v6', sourceLanguage: 'en', targetLanguage: 'es', lines: ['Primera frase', 'Segunda frase'] });
   expect(await scheduleLibraryOfflineSync(['saved'], { scope: 'migration' })).toEqual(['saved']);
   expect(api.lyrics).not.toHaveBeenCalled();
   expect(state.records.get('saved').translation.lines).toEqual(['Primera frase', 'Segunda frase']);
