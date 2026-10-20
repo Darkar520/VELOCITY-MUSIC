@@ -54,9 +54,30 @@ describe('ExpandedPlayer', () => {
   beforeEach(() => { resetStores(); localStorage.removeItem('velocity.lyricsTranslation'); Element.prototype.scrollTo = vi.fn(); });
   afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
+  it.each([false, true])('active original is white, translation keeps its accent and sync is outside scrolling lyrics (desktop=%s)', async desktop => {
+    const original = ['Original first sentence', 'Original second sentence', 'Original third sentence', 'Original fourth sentence'];
+    api.lyrics.mockResolvedValueOnce({ synced: original.map((line,i)=>`[00:0${i+1}.00]${line}`).join('\n') });
+    api.translateLyrics.mockResolvedValueOnce({ status:'ready', engineVersion:'context-v2', targetLanguage:'es', lines:original.map((_,i)=>`Traducción ${i+1}`) });
+    const { container, props } = setup({ desktop, time:.5, lyricOffset:1 });
+    if (!desktop) fireEvent.click(screen.getByRole('button', { name:'Letra', exact:true }));
+    fireEvent.click(screen.getByRole('button', { name:'Traducción desactivada' }));
+    const translated = await screen.findByText('Traducción 1');
+    const active = container.querySelector('[data-li="0"]');
+    expect(active.style.color).toBe('rgb(255, 255, 255)');
+    expect(translated.style.color).not.toBe(active.style.color);
+    const group = screen.getByRole('group', { name:'Sincronía de la letra' });
+    const scrollingLyrics = active.parentElement;
+    expect(scrollingLyrics.contains(group)).toBe(false);
+    expect(group.compareDocumentPosition(scrollingLyrics) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name:'Adelantar letra' }));
+    expect(props.setLyricOffset.mock.calls.at(-1)[0](1)).toBe(1.5);
+    fireEvent.click(screen.getByRole('button', { name:'Restablecer sincronía' }));
+    expect(props.setLyricOffset).toHaveBeenLastCalledWith(0);
+  });
+
   it('translation mode renders each translation under its synchronized original and saves it', async () => {
     api.lyrics.mockResolvedValueOnce({ synced: '[00:01.00]A first original sentence\n[00:02.00]A second original sentence', source: 'test' });
-    api.translateLyrics.mockResolvedValueOnce({ status: 'ready', targetLanguage: 'es', lines: ['Primera frase traducida', 'Segunda frase traducida'] });
+    api.translateLyrics.mockResolvedValueOnce({ status: 'ready', engineVersion:'context-v2', targetLanguage: 'es', lines: ['Primera frase traducida', 'Segunda frase traducida'] });
     setup();
     fireEvent.click(screen.getByRole('button', { name: 'Traducción desactivada' }));
     const translated = await screen.findByText('Primera frase traducida');
@@ -67,7 +88,7 @@ describe('ExpandedPlayer', () => {
 
   it('a stored aligned translation renders without a translation network request', async () => {
     const lines = ['First original', 'Second original', 'Third original', 'Fourth original'];
-    const record = { synced: lines.map((line,i) => `[00:0${i+1}.00]${line}`).join('\n'), translation: { status: 'ready', sourceText: JSON.stringify(lines), targetLanguage: 'es', lines: ['Primera', 'Segunda', 'Tercera', 'Cuarta'] } };
+    const record = { synced: lines.map((line,i) => `[00:0${i+1}.00]${line}`).join('\n'), translation: { status: 'ready', engineVersion:'context-v2', sourceText: JSON.stringify(lines), targetLanguage: 'es', lines: ['Primera', 'Segunda', 'Tercera', 'Cuarta'] } };
     offline.getLyrics.mockResolvedValue(record);
     try {
       setup();
