@@ -84,3 +84,10 @@ export function dedupeByRelevance(query, tracks, context = null) {
     .sort((a, b) => b.score - a.score || a.idx - b.idx)
     .map((x) => x.track);
 }
+
+/** Order result groups around a catalog-verified exact entity match. */
+export function searchSectionOrder(context) {
+  if (context?.kind === 'album') return ['albums', 'songs', 'artists'];
+  if (context?.kind === 'track') return ['songs', 'albums', 'artists'];
+  return ['artists', 'albums', 'songs'];
+}
