@@ -1,5 +1,6 @@
 """Compare installed Argos line-wise and short-context translation on the fixed fixture."""
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -16,8 +17,10 @@ for source in ('en', 'es'):
 import ctranslate2
 import sentencepiece
 from langdetect import DetectorFactory, detect_langs
-from lyrics_context import align_translation, phrase_groups, normalize_idioms
+from lyrics_context import align_translation, phrase_groups, normalize_idioms, argos_decoding_parameters
 DetectorFactory.seed = 0
+beam_size_override = os.environ.get('ARGOS_EVAL_BEAM_SIZE')
+length_penalty_override = os.environ.get('ARGOS_EVAL_LENGTH_PENALTY')
 out = []
 for source in ('en', 'es'):
     rows = [row for row in FIXTURE if row['source'] == source]
@@ -37,11 +40,16 @@ for source in ('en', 'es'):
         encode = lambda text: bpe.segment_tokens(tok.tokenize(norm.normalize(text)))
         decode = lambda tokens: detok.detokenize(' '.join(tokens).replace('@@ ', '').split())
     translator = ctranslate2.Translator(str(package / 'model'), device='cpu', compute_type='float32' if source == 'es' else 'int8', inter_threads=1, intra_threads=2)
+    decoding_parameters = argos_decoding_parameters(source)
+    if beam_size_override is not None:
+        decoding_parameters['beam_size'] = int(beam_size_override)
+    if length_penalty_override is not None:
+        decoding_parameters['length_penalty'] = float(length_penalty_override)
     groups = phrase_groups(lines, encode, max_lines=3, max_tokens=96, transform_group=lambda text: normalize_idioms(text, source))
     context_inputs = [[token for _, row in group for token in row] for group in groups]
     owners = [[owner for owner, (_, row) in enumerate(group) for _ in row] for group in groups]
     prefix = metadata.get('target_prefix', '')
-    grouped_results = translator.translate_batch(context_inputs, target_prefix=[[prefix]] * len(context_inputs) if prefix else None, beam_size=4, replace_unknowns=True, max_batch_size=256, batch_type='tokens', length_penalty=.2, max_decoding_length=256, return_attention=True)
+    grouped_results = translator.translate_batch(context_inputs, target_prefix=[[prefix]] * len(context_inputs) if prefix else None, **decoding_parameters, replace_unknowns=True, max_batch_size=256, batch_type='tokens', max_decoding_length=256, return_attention=True)
     # Report phrase translations without inventing per-line boundaries. Alignment is evaluated separately.
     aligned_groups = []
     failures = 0
@@ -52,5 +60,5 @@ for source in ('en', 'es'):
             aligned = []
             failures += 1
         aligned_groups.append({'source':[lines[index] for index,_ in group], 'translation':decode(result.hypotheses[0]).strip(), 'aligned':aligned})
-    out.append({'source':source,'model':'argos-'+source+'-'+('es' if source=='en' else 'en')+'-'+metadata.get('package_version',''),'alignmentFailures':failures,'groups':aligned_groups})
+    out.append({'source':source,'model':'argos-'+source+'-'+('es' if source=='en' else 'en')+'-'+metadata.get('package_version',''),'decodingParameters':decoding_parameters,'alignmentFailures':failures,'groups':aligned_groups})
 print(json.dumps({'linewise':baseline,'context':out},ensure_ascii=False))

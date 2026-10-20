@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from lyrics_context import phrase_groups, align_translation, normalize_text, normalize_idioms
+from lyrics_context import phrase_groups, align_translation, normalize_text, normalize_idioms, argos_decoding_parameters
 
 class ContextTests(unittest.TestCase):
     def test_phrases_join_continuations_but_respect_stanzas_and_punctuation(self):
@@ -13,6 +13,12 @@ class ContextTests(unittest.TestCase):
         groups = phrase_groups(['one'] * 10, lambda s: s.split(), max_lines=3)
         self.assertEqual([len(group) for group in groups], [3, 3, 3, 1])
         self.assertEqual(normalize_text('  I’m here  '), "I'm here")
+
+    def test_argos_decoding_parameters_are_direction_specific(self):
+        self.assertEqual(argos_decoding_parameters('en'), {'beam_size': 4, 'length_penalty': .2})
+        self.assertEqual(argos_decoding_parameters('es'), {'beam_size': 4, 'length_penalty': .6})
+        with self.assertRaises(ValueError):
+            argos_decoding_parameters('fr')
 
     def test_common_english_and_spanish_idioms_use_meaning_preserving_equivalents(self):
         self.assertEqual(
