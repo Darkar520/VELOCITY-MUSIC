@@ -55,7 +55,7 @@ for source in ('en', 'es'):
     failures = 0
     for group, owner, result in zip(groups, owners, grouped_results):
         try:
-            aligned = align_translation(result.hypotheses[0], result.attention, owner, len(group), decode)
+            aligned = align_translation(result.hypotheses[0], result.attention, owner, len(group), decode, 'es' if source == 'en' else 'en')
         except (ValueError, KeyError, TypeError):
             aligned = []
             failures += 1
