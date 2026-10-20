@@ -9,6 +9,7 @@ import { resolveActiveMode, createModeWatchdog } from './src/services/resolution
 import { probeYtDlp, getYtDlpDiagnostics, getYtDlpLoad, createYtDlpExtractor, createYtDlpCatalog, createSoundCloudCatalog, createSoundCloudExtractor, YT_DLP_BIN_DIR, resolveYtDlpBin } from './src/extractors/ytdlp.js';
 import { startYtDlpAutoUpdate } from './src/services/ytdlpUpdater.js';
 import { createYTMusicCatalog, createYTMusicVideoSearch, createYTMusicArtist, createYTMusicAlbum, createYTMusicLyrics, createYTMusicSearchAll, createYTMusicSearchMore, createYTMusicRadio, createYTMusicSong, readyPromise as ytMusicReadyPromise } from './src/extractors/ytmusic.js';
+import { combineSearchResults } from './src/lib/searchPagination.js';
 import { installYtDlpByDownload } from './src/services/extractorSetup.js';
 import {
   createJsonUserRepo,
@@ -325,12 +326,7 @@ export async function bootstrap() {
         if (ytData.status === 'rejected' && sc.length === 0) {
           throw ytData.reason || new Error('searchAll: catálogo no disponible');
         }
-        return {
-          songs: [...(yt.songs || []), ...sc],
-          albums: yt.albums || [],
-          artists: yt.artists || [],
-          ...(yt.context ? { context: yt.context } : {}),
-        };
+        return combineSearchResults(yt, sc);
       };
     })(),
     searchMoreImpl: createYTMusicSearchMore(),

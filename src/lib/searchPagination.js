@@ -5,6 +5,16 @@ export const SEARCH_FILTERS = Object.freeze({
   artists: 'Eg-KAQwIABAAGAAgASgAMABqChAEEAMQCRAFEAo=',
 });
 
+export function combineSearchResults(primary = {}, supplementarySongs = []) {
+  return {
+    songs: [...(primary.songs || []), ...supplementarySongs],
+    albums: primary.albums || [],
+    artists: primary.artists || [],
+    continuations: primary.continuations || {},
+    ...(primary.context ? { context: primary.context } : {}),
+  };
+}
+
 const textOf = (renderer) => (renderer?.runs || []).map((run) => run.text || '').join('').trim();
 const browseIdOf = (renderer) => renderer?.navigationEndpoint?.browseEndpoint?.browseId || null;
 const thumbnailsOf = (renderer) => renderer?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails || [];

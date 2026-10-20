@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { SEARCH_FILTERS, parseSearchRows } from '../src/lib/searchPagination.js';
+import { combineSearchResults, SEARCH_FILTERS, parseSearchRows } from '../src/lib/searchPagination.js';
 import { searchAllWithClient } from '../src/extractors/ytmusic.js';
 
 const text = (...runs) => ({ runs: runs.map(([value, browseId]) => ({ text: value, ...(browseId ? { navigationEndpoint: { browseEndpoint: { browseId } } } : {}) })) });
@@ -9,6 +9,13 @@ const firstPage = (item) => ({ contents: [{ musicShelfRenderer: { contents: [ite
 test('search pagination defines distinct provider filters for each catalog type', () => {
   assert.deepEqual(Object.keys(SEARCH_FILTERS), ['songs', 'albums', 'artists']);
   assert.equal(new Set(Object.values(SEARCH_FILTERS)).size, 3);
+});
+
+test('combining SoundCloud rows preserves YouTube Music category cursors', () => {
+  const continuations = { songs: 'song-next', albums: 'album-next', artists: 'artist-next' };
+  const combined = combineSearchResults({ songs: [{ id: 'yt' }], albums: [{ albumId: 'yt-album' }], artists: [], continuations }, [{ id: 'sc' }]);
+  assert.deepEqual(combined.songs.map((song) => song.id), ['yt', 'sc']);
+  assert.equal(combined.continuations, continuations);
 });
 
 test('parses a song row and returns its next-page cursor', () => {

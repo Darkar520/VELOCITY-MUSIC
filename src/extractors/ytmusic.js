@@ -969,7 +969,7 @@ export async function searchAllWithClient(client, query, limit = 20) {
   try {
     const { enrichSearchContext } = await import('../lib/searchContext.js');
     return await Promise.race([
-      enrichSearchContext(client, query, direct, { normalize: normalizeText, mapSong: mapYTMusicSong, mapAlbum: mapAlbumDetailed, mapArtist: mapArtistDetailed, loadAlbum: getAlbumDataWithClient }).then(result => ({ ...result, songs: result.songs.slice(0, limit), albums: result.albums.slice(0, 20), artists: result.artists.slice(0, 20) })),
+      enrichSearchContext(client, query, direct, { normalize: normalizeText, mapSong: mapYTMusicSong, mapAlbum: mapAlbumDetailed, mapArtist: mapArtistDetailed, loadAlbum: getAlbumDataWithClient }).then(result => ({ ...result, songs: result.songs.slice(0, limit), albums: result.albums.slice(0, 20), artists: result.artists.slice(0, 20), continuations: result.continuations || direct.continuations })),
       new Promise(resolve => { timer = setTimeout(() => resolve(direct), 5000); }),
     ]);
   } finally { clearTimeout(timer); }
