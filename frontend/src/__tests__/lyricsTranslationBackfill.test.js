@@ -13,14 +13,14 @@ beforeEach(() => { localStorage.clear(); state.records.clear(); vi.resetAllMocks
 it('a failed lyric request is not marked complete merely because its result is an object', async () => {
   api.lyrics.mockResolvedValue(null);
   expect(await scheduleLibraryOfflineSync(['failed'], { scope: 'negative-control' })).toEqual([]);
-  const saved = JSON.parse(localStorage.getItem('velocity.lyricsBackfill.v3.negative-control'));
+  const saved = JSON.parse(localStorage.getItem('velocity.lyricsBackfill.v4.negative-control'));
   expect(saved.completed).toEqual([]);
   expect(saved.failed.failed.attempts).toBe(1);
 });
 
 it('existing synchronized lyrics gain an aligned offline translation without refetching lyrics', async () => {
   state.records.set('saved', { synced: '[00:01.00]A first original sentence\n[00:02.00]A second original sentence' });
-  api.translateLyrics.mockResolvedValue({ status: 'ready', sourceLanguage: 'en', targetLanguage: 'es', lines: ['Primera frase', 'Segunda frase'] });
+  api.translateLyrics.mockResolvedValue({ status: 'ready', engineVersion:'argos-context-v2', sourceLanguage: 'en', targetLanguage: 'es', lines: ['Primera frase', 'Segunda frase'] });
   expect(await scheduleLibraryOfflineSync(['saved'], { scope: 'migration' })).toEqual(['saved']);
   expect(api.lyrics).not.toHaveBeenCalled();
   expect(state.records.get('saved').translation.lines).toEqual(['Primera frase', 'Segunda frase']);
@@ -35,4 +35,15 @@ it('an unavailable translator preserves lyrics and leaves migration pending', as
   expect(result.status).toBe('plain');
   expect(result.translationPending).toBe(true);
   expect(state.records.get('plain').plain).toBe(plain);
+});
+
+it('an unavailable context upgrade preserves an older aligned offline translation', async () => {
+  const plain = 'A first original sentence\nA second original sentence';
+  const old = { status:'ready', sourceText:JSON.stringify(plain.split('\n')), lines:['Old one','Old two'] };
+  state.records.set('cached', { plain, translation:old });
+  api.lyrics.mockRejectedValue(new Error('offline'));
+  api.translateLyrics.mockRejectedValue(new Error('unavailable'));
+  const result = await ensureLyricsOffline({ id:'cached' });
+  expect(result.translationPending).toBe(true);
+  expect(state.records.get('cached').translation).toEqual(old);
 });
