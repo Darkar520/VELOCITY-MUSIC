@@ -91,3 +91,19 @@ export function searchSectionOrder(context) {
   if (context?.kind === 'track') return ['songs', 'albums', 'artists'];
   return ['artists', 'albums', 'songs'];
 }
+
+/** Keep distinct artist recordings, including live/remix title qualifiers. */
+export function dedupeArtistTracks(tracks) {
+  if (!Array.isArray(tracks)) return [];
+  const seen = new Set();
+  return tracks.filter((track) => {
+    const id = String(track?.id || '').trim();
+    const key = id
+      ? `id:${id}`
+      : `title:${normText(track?.artist)}|${normText(track?.title)}`;
+    if (key === 'title:|') return false;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}

@@ -19,12 +19,14 @@ test('track intent adds its catalog album, primary artist and actual related art
   const track = { ...album.tracks[0], artistId: album.artistId };
   const related = { artistId: 'UC-cudi', name: 'Kid Cudi' };
   const client = { getAlbum: async () => album, getArtist: async () => ({ name: album.artist, topAlbums: [album], similarArtists: [related, { artistId: 'VLR-radio', name: 'A station' }] }) };
-  const result = await enrichSearchContext(client, 'Flashing Lights', { songs: [track], albums: [], artists: [] }, adapters);
+  const continuations = { songs: 's-next', albums: 'a-next', artists: 'r-next' };
+  const result = await enrichSearchContext(client, 'Flashing Lights', { songs: [track], albums: [], artists: [], continuations }, adapters);
   assert.equal(result.context.kind, 'track');
   assert.equal(result.albums[0].albumId, album.albumId);
   assert.equal(result.artists[0].artistId, album.artistId);
   assert.ok(result.artists.some(a => a.artistId === related.artistId));
   assert.ok(!result.artists.some(a => a.artistId === 'VLR-radio'));
+  assert.equal(result.continuations, continuations);
 });
 test('artist queries and failed album lookups retain direct search without fabricated membership', async () => {
   const data = { songs: [literal], albums: [album], artists: [] };

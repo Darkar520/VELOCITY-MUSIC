@@ -17,7 +17,7 @@
  */
 import { api } from '../api.js';
 import * as offline from '../offline.js';
-import { dedupeByTitle } from '../helpers.js';
+import { dedupeArtistTracks } from '../searchRanking.js';
 import {buildSeedMix, selectSearchSeed} from '../feed/seededMix.js';
 import {starterQueries, artistIdentity} from '../feed/tasteProfile.js';
 import { rankDjSeeds, orderDjStation } from '../feed/aiDj.js';
@@ -156,7 +156,7 @@ export function useCatalogNavigation({
     // Fallback de búsqueda: solo pistas cuyo artista coincida (evita basura genérica).
     const filterArtistTracks = (raw, artistName) => {
       const key = String(artistName || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-      const tracks = dedupeByTitle(raw.map(normalizeTrack));
+      const tracks = dedupeArtistTracks(raw.map(normalizeTrack));
       if (!key) return tracks;
       const own = tracks.filter((t) => {
         const a = String(t.artist || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
@@ -172,7 +172,7 @@ export function useCatalogNavigation({
       .then((d) => {
         const artistName = d.name || name;
         // Cinturón y tirantes: filtrar en cliente por si el backend devuelve algo ajeno.
-        const songs = dedupeByTitle((d.topSongs || []).map(normalizeTrack)).filter((t) => {
+        const songs = dedupeArtistTracks((d.topSongs || []).map(normalizeTrack)).filter((t) => {
           if (!artistName) return true;
           const key = String(artistName).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
           const a = String(t.artist || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');

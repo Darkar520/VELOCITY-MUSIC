@@ -46,5 +46,5 @@ export async function enrichSearchContext(client, query, data, { normalize, mapS
     const name = album?.artist || exactSong?.artist;
     artists = data.artists.filter(artist => artist.artistId === context.artistId || normalize(artist.name) === normalize(name));
   }
-  return { context, songs: unique([...primarySongs, ...relatedSongs, ...data.songs], 'id'), albums: unique([...albums, ...data.albums], 'albumId'), artists: unique([...artists, ...data.artists], 'artistId') };
+  return { context, songs: unique([...primarySongs, ...relatedSongs, ...data.songs], 'id'), albums: unique([...albums, ...data.albums], 'albumId'), artists: unique([...artists, ...data.artists], 'artistId'), continuations: data.continuations || {} };
 }

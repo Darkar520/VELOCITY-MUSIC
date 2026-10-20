@@ -284,6 +284,16 @@ test('Regresión: /api/search/all sin impl → 501', async () => {
   await request(app).get('/api/search/all').query({ q: 'test' }).expect(501);
 });
 
+test('Regresión: /api/search/more valida el tipo y sirve la siguiente página', async () => {
+  let received;
+  const app = buildApp({ searchMoreImpl: async (...args) => { received = args; return { results: [{ albumId: 'a2' }], continuation: 'next-2' }; } });
+  await request(app).get('/api/search/more').query({ q: 'Pink Floyd', type: 'albums', continuation: 'next-1' })
+    .expect(200).expect(({ body }) => { assert.equal(body.results[0].albumId, 'a2'); assert.equal(body.continuation, 'next-2'); });
+  assert.deepEqual(received, ['Pink Floyd', 'albums', 'next-1']);
+  await request(app).get('/api/search/more').query({ q: 'Pink Floyd', type: 'playlists', continuation: 'next-1' }).expect(400);
+  await request(app).get('/api/search/more').query({ q: 'Pink Floyd', type: 'albums', continuation: 'x'.repeat(8193) }).expect(400);
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 8. Fallback de cliente YT (android → ios) — interfaz del extractor
 // ─────────────────────────────────────────────────────────────────────────────

@@ -20,7 +20,7 @@ test('an explicit multiword artist in a title query ranks its recording above co
   assert.equal(result[0].id, 'original');
 });
 
-const { dedupeByRelevance, scoreTrack, searchSectionOrder } = await import('../frontend/src/searchRanking.js');
+const { dedupeByRelevance, dedupeArtistTracks, scoreTrack, searchSectionOrder } = await import('../frontend/src/searchRanking.js');
 const { dedupeByTitle } = await import('../frontend/src/helpers.js');
 
 // Dos subidas de la MISMA canción: video musical (i.ytimg, sin álbum) primero,
@@ -72,4 +72,14 @@ test('exact album searches show the matching album and its tracks before related
 test('exact track searches lead with songs while general searches keep the broad discovery order', () => {
   assert.deepEqual(searchSectionOrder({ kind: 'track', trackId: 'track-1' }), ['songs', 'albums', 'artists']);
   assert.deepEqual(searchSectionOrder(null), ['artists', 'albums', 'songs']);
+});
+
+test('artist discography keeps distinct live/remix recordings while deduping repeated IDs', () => {
+  const tracks = [
+    { id: 'studio', title: 'Time', artist: 'Pink Floyd' },
+    { id: 'live', title: 'Time (Live)', artist: 'Pink Floyd' },
+    { id: 'duplicate-live-id', title: 'Time (Live)', artist: 'Pink Floyd' },
+    { id: 'duplicate-live-id', title: 'Time (Live)', artist: 'Pink Floyd' },
+  ];
+  assert.deepEqual(dedupeArtistTracks(tracks).map((track) => track.id), ['studio', 'live', 'duplicate-live-id']);
 });
