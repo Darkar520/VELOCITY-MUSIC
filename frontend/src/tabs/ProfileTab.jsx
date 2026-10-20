@@ -111,6 +111,7 @@ export function ProfileTab({
         <div style={{ position:'relative' }}><div style={{ fontSize:9, fontWeight:900, letterSpacing:2, textTransform:'uppercase', opacity:.8 }}>Velocity</div><div style={{ fontSize:19, fontWeight:900, letterSpacing:-.4, marginTop:2 }}>Wrapped</div><div style={{ fontSize:11, fontWeight:700, opacity:.85, marginTop:3 }}>Tus artistas, canciones y minutos</div></div>
       </button>
 
+      <SectionHeader label="Apariencia" accent={T.accent} />
       <SettingCard title="Color de Acento">
         <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:9 }}>
           {Object.entries(THEMES).map(([key, th]) => (
@@ -154,6 +155,7 @@ export function ProfileTab({
         )}
       </SettingCard>
 
+      <SectionHeader label="Descargas" accent={T.accent} />
       <SettingCard title="Descargas (offline)">
         <div style={{ fontSize:11.5, color:'var(--txt-2)', lineHeight:1.5, marginBottom:12 }}>Tus descargas se guardan en este dispositivo y no se pierden al actualizar la app ni al cerrar sesión.</div>
         <button onClick={openDownloads} className="btn-tap" style={{ width:'100%', display:'flex', alignItems:'center', justifyContent:'center', gap:9, background:'var(--surf-1)', border:'1px solid var(--line)', borderRadius:14, padding:'12px 0', cursor:'pointer', color:'var(--txt-0)', fontSize:13, fontWeight:800 }}>
@@ -197,6 +199,7 @@ export function ProfileTab({
         document.body
       )}
 
+      <SectionHeader label="Audio" accent={T.accent} />
       <SettingCard title="Calidad de Audio">
         <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:9 }}>
           {[['high','Alta','Opus ~160k'],['medium','Media','AAC ~128k'],['low','Baja','~96k · ahorro']].map(([val,label,desc]) => (
@@ -218,6 +221,8 @@ export function ProfileTab({
       </SettingCard>
 
       {!isStandalone && (
+        <>
+        <SectionHeader label="Cuenta" accent={T.accent} />
         <SettingCard title="Aplicación">
           {canInstall ? (
             <button onClick={installApp} className="btn-tap" style={{ width:'100%', display:'flex', alignItems:'center', justifyContent:'center', gap:10, background:grad(T), border:'none', borderRadius:14, padding:'13px 0', cursor:'pointer', color:'#04060a', fontSize:13, fontWeight:800, boxShadow:`0 6px 18px ${hex2rgba(T.accent,.4)}` }}>
@@ -233,7 +238,10 @@ export function ProfileTab({
             </div>
           )}
         </SettingCard>
+        </>
       )}
+
+      {isStandalone && <SectionHeader label="Cuenta" accent={T.accent} />}
 
       <button onClick={onLogout} className="btn-tap" style={{ width:'100%', display:'flex', alignItems:'center', justifyContent:'center', gap:10, background:'var(--surf-0)', border:'1px solid var(--line)', borderRadius:16, padding:'14px 0', cursor:'pointer', color:'#fb7185', fontSize:13, fontWeight:800, marginTop:6 }}>
         <Icon.Out c="#fb7185" sz={17} /> Cerrar sesión

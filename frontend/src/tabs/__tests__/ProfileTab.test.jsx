@@ -95,6 +95,11 @@ describe('ProfileTab', () => {
     expect(screen.getByText(/VELOCITY MUSIC · v\d+\.\d+/)).toBeTruthy();
   });
 
+  it('agrupa los ajustes con secciones visibles', () => {
+    setup();
+    for (const section of ['Apariencia', 'Descargas', 'Audio', 'Cuenta']) expect(screen.getByText(section)).toBeTruthy();
+  });
+
   // "cerrar sesión" también aparece en el texto informativo de Descargas, así
   // que hay que apuntar al BOTÓN, no a cualquier coincidencia de texto.
   const botonCerrarSesion = () =>
