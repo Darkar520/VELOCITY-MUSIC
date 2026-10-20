@@ -52,7 +52,7 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
     return () => clearInterval(id);
   }, [showLyrics, pageVisible, open, audioRef, playing, track?.id]);
   // Tiempo efectivo: el de alta frecuencia si la letra está abierta, si no el prop.
-  const effTime = showLyrics ? lyricTime : time;
+  const effTime = showLyrics && playing ? lyricTime : time;
   // Color dominante de la portada actual. useDominantColor asume recibir la
   // imagen por el proxy propio (/img?u=…, mismo origen) para que el canvas no
   // quede "tainted" y getImageData funcione (ver hooks.js). El enrutado lo hace
@@ -190,6 +190,14 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
 
   const translatedLine = index => translationOn && translationState.status === 'ready' && translationState.lines?.[index]
     ? <div lang={translationState.targetLanguage} style={{ fontSize: desktop ? 15 : 12.5, fontWeight: 500, color: T.accent, lineHeight: 1.55, marginTop: 5 }}>{translationState.lines[index]}</div> : null;
+  const lyricSyncControls = lyricState.status === 'ok' && lyricState.synced.length > 0 && setLyricOffset && (
+    <div role="group" aria-label="Sincronía de la letra" style={{ display:'flex', flexWrap:'wrap', alignItems:'center', justifyContent:'center', gap:8, padding:'4px 10px 8px', flexShrink:0 }}>
+      <button type="button" aria-label="Atrasar letra" onClick={() => setLyricOffset(value => Math.round((value - .5) * 10) / 10)} className="press" style={{ width:40, height:36, borderRadius:10, background:'var(--surf-1)', border:'1px solid var(--line)', color:'var(--txt-0)', fontSize:19, cursor:'pointer' }}>−</button>
+      <span style={{ fontSize:11, color:'var(--txt-1)', fontWeight:700, minWidth:110, textAlign:'center' }}>Sincronía {lyricOffset > 0 ? '+' : ''}{lyricOffset.toFixed(1)} s</span>
+      <button type="button" aria-label="Adelantar letra" onClick={() => setLyricOffset(value => Math.round((value + .5) * 10) / 10)} className="press" style={{ width:40, height:36, borderRadius:10, background:'var(--surf-1)', border:'1px solid var(--line)', color:'var(--txt-0)', fontSize:19, cursor:'pointer' }}>+</button>
+      <button type="button" aria-label="Restablecer sincronía" disabled={lyricOffset === 0} onClick={() => setLyricOffset(0)} style={{ border:0, background:'transparent', color:'var(--txt-2)', fontSize:11, padding:'8px 4px', cursor:lyricOffset === 0 ? 'default' : 'pointer', opacity:lyricOffset === 0 ? .5 : 1 }}>Restablecer</button>
+    </div>
+  );
   const translationToggle = <div style={{ padding: '6px 12px', textAlign: 'center', flexShrink: 0 }}>
     <button type="button" aria-pressed={translationOn} onClick={() => setTranslationOn(value => !value)} style={{ border: '1px solid var(--line)', borderRadius: 16, padding: '7px 12px', background: 'var(--surf-1)', color: translationOn ? T.accent : 'var(--txt-1)', cursor: 'pointer', fontSize: 12 }}>Traducción {translationOn ? 'activada' : 'desactivada'}</button>
     {translationOn && <div role="status" style={{ fontSize: 11, color: 'var(--txt-2)', marginTop: 5 }}>{translationState.status === 'ready' ? `Traducción automática · ${translationState.targetLanguage === 'es' ? 'Español' : 'English'}` : translationState.status === 'loading' ? 'Preparando traducción…' : translationState.status === 'unsupported' ? 'Traducción disponible para letras en inglés y español.' : 'Traducción no guardada o temporalmente no disponible.'}</div>}
@@ -291,21 +299,15 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
           <div style={{ alignSelf:'stretch', maxHeight:'min(72vh, 620px)', display:'flex', flexDirection:'column', minWidth:0, minHeight:0, background:'linear-gradient(180deg, var(--surf-0), transparent)', border:'1px solid var(--line-soft)', borderRadius:24, overflow:'hidden' }}>
             <div style={{ display:'flex', alignItems:'center', gap:9, padding:'18px 24px 12px', flexShrink:0 }}>
               <Icon.Mic c={T.accent} sz={18} /><span style={{ fontSize:14, fontWeight:900, color:'var(--txt-0)' }}>Letra</span>
-              {lyricState.status==='ok' && lyricState.synced.length>0 && setLyricOffset && (
-                <div style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:8 }}>
-                  <button aria-label="Atrasar letra" onClick={() => setLyricOffset(o => Math.round((o - 0.5) * 10) / 10)} className="press" style={{ width:26, height:26, borderRadius:'50%', background:'var(--surf-1)', border:'1px solid var(--line)', color:'var(--txt-0)', fontSize:14, fontWeight:800, cursor:'pointer' }}>−</button>
-                  <span style={{ fontSize:10, color:'var(--txt-2)', fontWeight:700, minWidth:60, textAlign:'center' }}>{lyricOffset>0?'+':''}{lyricOffset.toFixed(1)}s</span>
-                  <button aria-label="Adelantar letra" onClick={() => setLyricOffset(o => Math.round((o + 0.5) * 10) / 10)} className="press" style={{ width:26, height:26, borderRadius:'50%', background:'var(--surf-1)', border:'1px solid var(--line)', color:'var(--txt-0)', fontSize:14, fontWeight:800, cursor:'pointer' }}>+</button>
-                </div>
-              )}
             </div>
             {translationToggle}
+            {lyricSyncControls}
             <div ref={lyricBoxRef} style={{ flex:1, overflowY:'auto', padding:'6px 28px 28px' }}>
               {lyricState.status === 'loading' && <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:10, paddingTop:'30%', color:'var(--txt-2)' }}><Spinner c={T.accent} sz={22} /><span style={{ fontSize:13 }}>Buscando letra…</span></div>}
               {lyricState.status === 'none' && <div style={{ fontSize:14, color:'var(--txt-2)', paddingTop:'34%', textAlign:'center' }}>Letra no disponible para esta pista.</div>}
               {lyricState.status === 'ok' && lyricState.synced.length > 0 && (<>
                 {lyricState.synced.map((l, i) => (
-                  <div key={i} data-li={i} onClick={() => seek(l.t)} style={{ fontSize: i===activeLyric ? 26 : 20, fontWeight: i===activeLyric ? 800 : 700, color: i===activeLyric ? 'var(--txt-0)' : (i < activeLyric ? 'var(--txt-2)' : 'var(--txt-1)'), margin:'14px 0', lineHeight:1.35, transition:'all .25s ease', cursor:'pointer', opacity: i===activeLyric ? 1 : .55 }}>{l.text || '♪'}{translatedLine(i)}</div>
+                  <div key={i} data-li={i} onClick={() => seek(l.t)} style={{ fontSize: i===activeLyric ? 26 : 20, fontWeight: i===activeLyric ? 800 : 700, color: i===activeLyric ? '#fff' : (i < activeLyric ? 'var(--txt-2)' : 'var(--txt-1)'), margin:'14px 0', lineHeight:1.35, transition:'all .25s ease', cursor:'pointer' }}>{l.text || '♪'}{translatedLine(i)}</div>
                 ))}
                 <div style={{ fontSize:10, color:'var(--txt-3)', marginTop:14 }}>Letra sincronizada · {lyricState.source}</div>
               </>)}
@@ -376,6 +378,7 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
         </div>
 
         {showLyrics && translationToggle}
+        {showLyrics && lyricSyncControls}
         {!showLyrics ? (
           <CoverSwipe next={next} prev={prev} playing={playing} glowF={glowF} ambientRgba={ambientRgba} art={art} track={track} loadingAudio={loadingAudio} nextCover={nextCover} prevCover={prevCover} />
         ) : (
@@ -384,15 +387,8 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
             {lyricState.status === 'none' && <div style={{ fontSize:13, color:'var(--txt-2)', paddingTop:'30%' }}>Letra no disponible para esta pista.</div>}
             {lyricState.status === 'ok' && lyricState.synced.length > 0 && (<>
               {lyricState.synced.map((l, i) => (
-                <div key={i} data-li={i} style={{ fontSize: i===activeLyric ? 17 : 14.5, fontWeight: i===activeLyric ? 800 : 600, color: i===activeLyric ? T.accent : (i < activeLyric ? 'var(--txt-2)' : 'var(--txt-1)'), margin:'9px 0', lineHeight:1.4, transition:'all .25s ease' }}>{l.text || '♪'}{translatedLine(i)}</div>
+                <div key={i} data-li={i} style={{ fontSize: i===activeLyric ? 17 : 14.5, fontWeight: i===activeLyric ? 800 : 600, color: i===activeLyric ? '#fff' : (i < activeLyric ? 'var(--txt-2)' : 'var(--txt-1)'), margin:'9px 0', lineHeight:1.4, transition:'all .25s ease' }}>{l.text || '♪'}{translatedLine(i)}</div>
               ))}
-              {setLyricOffset && (
-                <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:12, marginTop:16 }}>
-                  <button aria-label="Atrasar letra" onClick={() => setLyricOffset(o => Math.round((o - 0.5) * 10) / 10)} className="press" style={{ width:30, height:30, borderRadius:'50%', background:'var(--surf-1)', border:'1px solid var(--line)', color:'var(--txt-0)', fontSize:16, fontWeight:800, cursor:'pointer' }}>−</button>
-                  <span style={{ fontSize:10.5, color:'var(--txt-2)', fontWeight:700, minWidth:90, textAlign:'center' }}>Sincronía {lyricOffset>0?'+':''}{lyricOffset.toFixed(1)}s</span>
-                  <button aria-label="Adelantar letra" onClick={() => setLyricOffset(o => Math.round((o + 0.5) * 10) / 10)} className="press" style={{ width:30, height:30, borderRadius:'50%', background:'var(--surf-1)', border:'1px solid var(--line)', color:'var(--txt-0)', fontSize:16, fontWeight:800, cursor:'pointer' }}>+</button>
-                </div>
-              )}
               <div style={{ fontSize:9.5, color:'var(--txt-3)', marginTop:8 }}>Letra sincronizada · {lyricState.source}</div>
             </>)}
             {lyricState.status === 'ok' && lyricState.synced.length === 0 && (<>
