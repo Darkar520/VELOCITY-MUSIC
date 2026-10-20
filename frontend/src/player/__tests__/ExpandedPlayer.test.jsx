@@ -57,7 +57,7 @@ describe('ExpandedPlayer', () => {
   it.each([false, true])('active original is white, translation keeps its accent and sync is outside scrolling lyrics (desktop=%s)', async desktop => {
     const original = ['Original first sentence', 'Original second sentence', 'Original third sentence', 'Original fourth sentence'];
     api.lyrics.mockResolvedValueOnce({ synced: original.map((line,i)=>`[00:0${i+1}.00]${line}`).join('\n') });
-    api.translateLyrics.mockResolvedValueOnce({ status:'ready', engineVersion:'argos-context-v3', targetLanguage:'es', lines:original.map((_,i)=>`Traducción ${i+1}`) });
+    api.translateLyrics.mockResolvedValueOnce({ status:'ready', engineVersion:'argos-context-v4', targetLanguage:'es', lines:original.map((_,i)=>`Traducción ${i+1}`) });
     const { container, props } = setup({ desktop, time:.5, lyricOffset:1 });
     if (!desktop) fireEvent.click(screen.getByRole('button', { name:'Letra', exact:true }));
     fireEvent.click(screen.getByRole('button', { name:'Traducción desactivada' }));
@@ -77,7 +77,7 @@ describe('ExpandedPlayer', () => {
 
   it('translation mode renders each translation under its synchronized original and saves it', async () => {
     api.lyrics.mockResolvedValueOnce({ synced: '[00:01.00]A first original sentence\n[00:02.00]A second original sentence', source: 'test' });
-    api.translateLyrics.mockResolvedValueOnce({ status: 'ready', engineVersion:'argos-context-v3', targetLanguage: 'es', lines: ['Primera frase traducida', 'Segunda frase traducida'] });
+    api.translateLyrics.mockResolvedValueOnce({ status: 'ready', engineVersion:'argos-context-v4', targetLanguage: 'es', lines: ['Primera frase traducida', 'Segunda frase traducida'] });
     setup();
     fireEvent.click(screen.getByRole('button', { name: 'Traducción desactivada' }));
     const translated = await screen.findByText('Primera frase traducida');
@@ -88,7 +88,7 @@ describe('ExpandedPlayer', () => {
 
   it('a stored aligned translation renders without a translation network request', async () => {
     const lines = ['First original', 'Second original', 'Third original', 'Fourth original'];
-    const record = { synced: lines.map((line,i) => `[00:0${i+1}.00]${line}`).join('\n'), translation: { status: 'ready', engineVersion:'argos-context-v3', sourceText: JSON.stringify(lines), targetLanguage: 'es', lines: ['Primera', 'Segunda', 'Tercera', 'Cuarta'] } };
+    const record = { synced: lines.map((line,i) => `[00:0${i+1}.00]${line}`).join('\n'), translation: { status: 'ready', engineVersion:'argos-context-v4', sourceText: JSON.stringify(lines), targetLanguage: 'es', lines: ['Primera', 'Segunda', 'Tercera', 'Cuarta'] } };
     offline.getLyrics.mockResolvedValue(record);
     try {
       setup();
