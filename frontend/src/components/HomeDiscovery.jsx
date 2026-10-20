@@ -47,7 +47,8 @@ export function HomeDiscovery({rows,prefs,personalShelves=[],shelfKey='',play,go
   const readyRows=rows.map(row=>({...row,mixes:(row.mixes||[]).filter(m=>!m.pending)})).filter(row=>row.mixes.length);
   const mixes=readyRows.flatMap(s=>s.mixes).filter(m=>m.tracks?.length);
   const preferred=(prefs?.artists||[]).map(a=>a.name.toLocaleLowerCase());
-  const featured=mixes.find(m=>m.featured)||mixes.find(m=>preferred.includes(m.label.toLocaleLowerCase()))||mixes[0];
+  const fullMixes=mixes.filter(m=>m.tracks.length===50);
+  const featured=fullMixes.find(m=>m.featured)||fullMixes.find(m=>preferred.includes(m.label.toLocaleLowerCase()))||fullMixes[0]||(offline?mixes[0]:null);
   const ordered=featured?[featured,...mixes.filter(m=>m!==featured)]:mixes;
   const candidates=[],seenSongs=new Set(),artistCounts=new Map();
   for(let i=0;i<60&&candidates.length<72;i++)for(const mix of ordered){
@@ -70,8 +71,9 @@ export function HomeDiscovery({rows,prefs,personalShelves=[],shelfKey='',play,go
   const start=m=>play(m.tracks[0],m.tracks.map(t=>t.id),{mixLabel:m.label});
   if(!featured)return <section className="discovery-empty" aria-live="polite">
     <span className="discovery-eyebrow">TU SELECCIÓN PERSONAL</span>
-    <h2>{loading?'Afinando tu selección…':'Tu música empieza contigo.'}</h2>
+    <h2 style={{color:'#f4f7f5'}}>{loading?'Afinando tu selección…':'Tu música empieza contigo.'}</h2>
     <p>{loading?'Buscamos canciones de los géneros y artistas que elegiste.':'No pudimos cargar las recomendaciones. Tus preferencias están guardadas.'}</p>
+    {onEditPrefs&&<button onClick={onEditPrefs}>Ajustar gustos</button>}
     {loading?<div className="discovery-skeleton" aria-label="Cargando recomendaciones"/>:<button onClick={retry}>Volver a intentar</button>}
   </section>;
   const content=<>

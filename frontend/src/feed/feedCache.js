@@ -39,7 +39,7 @@ export function slimSections(sections) {
     .slice(0, MAX_SECTIONS)
     .map((sec) => ({
       section: sec.section,
-      mixes: (sec.mixes || []).filter(m=>!m.pending).slice(0, MAX_MIXES).map((m) => ({
+      mixes: (sec.mixes || []).filter(m=>!m.pending&&(!m.featured||(m.tracks||[]).length===50)).slice(0, MAX_MIXES).map((m) => ({
         label: m.label,
         featured: m.featured === true,
         tracks: (m.tracks || []).slice(0, MAX_TRACKS).map(slimTrack).filter(Boolean),
@@ -76,11 +76,13 @@ export function loadFeedCache(context = '') {
     if (Date.now() - (Number(parsed.ts) || 0) > MAX_AGE_MS) return null;
     if(parsed.format===2){
       if(!parsed.tracksById || typeof parsed.tracksById!=='object')return null;
-      return parsed.sections.map(sec=>({...sec,mixes:(sec.mixes||[]).map(m=>({
+      const sections=parsed.sections.map(sec=>({...sec,mixes:(sec.mixes||[]).filter(m=>!m.featured||m.tracks?.length===50).map(m=>({
         ...m,tracks:(m.tracks||[]).map(id=>parsed.tracksById[id]).filter(Boolean),
       })).filter(m=>m.tracks.length)})).filter(sec=>sec.mixes.length);
+      return sections.length?sections:null;
     }
-    return parsed.sections;
+    const sections=parsed.sections.map(sec=>({...sec,mixes:(sec.mixes||[]).filter(m=>!m.featured||(m.tracks||[]).length===50)})).filter(sec=>sec.mixes.length);
+    return sections.length?sections:null;
   } catch {
     return null;
   }
