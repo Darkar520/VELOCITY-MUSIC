@@ -12,12 +12,15 @@ IDIOM_EQUIVALENTS = {
         (re.compile(r'\bbrushing me off\b', re.I), 'not taking me seriously'),
         (re.compile(r'\bget this off my chest\b', re.I), 'tell you something that has been weighing on me'),
         (re.compile(r"\b(?:i'm done|i am done) walking on eggshells around you\b", re.I), 'i cannot keep trying to avoid upsetting you'),
+        (re.compile(r'\bgive it a shot\b', re.I), 'try it'),
     ),
     'es': (
         (re.compile(r'\bpasar página\b', re.I), 'seguir adelante'),
         (re.compile(r'\bse me hizo un nudo en la garganta\b', re.I), 'sentí un nudo en la garganta'),
         (re.compile(r'\bno sabes la falta que me haces\b', re.I), 'no sabes cuánto te extraño'),
         (re.compile(r'\bme da pena que esto termine así\b', re.I), 'me entristece que esto tenga que terminar así'),
+        (re.compile(r'\bestoy hasta las narices de\b', re.I), 'no soporto'),
+        (re.compile(r'\bme quedé de piedra\b', re.I), 'me sorprendí mucho'),
     ),
 }
 

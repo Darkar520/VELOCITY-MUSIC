@@ -5,12 +5,15 @@
   {"id":"en-idiom-done","source":"en","lines":["I'm done walking on eggshells around you."],"reference":"Ya me cansé de tener que medir cada palabra contigo."},
   {"id":"en-continuation","source":"en","lines":["I was about to give up","when you showed up at my door."],"reference":"Estaba a punto de rendirme cuando apareciste en mi puerta."},
   {"id":"en-relative","source":"en","lines":["Now I finally understand","what you were trying to tell me."],"reference":"Ahora por fin entiendo lo que intentabas decirme."},
+  {"id":"en-idiom-shot","source":"en","lines":["Give it a shot."],"reference":"Inténtalo."},
   {"id":"en-negative-control","source":"en","lines":["I never said I wanted you to leave."],"reference":"Nunca dije que quisiera que te fueras."},
   {"id":"es-idiom-page","source":"es","lines":["Me cuesta pasar página","cuando todo me recuerda a ti."],"reference":"It's hard for me to move on when everything reminds me of you."},
   {"id":"es-idiom-long","source":"es","lines":["Se me hizo un nudo en la garganta."],"reference":"I had a lump in my throat."},
   {"id":"es-idiom-miss","source":"es","lines":["No sabes la falta que me haces."],"reference":"You have no idea how much I miss you."},
   {"id":"es-idiom-expense","source":"es","lines":["No quiero ser feliz a costa de tu tristeza."],"reference":"I don't want to be happy at the expense of your sadness."},
   {"id":"es-idiom-shame","source":"es","lines":["Me da pena que esto termine así."],"reference":"I'm sad that things are ending this way."},
+  {"id":"es-idiom-fed-up","source":"es","lines":["Estoy hasta las narices de tus mentiras."],"reference":"I'm fed up with your lies."},
+  {"id":"es-idiom-stunned","source":"es","lines":["Me quedé de piedra cuando lo vi."],"reference":"I was stunned when I saw him."},
   {"id":"es-continuation","source":"es","lines":["Lo que más me duele","es que ya no confíes en mí."],"reference":"What hurts me most is that you no longer trust me."},
   {"id":"es-negative-control","source":"es","lines":["Nunca dije que quisiera que te fueras."],"reference":"I never said I wanted you to leave."}
 ]

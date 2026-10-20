@@ -54,4 +54,4 @@ for group, owner, result in zip(groups, owners, results):
     aligned = align_translation(result.hypotheses[0], result.attention, owner, len(group), decode, target)
     for (line_index, _), translated in zip(group, aligned):
         translations[line_index] = translated
-print(json.dumps({'status': 'ready', 'sourceLanguage': source, 'targetLanguage': target, 'model': 'argos-' + source + '-' + target + '-' + metadata.get('package_version', ''), 'engineVersion': 'argos-context-v7', 'lines': translations}, ensure_ascii=False))
+print(json.dumps({'status': 'ready', 'sourceLanguage': source, 'targetLanguage': target, 'model': 'argos-' + source + '-' + target + '-' + metadata.get('package_version', ''), 'engineVersion': 'argos-context-v8', 'lines': translations}, ensure_ascii=False))

@@ -32,6 +32,10 @@ class ContextTests(unittest.TestCase):
         self.assertEqual(normalize_idioms('No sabes la falta que me haces.', 'es'), 'No sabes cuánto te extraño.')
         self.assertEqual(normalize_idioms('Se me hizo un nudo en la garganta.', 'es'), 'Sentí un nudo en la garganta.')
         self.assertEqual(normalize_idioms('Me da pena que esto termine así.', 'es'), 'Me entristece que esto tenga que terminar así.')
+        self.assertEqual(normalize_idioms('Give it a shot.', 'en'), 'Try it.')
+        self.assertEqual(normalize_idioms('Estoy hasta las narices de tus mentiras.', 'es'), 'No soporto tus mentiras.')
+        self.assertEqual(normalize_idioms('Me quedé de piedra cuando lo vi.', 'es'), 'Me sorprendí mucho cuando lo vi.')
+        self.assertEqual(normalize_idioms('I took a shot at the target.', 'en'), 'I took a shot at the target.')
 
     def test_idiom_equivalence_is_applied_across_timed_rows_without_losing_alignment_tokens(self):
         groups = phrase_groups(
