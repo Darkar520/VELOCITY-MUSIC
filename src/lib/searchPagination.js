@@ -8,7 +8,6 @@ export const SEARCH_FILTERS = Object.freeze({
 const textOf = (renderer) => (renderer?.runs || []).map((run) => run.text || '').join('').trim();
 const browseIdOf = (renderer) => renderer?.navigationEndpoint?.browseEndpoint?.browseId || null;
 const thumbnailsOf = (renderer) => renderer?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails || [];
-const firstThumbnail = (items) => items.at?.(-1)?.url || items[items.length - 1]?.url || null;
 const columnsOf = (item) => (item?.musicResponsiveListItemRenderer?.flexColumns || [])
   .map((column) => column?.musicResponsiveListItemFlexColumnRenderer?.text);
 const rendererOf = (item) => item?.musicResponsiveListItemRenderer || item?.musicTwoRowItemRenderer || item;
