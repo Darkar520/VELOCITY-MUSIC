@@ -40,6 +40,33 @@ test('Cloudflare: las demás rutas API conservan su enrutamiento', async (t) => 
   assert.equal(forwarded.method, 'GET');
 });
 
+test('Cloudflare: el proxy de imágenes reintenta fallos transitorios y luego devuelve la imagen', async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls++;
+    return calls < 3
+      ? new Response('backend temporalmente no disponible', { status: 503 })
+      : new Response('image bytes', { status: 200, headers: { 'content-type': 'image/jpeg' } });
+  });
+  const response = await router.fetch(new Request('https://velocitymusic.uk/img?u=https%3A%2F%2Fi.ytimg.com%2Fvi%2Fabc123%2Fhqdefault.jpg'), {});
+  assert.equal(calls, 3);
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), 'image bytes');
+});
+
+test('Cloudflare: no repite indefinidamente un fallo de imagen ni reintenta otros endpoints', async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => { calls++; return new Response('unavailable', { status: 503 }); });
+  const image = await router.fetch(new Request('https://velocitymusic.uk/img?u=https%3A%2F%2Fi.ytimg.com%2Fvi%2Fabc123%2Fhqdefault.jpg'), {});
+  assert.equal(image.status, 503);
+  assert.equal(calls, 3);
+
+  calls = 0;
+  const api = await router.fetch(new Request('https://velocitymusic.uk/api/example'), {});
+  assert.equal(api.status, 503);
+  assert.equal(calls, 1);
+});
+
 test('Cloudflare: los assets estáticos siguen en Pages', async (t) => {
   let forwarded;
   t.mock.method(globalThis, 'fetch', async (request) => {

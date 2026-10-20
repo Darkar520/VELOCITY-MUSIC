@@ -53,7 +53,21 @@ export default {
       if (isAudio) init.cache = 'no-store';
       // No combinar Request.cache='no-store' con cf.cacheTtl: workerd rechaza
       // esa combinación, aunque las dos opciones funcionen por separado.
-      const response = await fetch(new Request(request.url, init));
+      const retryableImageGet = request.method === 'GET' && path === '/img';
+      const transientStatuses = new Set([502, 503, 504, 520, 521, 522, 523, 524]);
+      let response;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          response = await fetch(new Request(request.url, init));
+        } catch (error) {
+          if (!retryableImageGet || attempt >= 2) throw error;
+          await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
+          continue;
+        }
+        if (!retryableImageGet || !transientStatuses.has(response.status) || attempt >= 2) break;
+        await response.body?.cancel().catch(() => {});
+        await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
+      }
       if (!isAudio) return response;
       const headers = new Headers(response.headers);
       headers.set('Cache-Control', 'private, no-store, no-transform');
