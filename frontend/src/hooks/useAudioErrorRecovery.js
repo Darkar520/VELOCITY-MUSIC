@@ -41,6 +41,7 @@ export function useAudioErrorRecovery({
     if (failure?.kind !== 'stall' && !a.error) return;
     if (a.currentSrc && a.currentSrc !== new URL(rawSrc, location.href).href) return;
     // El elemento <audio> no expone el body 401/502; se vuelve a preparar una vez.
+    const directSource = api.isDirectPlaybackUrl(rawSrc);
 
     selfPauseRef.current = false;
     const cur = track?.id;
@@ -55,6 +56,7 @@ export function useAudioErrorRecovery({
       playErrorRef.current = { id: null, n: 0 };
       return;
     }
+    if (directSource) api.recordDirectPlaybackFailure(rawSrc);
     const st = playErrorRef.current;
     const n = (st.id === cur) ? st.n : 0;
     const stalled = failure?.kind === 'stall' || (st.id === cur && st.kind === 'stall');
@@ -89,7 +91,7 @@ export function useAudioErrorRecovery({
       const delay = RETRY_DELAYS[Math.min(attempt - 1, RETRY_DELAYS.length - 1)];
       setTimeout(async () => {
         if (!audioRef.current || trackRef.current?.id !== cur) return;
-        if (!playingRef.current) { setLoadingAudio(false); return; }
+        if (!playingRef.current || getMachine().focus === 'yielded') { setLoadingAudio(false); return; }
         try {
           const q = QUALITY_MAP[quality] || 'high';
           const tk = trackRef.current || track;
@@ -99,9 +101,9 @@ export function useAudioErrorRecovery({
           };
           // Pide una URL upstream fresca; sin forceRefresh solo se volvería a
           // firmar la misma entrada vencida de StreamCache.
-          const base = await api.ensureStreamUrl(sp, { forceRefresh: true });
+          const base = await api.ensureStreamUrl(sp, { forceRefresh: true, playbackMode: 'proxy' });
           if (trackRef.current?.id !== cur) return;
-          if (!playingRef.current || getMachine().intent !== 'play') { setLoadingAudio(false); return; }
+          if (!playingRef.current || getMachine().intent !== 'play' || getMachine().focus === 'yielded') { setLoadingAudio(false); return; }
           const url = base + (base.includes('?') ? '&' : '?') + '_r=' + Date.now();
           // Reanudar donde se interrumpió si el elemento conoce la duración.
           // La fuente nueva se monta primero; USER_SEEK aplica el seek al nuevo src.
@@ -112,6 +114,13 @@ export function useAudioErrorRecovery({
           // conserva el gate de playingRef para A13.
           dispatchAudio({ type: 'STREAM_READY', trackId: cur, url });
           if (canResume) dispatchAudio({ type: 'USER_SEEK', position: interruptedAt });
+          if (directSource) {
+            api.reportPlaybackError({
+              trackId: cur,
+              errorCode: 'DIRECT_FALLBACK_PROXY_MOUNTED',
+              errorMessage: `Direct source failed (MediaError ${a.error?.code || 0}); switched once to the signed proxy.`,
+            }).catch(() => {});
+          }
         } catch (err) {
           if (trackRef.current?.id !== cur || getMachine().intent !== 'play') return;
           setLoadingAudio(false);

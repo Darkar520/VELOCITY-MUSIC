@@ -3,9 +3,9 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ blob: vi.fn(), peek: vi.fn(), ensure: vi.fn(), offlineCompatible: vi.fn() }));
 vi.mock('../../audio/playbackFormat.js', () => ({ canUseOfflineAudio: mocks.offlineCompatible }));
 vi.mock('../../api.js', () => ({ api: {
-  peekStreamUrl: mocks.peek, ensureStreamUrl: mocks.ensure, streamUrl: () => '/api/unsigned',
+  peekStreamUrl: mocks.peek, peekPlaybackUrl: mocks.peek, ensureStreamUrl: mocks.ensure, streamUrl: () => '/api/unsigned',
   warmStreamUrl: vi.fn(), recordHistory: async () => {}, updateNowPlaying: vi.fn(), saveTracks: async () => {},
-  reportPlaybackError: async () => {},
+  reportPlaybackError: async () => {}, isDirectPlaybackUrl: () => false, recordDirectPlaybackSuccess: () => false,
 } }));
 vi.mock('../../offline.js', () => ({ getBlob: mocks.blob }));
 vi.mock('../../coverEnrich.js', () => ({ enrichCoverIfNeeded: vi.fn() }));

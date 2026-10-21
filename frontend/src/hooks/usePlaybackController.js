@@ -16,6 +16,7 @@ import { canStartPlayback } from '../audio/audioMachine.js';
 import { canUseOfflineAudio } from '../audio/playbackFormat.js';
 import { usePlayerStore } from '../store/playerStore.js';
 import { enrichCoverIfNeeded } from '../coverEnrich.js';
+import { beginPlaybackStartMeasurement, cancelPlaybackStartMeasurement, finishPlaybackStartMeasurement } from '../audio/playbackStartMetrics.js';
 
 const QUALITY_MAP = { high: 'high', medium: 'medium', low: 'low', HQ: 'high', Standard: 'medium', FLAC: 'low' };
 
@@ -85,6 +86,7 @@ export function usePlaybackController(deps) {
     // llegan al límite anti-cascada y detienen la reproducción (bug stuck-0:00).
     playErrorRef: playErrorRefDep,
     consecutiveFailsRef: consecutiveFailsRefDep,
+    playbackMode = 'auto',
   } = deps;
 
   const effectCtxRef = useRef({});
@@ -93,6 +95,7 @@ export function usePlaybackController(deps) {
   const resolveAbortRef = useRef(null);
   const playGenRef = useRef(0);
   const prefetchedRef = useRef(new Set());
+  const prefetchRequestRef = useRef(null);
   const prefetchedOfflineRef = useRef(new Map());
   /** Fallos de firma por trackId — evita bucle PLAY_FAILED↔ensureStream y toasts falsos. */
   const signFailRef = useRef({ id: null, n: 0 });
@@ -139,7 +142,14 @@ export function usePlaybackController(deps) {
     canPlay: () => mountedRef.current && canStartPlayback(getMachine()),
     ensureStream: (trackId) => { ensureStreamFnRef.current(trackId); },
     onPlayOk: (a) => {
-      const tid = getMachine().trackId;
+      const machine = getMachine();
+      const tid = machine.trackId;
+      if (machine.intent === 'play' && machine.focus !== 'yielded') {
+        finishPlaybackStartMeasurement();
+        const activeUrl = a?.currentSrc || a?.src;
+        if (api.isDirectPlaybackUrl(activeUrl)) api.recordDirectPlaybackSuccess(activeUrl);
+      }
+      else cancelPlaybackStartMeasurement();
       dispatchAudio({
         type: 'PLAYING',
         position: a?.currentTime || 0,
@@ -163,6 +173,12 @@ export function usePlaybackController(deps) {
       mountedRef.current = false;
       bumpAudioEpoch(effectCtxRef.current);
       resolveAbortRef.current?.abort();
+      const prefetchRequest = prefetchRequestRef.current;
+      if (prefetchRequest) {
+        prefetchRequest.controller.abort();
+        prefetchedRef.current.delete(prefetchRequest.key);
+        prefetchRequestRef.current = null;
+      }
       usePlayerStore.getState().setPolicyEffectCtx(null);
     };
   }, []);
@@ -225,7 +241,7 @@ export function usePlaybackController(deps) {
     const start = performance.now();
     const durMs = 130;
     const step = (now) => {
-      const p = Math.min(1, (now - start) / durMs);
+      const p = Math.max(0, Math.min(1, (now - start) / durMs));
       a.volume = target * (p * (2 - p));
       if (p < 1) fadeRafRef.current = requestAnimationFrame(step);
       else a.volume = target;
@@ -260,7 +276,7 @@ export function usePlaybackController(deps) {
       // IndexedDB callbacks can be deferred while a mobile PWA is hidden.
       // Known downloads and disconnected playback still use local bytes first.
       if (!downloaded.has(trackId) && online && sp && !readyLocalBlob) {
-        const preparedUrl = api.peekStreamUrl(sp, 30);
+        const preparedUrl = api.peekPlaybackUrl(sp, 30, playbackMode);
         if (preparedUrl) {
           signFailRef.current = { id: null, n: 0 };
           dispatchAudio({ type: 'STREAM_READY', trackId, url: preparedUrl });
@@ -278,7 +294,7 @@ export function usePlaybackController(deps) {
         ? null
         : blobPromise.then((blob) => ({ blob }));
       const remotePromise = prefetchedBlob && !downloaded.has(trackId) && online && sp && !readyLocalBlob
-        ? api.ensureStreamUrl(sp, { signal: resolveController.signal })
+        ? api.ensureStreamUrl(sp, { signal: resolveController.signal, playbackMode })
           .then((url) => ({ url }), (error) => ({ error }))
         : null;
       let b;
@@ -336,14 +352,14 @@ export function usePlaybackController(deps) {
       // Usar solo la firma de la pista actual. Si una precarga anterior ya dejó
       // la firma en caché, peek evita otra petición; si no, ensureStreamUrl es
       // la única resolución del camino crítico.
-      let url = api.peekStreamUrl(sp, 30);
+      let url = api.peekPlaybackUrl(sp, 30, playbackMode);
       if (!url) {
         if (remotePromise) {
           const result = await remotePromise;
           if (result.error) throw result.error;
           url = result.url;
         } else {
-          url = await api.ensureStreamUrl(sp, { signal: resolveController.signal });
+          url = await api.ensureStreamUrl(sp, { signal: resolveController.signal, playbackMode });
         }
       }
       if (resolveController.signal.aborted) return;
@@ -381,15 +397,22 @@ export function usePlaybackController(deps) {
   };
 
   const prefetchNext = useCallback((currentId, ids, qParam) => {
-    if (!ids || ids.length < 2) return;
-    const i = ids.indexOf(currentId);
-    if (i === -1) return;
+    const queueIds = Array.isArray(ids) ? ids : [];
+    const i = currentId ? queueIds.indexOf(currentId) : -1;
     // Solo la siguiente (antes 4 pistas en paralelo → lag de red/CPU).
-    const nextId = ids[(i + 1) % ids.length];
-    if (!nextId || nextId === currentId) return;
+    const candidateId = i >= 0 && queueIds.length > 1 ? queueIds[(i + 1) % queueIds.length] : null;
+    const nextId = candidateId && candidateId !== currentId ? candidateId : null;
+    const key = nextId ? `${nextId}:${qParam}:${playbackMode}` : null;
+    const pending = prefetchRequestRef.current;
+    if (pending && pending.key !== key) {
+      pending.controller.abort();
+      prefetchedRef.current.delete(pending.key);
+      prefetchRequestRef.current = null;
+    }
     for (const id of prefetchedOfflineRef.current.keys()) {
       if (id !== nextId) prefetchedOfflineRef.current.delete(id);
     }
+    if (!nextId) return Promise.resolve(null);
     if (!prefetchedOfflineRef.current.has(nextId)) {
       const entry = { ready: false, blob: null, promise: null };
       entry.promise = offline.getBlob(nextId).then((blob) => {
@@ -402,18 +425,38 @@ export function usePlaybackController(deps) {
       });
       prefetchedOfflineRef.current.set(nextId, entry);
     }
-    if (downloaded.has(nextId)) return;
+    if (downloaded.has(nextId)) return Promise.resolve(null);
     const nt = trackById(nextId);
-    if (!nt) return;
-    const key = nextId + ':' + qParam;
-    if (prefetchedRef.current.has(key)) return;
+    if (!nt) return Promise.resolve(null);
+    if (prefetchRequestRef.current?.key === key) return prefetchRequestRef.current.promise;
+    if (prefetchedRef.current.has(key)) {
+      const cachedUrl = api.peekPlaybackUrl(streamParamsFor(nt, qParam), 300, playbackMode);
+      if (cachedUrl) return Promise.resolve(cachedUrl);
+      prefetchedRef.current.delete(key);
+    }
     prefetchedRef.current.add(key);
     const sp = streamParamsFor(nt, qParam);
-    api.warmStreamUrl(sp);
+    const request = { key, controller: new AbortController() };
+    prefetchRequestRef.current = request;
+    request.promise = Promise.resolve(api.warmStreamUrl(sp, {
+      signal: request.controller.signal,
+      playbackMode,
+    }))
+      .then((url) => {
+        if (prefetchRequestRef.current === request) prefetchRequestRef.current = null;
+        if (url === null) prefetchedRef.current.delete(key);
+        return url;
+      })
+      .catch(() => {
+        if (prefetchRequestRef.current === request) prefetchRequestRef.current = null;
+        prefetchedRef.current.delete(key);
+        return null;
+      });
     if (prefetchedRef.current.size > 40) {
       prefetchedRef.current = new Set([...prefetchedRef.current].slice(-20));
     }
-  }, [downloaded, streamParamsFor]);
+    return request.promise;
+  }, [downloaded, playbackMode, streamParamsFor]);
 
   const ensureRadioFull = useCallback(async (seed, existingIds = []) => {
     if (!seed?.id) return;
@@ -501,7 +544,10 @@ export function usePlaybackController(deps) {
       && !opts.keepMix && !opts.restart && !audio?.ended && hasCurrentPlayback
     ) {
       current.setExpanded(true);
-      if (machine.intent !== 'play') dispatchAudio({ type: 'USER_PLAY' });
+      if (machine.intent !== 'play') {
+        beginPlaybackStartMeasurement();
+        dispatchAudio({ type: 'USER_PLAY' });
+      }
       return;
     }
     resolveAbortRef.current?.abort();
@@ -530,6 +576,7 @@ export function usePlaybackController(deps) {
     });
 
     // 1) Invalidar plays/seeks de la pista anterior (timeouts schedulePlay).
+    beginPlaybackStartMeasurement();
     ++playGenRef.current;
     signFailRef.current = { id: null, n: 0 };
     // Resetear contadores de error: una acción explícita del usuario (nuevo track)
@@ -589,6 +636,7 @@ export function usePlaybackController(deps) {
   const togglePlay = useCallback(() => {
     if (!track) return;
     if (getMachine().intent === 'play' || playingRef.current || playing) {
+      cancelPlaybackStartMeasurement();
       resolveAbortRef.current?.abort();
       resolveAbortRef.current = null;
       dispatchAudio({ type: 'USER_PAUSE' });
@@ -601,6 +649,7 @@ export function usePlaybackController(deps) {
       });
       return;
     }
+    beginPlaybackStartMeasurement();
     if (getMachine().trackId !== track.id) {
       dispatchAudio({ type: 'TRACK_SET', trackId: track.id, intent: 'play' });
     } else {

@@ -165,7 +165,7 @@ export function planUpstreamRange(clientRange) {
  * @param {typeof fetch} [deps.fetchImpl]
  * @param {number} [deps.timeoutMs]
  */
-export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeoutMs = PROXY_TIMEOUT_MS, logger = console }) {
+export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeoutMs = PROXY_TIMEOUT_MS, logger = console, playbackMetrics = null }) {
   return async function streamProxyHandler(req, res) {
     const v = validateProxyParams(req.query.artist, req.query.title);
     if (!v.ok) {
@@ -177,6 +177,29 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
     const stream = String(req.query.stream || '').trim() || undefined;
     const videoId = String(req.query.id || '').trim() || undefined;
     const quality = String(req.query.quality || '').trim() || undefined;
+    const metric = playbackMetrics?.startProxy({
+      identity: [videoId || '', v.artist, v.title, quality || '', req.headers.range || ''].join('\0'),
+      isRange: Boolean(req.headers.range),
+    });
+    let metricFinished = false;
+    const finishMetric = () => {
+      if (metricFinished) return;
+      metricFinished = true;
+      metric?.finish({ statusCode: res.statusCode, aborted: !res.writableEnded });
+    };
+    res.once?.('finish', finishMetric);
+    res.once?.('close', finishMetric);
+    if (metric && typeof res.write === 'function') {
+      const write = res.write.bind(res);
+      res.write = (chunk, encoding, callback) => {
+        const byteCount = typeof chunk === 'string'
+          ? Buffer.byteLength(chunk, typeof encoding === 'string' ? encoding : undefined)
+          : chunk?.byteLength;
+        const result = write(chunk, encoding, callback);
+        metric.addBytes(byteCount);
+        return result;
+      };
+    }
 
     const plan = planUpstreamRange(req.headers.range);
     // Un único presupuesto de arranque cubre resolución, conexión upstream y
@@ -313,7 +336,12 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
         const attempts = allowRetries ? 3 : 1;
         let last;
         for (let i = 0; i < attempts; i++) {
-          if (i > 0) await sleep(i === 1 ? 800 : i === 2 ? 1800 : 3200);
+          if (controller.signal.aborted) return { kind: 'networkError' };
+          if (i > 0) {
+            metric?.recordRetry();
+            await sleep(i === 1 ? 800 : i === 2 ? 1800 : 3200, controller.signal);
+            if (controller.signal.aborted) return { kind: 'networkError' };
+          }
           try {
             resetDeadline();
             last = await fetchUpstream(url, range, controller.signal);
@@ -483,15 +511,26 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
         start = boundedRange.end + 1;
         // Keep yielding between blocks; introduce pacing only after a 403.
         // fetchChunk retains its bounded 800/1800 ms retries for that signal.
-        await sleep(chunkDelayMs);
+        await sleep(chunkDelayMs, controller.signal);
       }
       res.end();
       return { kind: 'ok', upstream: null };
     };
 
     /** Backoff simple entre reintentos de chunk. */
-    function sleep(ms) {
-      return new Promise((resolve) => setTimeout(resolve, ms));
+    function sleep(ms, signal) {
+      if (signal?.aborted || ms <= 0) return Promise.resolve();
+      return new Promise((resolve) => {
+        let timer;
+        const finish = () => {
+          clearTimeout(timer);
+          signal?.removeEventListener('abort', finish);
+          resolve();
+        };
+        timer = setTimeout(finish, ms);
+        signal?.addEventListener('abort', finish, { once: true });
+        if (signal?.aborted) finish();
+      });
     }
 
     // Un intento = resolver (con o sin caché) + fetch upstream. Devuelve un
@@ -535,6 +574,7 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
       if (remainingStartupMs() <= 0) return { kind: 'networkError' };
 
       const controller = new AbortController();
+      watchResponseClose(res, controller);
       let timer = null;
       const resetDeadline = () => {
         clearTimeout(timer);
@@ -595,7 +635,7 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
     // 1er intento con caché. Si el upstream falla (URL de audio expirada/403) o
     // hay error de red, se reintenta UNA vez re-resolviendo con URL fresca.
     let r = await attempt(false);
-    if (r.kind === 'upstreamBad' || r.kind === 'networkError' || r.kind === 'upstreamRangeInvalid') {
+    if (!res.destroyed && (r.kind === 'upstreamBad' || r.kind === 'networkError' || r.kind === 'upstreamRangeInvalid')) {
       r = await attempt(true);
     }
 
@@ -625,6 +665,21 @@ export function createStreamProxyHandler({ resolveUrl, fetchImpl = fetch, timeou
     // upstreamBad tras reintento.
     return res.status(502).json({ error: 'La fuente de audio respondió ' + r.status + '.' });
   };
+}
+
+function watchResponseClose(res, controller) {
+  if (typeof res?.once !== 'function') return;
+  const cleanup = () => {
+    res.removeListener?.('close', onClose);
+    res.removeListener?.('finish', cleanup);
+  };
+  const onClose = () => {
+    if (!res.writableEnded) controller.abort();
+    cleanup();
+  };
+  res.once('close', onClose);
+  res.once('finish', cleanup);
+  if (res.destroyed && !res.writableEnded) onClose();
 }
 
 function readWithTimeout(reader, timeoutMs, controller) {

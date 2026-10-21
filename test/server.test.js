@@ -63,6 +63,14 @@ test('Smoke: GET /api/status responde con el esquema y modo activo', async () =>
   assert.ok(elapsed <= 2000);
 });
 
+test('GET /api/qualities mantiene alta disponible y anuncia media como valor inicial', async () => {
+  const res = await request(buildTestApp()).get('/api/qualities').expect(200);
+  assert.equal(res.body.default, 'medium');
+  assert.deepEqual(res.body.qualities.map(({ id }) => id), ['high', 'medium', 'low']);
+  assert.match(res.body.qualities.find(({ id }) => id === 'high').label, /160kbps/);
+  assert.match(res.body.qualities.find(({ id }) => id === 'medium').label, /128kbps/);
+});
+
 test('GET /api/status refleja el snapshot actualizado al recuperarse el watchdog', async () => {
   let mode = 'degraded';
   const extractorDiagnostics = {
@@ -246,6 +254,59 @@ test('GET /api/playback/prepare autentica, resuelve y firma antes de devolver la
   const status = (await request(app).get('/api/status')).body.extractor;
   assert.equal(status.playbackProbe, 'not_run');
   assert.deepEqual(status.load, { activeProcesses: 2, queuedRequests: 3, maxConcurrent: 4, maxQueued: 32 });
+});
+
+test('GET /api/playback/prepare exposes a trusted direct URL only in experimental modes and retains signed proxy', async () => {
+  const sourceUrl = `https://rr1.googlevideo.com/videoplayback?expire=${Math.floor(Date.now() / 1000) + 900}&mime=audio%2Fwebm`;
+  const app = buildTestApp({ extractorImpl: async () => sourceUrl });
+  const token = await loginToken(app, 'direct-prepare@example.com');
+  const params = { artist: 'A', title: 'B', id: 'v1', quality: 'high' };
+
+  const proxyOnly = await request(app)
+    .get('/api/playback/prepare')
+    .set('Authorization', `Bearer ${token}`)
+    .query(params)
+    .expect(200);
+  assert.equal(proxyOnly.body.directUrl, undefined);
+  assert.match(proxyOnly.body.proxyUrl, /^\/api\/stream-proxy\?/);
+
+  const experimental = await request(app)
+    .get('/api/playback/prepare')
+    .set('Authorization', `Bearer ${token}`)
+    .query({ ...params, playbackMode: 'direct-experimental' })
+    .expect(200);
+  assert.equal(experimental.body.directUrl, sourceUrl);
+  assert.ok(experimental.body.directExpiresAt > Math.floor(Date.now() / 1000));
+  assert.match(experimental.body.proxyUrl, /^\/api\/stream-proxy\?/);
+  assert.equal(verifyStreamParams({ ...params, ...experimental.body }, JWT_SECRET), true);
+  const proxyParams = Object.fromEntries(new URLSearchParams(experimental.body.proxyUrl.split('?')[1]));
+  assert.equal(verifyStreamParams(proxyParams, JWT_SECRET), true);
+});
+
+test('GET /api/playback/prepare omits untrusted direct hosts and rejects invalid modes before resolving', async () => {
+  let extractorCalls = 0;
+  const app = buildTestApp({ extractorImpl: async () => {
+    extractorCalls += 1;
+    return 'https://audio.attacker.example/file.mp3';
+  } });
+  const token = await loginToken(app, 'direct-policy@example.com');
+  const headers = { Authorization: `Bearer ${token}` };
+
+  const result = await request(app)
+    .get('/api/playback/prepare')
+    .set(headers)
+    .query({ artist: 'A', title: 'B', playbackMode: 'auto' })
+    .expect(200);
+  assert.equal(result.body.directUrl, undefined);
+  assert.equal(typeof result.body.proxyUrl, 'string');
+
+  const beforeInvalidMode = extractorCalls;
+  await request(app)
+    .get('/api/playback/prepare')
+    .set(headers)
+    .query({ artist: 'A', title: 'B', playbackMode: 'direct' })
+    .expect(400);
+  assert.equal(extractorCalls, beforeInvalidMode);
 });
 
 test('GET /api/playback/prepare devuelve la causa tipada si el extractor falla', async () => {

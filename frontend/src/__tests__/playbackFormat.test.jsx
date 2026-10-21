@@ -1,7 +1,9 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { compatiblePlaybackQuality, canUseOfflineAudio } from '../audio/playbackFormat.js';
+import { cleanup, renderHook } from '@testing-library/react';
+import { compatiblePlaybackQuality, canUseOfflineAudio, DEFAULT_PLAYBACK_QUALITY } from '../audio/playbackFormat.js';
+import { usePersisted } from '../hooks.js';
 
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); localStorage.removeItem('velocity.quality'); });
 it.each(['high', 'medium', 'low'])('preserves %s tier while requesting an AAC-only source', quality => {
   expect(compatiblePlaybackQuality(quality, { webm: false, aac: true })).toBe(`${quality}-aac`);
 });
@@ -11,9 +13,22 @@ it.each([{ webm: true, aac: true }, { webm: false, aac: false }])('retains the o
 it('keeps explicit profiles idempotent', () => {
   expect(compatiblePlaybackQuality('high-aac', { webm: false, aac: true })).toBe('high-aac');
 });
-it('negotiates the default high tier only when AAC support is affirmative', () => {
-  expect(compatiblePlaybackQuality(undefined, { webm: false, aac: true })).toBe('high-aac');
-  expect(compatiblePlaybackQuality(undefined, { webm: false, aac: false })).toBeUndefined();
+it('uses medium for new profiles while preserving explicit quality tiers', () => {
+  expect(DEFAULT_PLAYBACK_QUALITY).toBe('medium');
+  expect(compatiblePlaybackQuality(undefined, { webm: true, aac: true })).toBe('medium');
+  expect(compatiblePlaybackQuality(undefined, { webm: false, aac: true })).toBe('medium-aac');
+  expect(compatiblePlaybackQuality(undefined, { webm: false, aac: false })).toBe('medium');
+  expect(compatiblePlaybackQuality('high', { webm: true, aac: true })).toBe('high');
+});
+it('defaults a new profile to medium and leaves a persisted quality intact', () => {
+  const newProfile = renderHook(() => usePersisted('velocity.quality', DEFAULT_PLAYBACK_QUALITY));
+  expect(newProfile.result.current[0]).toBe('medium');
+  newProfile.unmount();
+
+  localStorage.setItem('velocity.quality', JSON.stringify('high'));
+  const existingProfile = renderHook(() => usePersisted('velocity.quality', DEFAULT_PLAYBACK_QUALITY));
+  expect(existingProfile.result.current[0]).toBe('high');
+  expect(localStorage.getItem('velocity.quality')).toBe(JSON.stringify('high'));
 });
 it('keeps known compatible and unknown offline files but rejects a positively incompatible WebM', () => {
   const aacOnly = { webm: false, aac: true };

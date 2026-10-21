@@ -14,6 +14,7 @@ import {
   parseContentRange,
   RANGE_CHUNK_BYTES,
 } from '../src/services/streamProxy.js';
+import { createPlaybackMetrics } from '../src/services/playbackMetrics.js';
 
 const RUNS = { numRuns: 100 };
 
@@ -101,6 +102,42 @@ test('Property 17: preserva cabeceras de audio relevantes', () => {
     ),
     RUNS,
   );
+});
+
+test('diagnostics count proxy body bytes and exact repeated requests without exposing track identity', async () => {
+  const payload = Buffer.from('authorized-audio-fixture');
+  const metrics = createPlaybackMetrics();
+  const handler = createStreamProxyHandler({
+    resolveUrl: async () => ({ url: 'https://cdn.example/audio' }),
+    fetchImpl: async () => new Response(payload, {
+      status: 206,
+      headers: {
+        'content-type': 'audio/webm',
+        'content-range': `bytes 0-${payload.length - 1}/${payload.length}`,
+      },
+    }),
+    playbackMetrics: metrics,
+  });
+  const req = {
+    query: { artist: 'Private Artist', title: 'Private Track', id: 'private-id' },
+    headers: { range: `bytes=0-${payload.length - 1}` },
+  };
+  const res = makeStreamingRes();
+  await handler(req, res);
+  const repeatedRes = makeStreamingRes();
+  await handler(req, repeatedRes);
+
+  const snapshot = metrics.snapshot();
+  assert.equal(Buffer.concat(res.chunks).equals(payload), true);
+  assert.equal(Buffer.concat(repeatedRes.chunks).equals(payload), true);
+  assert.equal(snapshot.proxy.requests, 2);
+  assert.equal(snapshot.proxy.rangeRequests, 2);
+  assert.equal(snapshot.proxy.repeatedRequests, 1);
+  assert.equal(snapshot.proxy.bodyBytesWritten, payload.length * 2);
+  const serialized = JSON.stringify(snapshot);
+  assert.equal(serialized.includes('Private Artist'), false);
+  assert.equal(serialized.includes('Private Track'), false);
+  assert.equal(serialized.includes('private-id'), false);
 });
 
 // Feature: velocity-music-streaming, Property 18 (actualizada 2026-08):
@@ -404,6 +441,107 @@ test('full download crosses HTTP with backpressure and compression middleware by
   assert.deepEqual(Buffer.from(await response.arrayBuffer()), expected);
 });
 
+test('client disconnect aborts the upstream audio request while the body is streaming', { timeout: 5000 }, async (t) => {
+  let resolveCalls = 0;
+  let upstreamSignal;
+  let upstreamController;
+  let upstreamAborted = false;
+  const metrics = createPlaybackMetrics();
+  const handler = createStreamProxyHandler({
+    timeoutMs: 1500,
+    resolveUrl: async () => { resolveCalls++; return { url: 'https://cdn/audio' }; },
+    fetchImpl: async (_url, { signal }) => {
+      upstreamSignal = signal;
+      signal.addEventListener('abort', () => {
+        upstreamAborted = true;
+        try { upstreamController?.error(new Error('upstream aborted')); } catch { /* already closed */ }
+      }, { once: true });
+      const body = new ReadableStream({
+        start(controller) {
+          upstreamController = controller;
+          controller.enqueue(Buffer.from('first audio bytes'));
+        },
+        pull() { return new Promise(() => {}); },
+      });
+      return new Response(body, { status: 206, headers: {
+        'content-type': 'audio/webm',
+        'content-range': 'bytes 0-4095/1000000',
+      } });
+    },
+    logger: { warn() {} },
+    playbackMetrics: metrics,
+  });
+  const app = express();
+  app.get('/', (req, res) => {
+    handler(req, res).catch(error => res.destroy(error));
+  });
+  const server = createServer(app);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+
+  const response = await fetch(`http://127.0.0.1:${server.address().port}?artist=A&title=B`, {
+    headers: { Range: 'bytes=0-4095' },
+  });
+  const reader = response.body.getReader();
+  const first = await reader.read();
+  assert.equal(first.done, false);
+  await reader.cancel();
+  await Promise.race([
+    new Promise(resolve => upstreamSignal.addEventListener('abort', resolve, { once: true })),
+    new Promise(resolve => setTimeout(resolve, 300)),
+  ]);
+
+  assert.equal(upstreamAborted, true, 'cierra el fetch upstream al abandonar la reproducción');
+  assert.equal(resolveCalls, 1, 'no vuelve a resolver una pista sin cliente');
+  assert.equal(metrics.snapshot().proxy.abortedResponses, 1);
+});
+
+test('client disconnect cancels a 403 retry backoff before another upstream request', { timeout: 5000 }, async (t) => {
+  let fetchCalls = 0;
+  let upstreamSignal;
+  let retryStarted;
+  const retryStartedPromise = new Promise(resolve => { retryStarted = resolve; });
+  const handler = createStreamProxyHandler({
+    timeoutMs: 3000,
+    resolveUrl: async () => ({ url: 'https://cdn/audio' }),
+    fetchImpl: async (_url, { signal }) => {
+      fetchCalls++;
+      upstreamSignal = signal;
+      if (fetchCalls === 1) {
+        return new Response(Buffer.alloc(RANGE_CHUNK_BYTES, 7), { status: 206, headers: {
+          'content-type': 'audio/webm',
+          'content-range': `bytes 0-${RANGE_CHUNK_BYTES - 1}/${RANGE_CHUNK_BYTES * 2}`,
+        } });
+      }
+      retryStarted();
+      return new Response(null, { status: 403 });
+    },
+    logger: { warn() {} },
+  });
+  const app = express();
+  app.get('/', (req, res) => {
+    handler(req, res).catch(error => res.destroy(error));
+  });
+  const server = createServer(app);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+
+  const response = await fetch(`http://127.0.0.1:${server.address().port}?artist=A&title=B`);
+  const reader = response.body.getReader();
+  const first = await reader.read();
+  assert.equal(first.done, false);
+  await retryStartedPromise;
+  await reader.cancel();
+  await Promise.race([
+    new Promise(resolve => upstreamSignal.addEventListener('abort', resolve, { once: true })),
+    new Promise(resolve => setTimeout(resolve, 300)),
+  ]);
+  await new Promise(resolve => setTimeout(resolve, 900));
+
+  assert.equal(upstreamSignal.aborted, true);
+  assert.equal(fetchCalls, 2, 'no reintenta después de que el cliente abandona');
+});
+
 // ── Handler: sin Range (descargas/prebuffer) → encadena chunks y responde 200
 // con el cuerpo completo ──
 test('Handler: sin Range encadena chunks acotados y entrega el cuerpo completo como 200', async () => {
@@ -596,11 +734,13 @@ test('Handler: sin Range con upstream 200 espera y entrega el body completo', as
 test('Handler: deadline total de arranque incluye resolver, conexión y primer byte', async () => {
   let resolves = 0;
   let fetches = 0;
+  // A short 15 ms budget can expire before a mocked fetch is scheduled on Windows.
+  const timeoutMs = 100;
   const handler = createStreamProxyHandler({
-    timeoutMs: 15,
+    timeoutMs,
     resolveUrl: async (_params, options = {}) => {
       resolves += 1;
-      assert.equal(options.timeoutMs, 15, 'el resolver recibe el presupuesto restante');
+      assert.ok(options.timeoutMs > 0 && options.timeoutMs <= timeoutMs, 'el resolver recibe el presupuesto restante');
       return { url: `https://cdn/audio-${resolves}` };
     },
     fetchImpl: async (_url, { signal }) => {

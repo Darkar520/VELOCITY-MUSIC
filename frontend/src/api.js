@@ -26,6 +26,63 @@ function authHeaders() {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+const DIRECT_SESSION_FAILURE_KEY = 'velocity.directPlaybackSessionFailures';
+const DIRECT_URL_EXPIRY_MARGIN_SECONDS = 15;
+const DIRECT_PROVIDER_HOSTS = {
+  youtube: /(?:^|\.)googlevideo\.com$/i,
+  deezer: /(?:^|\.)dzcdn\.net$/i,
+};
+
+function directProviderForUrl(value) {
+  if (typeof value !== 'string') return null;
+  try {
+    const url = new URL(value, location.href);
+    if (url.protocol !== 'https:') return null;
+    return Object.entries(DIRECT_PROVIDER_HOSTS)
+      .find(([, pattern]) => pattern.test(url.hostname))?.[0] || null;
+  } catch { return null; }
+}
+
+function isDirectPlaybackBlocked(provider) {
+  if (!Object.prototype.hasOwnProperty.call(DIRECT_PROVIDER_HOSTS, provider)) return false;
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(DIRECT_SESSION_FAILURE_KEY) || '{}');
+    return saved[provider] === true;
+  } catch { return false; }
+}
+
+function rememberDirectPlaybackFailure(provider) {
+  if (!Object.prototype.hasOwnProperty.call(DIRECT_PROVIDER_HOSTS, provider)) return false;
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(DIRECT_SESSION_FAILURE_KEY) || '{}');
+    sessionStorage.setItem(DIRECT_SESSION_FAILURE_KEY, JSON.stringify({ ...saved, [provider]: true }));
+    return true;
+  } catch { return false; }
+}
+
+function clearDirectPlaybackFailure(provider) {
+  if (!Object.prototype.hasOwnProperty.call(DIRECT_PROVIDER_HOSTS, provider)) return false;
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(DIRECT_SESSION_FAILURE_KEY) || '{}');
+    delete saved[provider];
+    if (Object.keys(saved).length) sessionStorage.setItem(DIRECT_SESSION_FAILURE_KEY, JSON.stringify(saved));
+    else sessionStorage.removeItem(DIRECT_SESSION_FAILURE_KEY);
+  } catch { /* Storage can be disabled; direct playback remains available to try. */ }
+  return true;
+}
+
+function playbackUrlForMode(entry, playbackMode, now = Date.now()) {
+  const proxyUrl = entry?.proxyUrl || entry?.url || null;
+  const directExpiresAt = Number(entry?.directExpiresAt);
+  const directAvailable = entry?.directUrl
+    && directProviderForUrl(entry.directUrl) === entry.directProvider
+    && Number.isFinite(directExpiresAt)
+    && directExpiresAt > Math.floor(now / 1000) + DIRECT_URL_EXPIRY_MARGIN_SECONDS;
+  const prefersDirect = playbackMode === 'direct-experimental'
+    || (playbackMode === 'auto' && directAvailable && !isDirectPlaybackBlocked(entry.directProvider));
+  return prefersDirect && directAvailable ? entry.directUrl : proxyUrl;
+}
+
 let _onUnauthorized = null;
 export function setOnUnauthorized(fn) { _onUnauthorized = fn; }
 
@@ -202,22 +259,61 @@ export const api = {
     const hit = this._streamSignCache.get(key);
     if (!hit) return null;
     const now = Math.floor(Date.now() / 1000);
-    if (hit.exp - now < (minRemainingSec || 0)) return null;
-    return hit.url;
+    const proxyExpiry = Number(hit.proxyExpiresAt ?? hit.exp);
+    if (proxyExpiry - now < (minRemainingSec || 0)) return null;
+    return hit.proxyUrl || hit.url || null;
   },
-  // Obtiene URL firmada lista para <audio src> o fetch de blob.
-  // Requiere JWT (Bearer). Reutiliza firma en caché si queda >60s de vida.
-  // Dedup inflight: varias llamadas concurrentes al mismo key = 1 fetch.
-  async ensureStreamUrl({ artist, title, id, quality, stream }, { forceRefresh = false, signal } = {}) {
+  peekPlaybackUrl(params, minRemainingSec = 90, playbackMode = 'auto') {
+    const key = this._streamSignKey(params || {});
+    const hit = this._streamSignCache.get(key);
+    if (!hit) return null;
+    const now = Date.now();
+    if (Number(hit.proxyExpiresAt ?? hit.exp) - Math.floor(now / 1000) < (minRemainingSec || 0)) return null;
+    if (!hit.directCheckedAt && playbackMode !== 'proxy') return null;
+    return playbackUrlForMode(hit, playbackMode, now);
+  },
+  isDirectPlaybackUrl(url) {
+    return Boolean(directProviderForUrl(url));
+  },
+  hasDirectPlaybackFailure(provider) {
+    return isDirectPlaybackBlocked(provider);
+  },
+  recordDirectPlaybackSuccess(url) {
+    const provider = directProviderForUrl(url);
+    return provider ? clearDirectPlaybackFailure(provider) : false;
+  },
+  recordDirectPlaybackFailure(url) {
+    const provider = directProviderForUrl(url);
+    return provider ? rememberDirectPlaybackFailure(provider) : false;
+  },
+  // Prepara la ruta para <audio>. El modo proxy conserva compatibilidad por
+  // defecto; el llamador de playback puede solicitar directo o auto con fallback.
+  // Requiere JWT (Bearer) y cachea por separado la expiración de ambas rutas.
+  async ensureStreamUrl({ artist, title, id, quality, stream }, {
+    forceRefresh = false,
+    signal,
+    playbackMode = 'proxy',
+  } = {}) {
+    if (!['proxy', 'direct-experimental', 'auto'].includes(playbackMode)) playbackMode = 'proxy';
     quality = compatiblePlaybackQuality(quality);
     if (signal?.aborted) throw playbackPrepareAbortError();
     const params = { artist, title, id, quality, stream };
     const key = this._streamSignKey(params);
-    const now = Math.floor(Date.now() / 1000);
+    const now = Date.now();
+    const nowSeconds = Math.floor(now / 1000);
     const hit = this._streamSignCache.get(key);
-    if (!forceRefresh && hit && hit.exp - now > 60) return hit.url;
+    const proxyValid = hit && Number(hit.proxyExpiresAt ?? hit.exp) - nowSeconds > 60;
+    const directWanted = playbackMode === 'direct-experimental'
+      || (playbackMode === 'auto' && !isDirectPlaybackBlocked(hit?.directProvider));
+    const directValid = hit?.directUrl
+      && Number(hit.directExpiresAt) > nowSeconds + DIRECT_URL_EXPIRY_MARGIN_SECONDS;
+    const directCheckFresh = hit?.directCheckedAt
+      && nowSeconds - Number(hit.directCheckedAt) < DIRECT_URL_EXPIRY_MARGIN_SECONDS * 4;
+    if (!forceRefresh && proxyValid && (!directWanted || directValid || directCheckFresh)) {
+      return playbackUrlForMode(hit, playbackMode, now);
+    }
 
-    const inflightKey = forceRefresh ? `${key}\0refresh` : key;
+    const inflightKey = `${key}\0${playbackMode}${forceRefresh ? '\0refresh' : ''}`;
     // Llamadas con AbortSignal no comparten una promesa local que pertenezca a
     // otro dueño. El backend deduplica con conteo de suscriptores y cancela el
     // proceso solo cuando todas las solicitudes hayan abandonado.
@@ -231,6 +327,7 @@ export const api = {
       if (id) q.set('id', id);
       if (quality) q.set('quality', quality);
       if (stream) q.set('stream', stream);
+      if (playbackMode !== 'proxy') q.set('playbackMode', playbackMode);
       if (forceRefresh) q.set('refresh', '1');
       let data;
       for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -265,17 +362,35 @@ export const api = {
       }
       // Una respuesta tardía tras cancelación no debe poblar la caché de firmas.
       if (prepareSignal.aborted) throw playbackPrepareAbortError();
-      const url = this.buildSignedStreamUrl({
+      const fallbackProxyUrl = this.buildSignedStreamUrl({
         artist, title, id, quality, stream,
         exp: data.exp,
         sig: data.sig,
       });
-      this._streamSignCache.set(key, { exp: Number(data.exp), url });
+      const proxyUrl = typeof data.proxyUrl === 'string' && data.proxyUrl.startsWith('/api/stream-proxy?')
+        ? data.proxyUrl
+        : fallbackProxyUrl;
+      const directProvider = directProviderForUrl(data.directUrl);
+      const directUrl = directProvider && directProvider === data.provider
+        && Number(data.directExpiresAt) > nowSeconds + DIRECT_URL_EXPIRY_MARGIN_SECONDS
+        ? data.directUrl
+        : null;
+      const entry = {
+        exp: Number(data.exp),
+        proxyExpiresAt: Number(data.exp),
+        url: proxyUrl,
+        proxyUrl,
+        directUrl,
+        directProvider: directUrl ? directProvider : null,
+        directExpiresAt: directUrl ? Number(data.directExpiresAt) : 0,
+        directCheckedAt: playbackMode === 'proxy' ? 0 : nowSeconds,
+      };
+      this._streamSignCache.set(key, entry);
       if (this._streamSignCache.size > 200) {
         const oldest = this._streamSignCache.keys().next().value;
         this._streamSignCache.delete(oldest);
       }
-      return url;
+      return playbackUrlForMode(entry, playbackMode, Date.now());
     }, signal);
 
     // Una sola operación con plazo total; no repetir errores del resolver.
@@ -289,8 +404,8 @@ export const api = {
     }
   },
   // Prefirma en background (errores silenciados). Usar en foreground al armar cola.
-  warmStreamUrl(params) {
-    return this.ensureStreamUrl(params).catch(() => null);
+  warmStreamUrl(params, options) {
+    return this.ensureStreamUrl(params, options).catch(() => null);
   },
   // Background Fetch must receive the entire queue while the page is alive.
   // Sign only: source resolution happens lazily in the proxy, without storing
