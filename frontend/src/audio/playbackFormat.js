@@ -1,6 +1,8 @@
 // Probe once per page. Unknown capabilities retain the existing preference;
 // an AAC-only profile requires affirmative AAC support, not a user-agent guess.
 let browserSupport;
+export const DEFAULT_PLAYBACK_QUALITY = 'medium';
+
 function support() {
   if (browserSupport) return browserSupport;
   try {
@@ -15,9 +17,9 @@ function support() {
 }
 
 export function compatiblePlaybackQuality(quality, capabilities = support()) {
-  const tier = quality || 'high';
+  const tier = quality || DEFAULT_PLAYBACK_QUALITY;
   if (!['high', 'medium', 'low'].includes(tier)) return quality;
-  return !capabilities.webm && capabilities.aac ? `${tier}-aac` : quality;
+  return !capabilities.webm && capabilities.aac ? `${tier}-aac` : tier;
 }
 
 export function canUseOfflineAudio(blob, capabilities = support()) {

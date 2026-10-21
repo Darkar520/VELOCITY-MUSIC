@@ -10,7 +10,7 @@ import { cacheTrack, trackById, loadPlayerState, normalizeTrack, bestCoverFor } 
 import {
   shouldPreExtendQueue,
 } from './audioContinuity.js';
-import { canUseOfflineAudio } from './audio/playbackFormat.js';
+import { canUseOfflineAudio, DEFAULT_PLAYBACK_QUALITY } from './audio/playbackFormat.js';
 import { syncAudioElement } from './audio/syncAudioElement.js';
 import { usePersisted, useViewport } from './hooks.js';
 import { useLibrarySync } from './hooks/useLibrarySync.js';
@@ -197,7 +197,9 @@ export default function App() {
     { id:'p2', name:'Aurora',    accent:'#8b5cf6', accent2:'#ec4899' },
   ]);
   const [activeCustomId, setActiveCustomId] = usePersisted('velocity.paletteId', 'p1');
-  const [quality, setQuality] = usePersisted('velocity.quality', 'high');
+  const [quality, setQuality] = usePersisted('velocity.quality', DEFAULT_PLAYBACK_QUALITY);
+  const [prebufferMode, setPrebufferMode] = usePersisted('velocity.prebufferMode', 'current');
+  const [playbackMode, setPlaybackMode] = usePersisted('velocity.playbackMode', 'auto');
   const [glow, setGlow] = usePersisted('velocity.glow', 70);
   const [eq, setEq] = usePersisted('velocity.eq', 'waves');
   const [lyricOffset, setLyricOffset] = usePersisted('velocity.lyricOffset', 0);
@@ -261,7 +263,7 @@ export default function App() {
   } = useAppUpdate({ playing });
 
   const audioRef = useRef(null);
-  // Dos <audio> ocultos que pre-descargan las siguientes 2 pistas de la cola.
+  // Slots de audio ocultos que usa el modo de precarga elegido por el usuario.
   const preloadAudioRef = useRef(null);
   const preloadAudio2Ref = useRef(null);
   const preloadEpochRef = useRef(0);
@@ -323,7 +325,7 @@ export default function App() {
     objUrlRef, queueRef, trackRef, radioRef, radioSeedRef, mixSessionRef,
     nextTrackActionRef, prevTrackActionRef, sessionResumeRef,
     systemPausedRef, interruptPositionRef, interruptTrackIdRef,
-    quality, backendDown, downloaded, track, playing, vol, queue, shuffle,
+    quality, playbackMode, backendDown, downloaded, track, playing, vol, queue, shuffle,
     setTrack, setPlaying, setTime, setPlaySrc, setLoadingAudio, setMediaInterrupted,
     setQueue, setRecent, setPlayingFrom, showToast, recordPlayStat, setMediaSessionState,
     playErrorRef, consecutiveFailsRef,
@@ -536,20 +538,18 @@ export default function App() {
   // Cubre el modo radio (la cola se llena después de play()) y garantiza que
   // el cambio a la siguiente sea instantáneo (URL ya resuelta en el backend).
   useEffect(() => {
-    if (!track) return;
     const qualityMap = { high:'high', medium:'medium', low:'low', HQ:'high', Standard:'medium', FLAC:'low' };
     const qParam = qualityMap[quality] || 'high';
-    const ids = queue.length ? queue : [track.id];
-    prefetchNext(track.id, ids, qParam);
-  }, [track?.id, queue, quality]);
+    const ids = queue.length ? queue : (track ? [track.id] : []);
+    prefetchNext(track?.id, ids, qParam);
+  }, [track?.id, queue, quality, playbackMode]);
 
-  // ── Pre-buffer del AUDIO de las siguientes 2 pistas (estilo Spotify) ──
-  // Dos <audio> ocultos descargan por adelantado los streams de las próximas 2
-  // pistas. Al cambiar, el navegador sirve desde caché → arranque instantáneo.
-  // URLs firmadas (HMAC): el proxy rechaza sin exp/sig.
+  // ── Precarga de audio según el modo persistido por el usuario ──
+  // En todos los modos se mantiene prefetchNext() para preparar la siguiente URL.
+  // La ruta directa queda limitada a las fuentes CDN confiables; proxy conserva HMAC.
   useTrackPrebuffer({
     preloadAudioRef, preloadAudio2Ref, preloadEpochRef, preloadEpoch,
-    track, queue, quality, downloaded,
+    track, queue, quality, downloaded, mode: prebufferMode, playbackMode, prefetchNext,
   });
 
   // ── Continuidad en segundo plano: extender la cola ANTES de que acabe ──
@@ -811,7 +811,7 @@ export default function App() {
       {tab === 'home' && <HomeTab T={T} play={play} track={track} playing={playing} onMenu={setMenuTarget} onToggleFav={toggleFav} goMix={goMix} displayName={displayName} avatar={avatar} email={email} setTab={setTab} startAiDj={startAiDj} onboardPrefs={onboardPrefs} setOnboardPrefs={setOnboardPrefs} recentSearches={recentSearches} backendDown={backendDown} />}
       {tab === 'search' && <SearchTab T={T} play={play} addToTarget={setAddTarget} onMenu={setMenuTarget} onToggleFav={toggleFav} recentSearches={recentSearches} addSearch={addSearch} removeSearch={removeSearch} goArtist={goArtist} goAlbum={goAlbum} goMix={goMix} selecting={selecting} selection={selection} toggleSelect={toggleSelect} startSelection={startSelection} addToQueue={addToQueue} removeFromQueue={removeFromQueueToast} backendDown={backendDown} setTab={setTab} />}
       {tab === 'library' && <LibraryTab T={T} play={play} openPlaylist={openPlaylist} setOpenPlaylist={setOpenPlaylist} addToTarget={setAddTarget} onMenu={setMenuTarget} onToggleFav={toggleFav} downloadMany={downloadMany} goAlbum={goAlbum} goMix={goMix} selecting={selecting} selection={selection} toggleSelect={toggleSelect} startSelection={startSelection} addToQueue={addToQueue} removeFromQueue={removeFromQueueToast} setShowImport={setShowImport} hydrateTracks={hydrateTracks} createPlaylist={createPlaylist} removeFromPlaylist={removeFromPlaylist} deletePlaylist={deletePlaylist} savePlaylist={savePlaylist} unsavePlaylist={unsavePlaylist} />}
-      {tab === 'profile' && <ProfileTab T={T} themeKey={themeKey} setThemeKey={setThemeKey} quality={quality} setQuality={setQuality} glow={glow} setGlow={setGlow} eq={eq} setEq={setEq} settings={settings} setSettings={setSettings} setOpenPlaylist={setOpenPlaylist} setTab={setTab} email={email} isGuest={isGuest} onLogout={onLogout} installApp={installApp} canInstall={!!installEvt} isIOS={isIOS} isStandalone={isStandalone} goWrapped={goWrapped} customPalettes={customPalettes} activeCustomId={activeCustomId} setActiveCustomId={setActiveCustomId} activePalette={activePalette} addPalette={addPalette} updatePalette={updatePalette} deletePalette={deletePalette} displayName={displayName} saveProfileName={saveProfileName} deleteAccount={deleteAccount} avatar={avatar} saveAvatar={saveAvatar} removeDownload={removeDownload} clearDownloads={clearDownloads} getDownloads={getDownloads} />}
+      {tab === 'profile' && <ProfileTab T={T} themeKey={themeKey} setThemeKey={setThemeKey} quality={quality} setQuality={setQuality} prebufferMode={prebufferMode} setPrebufferMode={setPrebufferMode} playbackMode={playbackMode} setPlaybackMode={setPlaybackMode} glow={glow} setGlow={setGlow} eq={eq} setEq={setEq} settings={settings} setSettings={setSettings} setOpenPlaylist={setOpenPlaylist} setTab={setTab} email={email} isGuest={isGuest} onLogout={onLogout} installApp={installApp} canInstall={!!installEvt} isIOS={isIOS} isStandalone={isStandalone} goWrapped={goWrapped} customPalettes={customPalettes} activeCustomId={activeCustomId} setActiveCustomId={setActiveCustomId} activePalette={activePalette} addPalette={addPalette} updatePalette={updatePalette} deletePalette={deletePalette} displayName={displayName} saveProfileName={saveProfileName} deleteAccount={deleteAccount} avatar={avatar} saveAvatar={saveAvatar} removeDownload={removeDownload} clearDownloads={clearDownloads} getDownloads={getDownloads} />}
     </>
   );
   const Content = view ? (view.type === 'wrapped' ? <WrappedView T={T} setView={setView} play={play} playStats={playStatsRef.current} /> : <DetailView view={view} T={T} play={play} addToTarget={setAddTarget} onMenu={setMenuTarget} onToggleFav={toggleFav} goArtist={goArtist} goAlbum={goAlbum} setView={setView} detailLoading={detailLoading} detailData={detailData} downloadMany={downloadMany} saveAlbum={saveAlbum} unsaveAlbum={unsaveAlbum} savePlaylist={savePlaylist} unsavePlaylist={unsavePlaylist} selecting={selecting} selection={selection} toggleSelect={toggleSelect} startSelection={startSelection} addToQueue={addToQueue} removeFromQueue={removeFromQueueToast} />) : TabContent;

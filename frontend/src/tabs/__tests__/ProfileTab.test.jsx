@@ -27,6 +27,8 @@ function setup(over = {}) {
     onLogout: vi.fn(),
     goWrapped: vi.fn(),
     setQuality: vi.fn(),
+    setPrebufferMode: vi.fn(),
+    setPlaybackMode: vi.fn(),
     setThemeKey: vi.fn(),
     setSettings: vi.fn(),
     saveProfileName: vi.fn(async () => {}),
@@ -50,6 +52,8 @@ function setup(over = {}) {
       T={T}
       themeKey="emerald"
       quality="high"
+      prebufferMode="current"
+      playbackMode="auto"
       glow={70}
       eq="waves"
       settings={{ autoplay: true, normalize: false }}
@@ -93,6 +97,30 @@ describe('ProfileTab', () => {
   it('muestra la versión de la app (trazabilidad visible)', () => {
     setup();
     expect(screen.getByText(/VELOCITY MUSIC · v\d+\.\d+/)).toBeTruthy();
+  });
+
+  it('permite seleccionar modos de precarga y expone el modo activo', () => {
+    const { setPrebufferMode } = setup();
+    expect(screen.getByRole('button', { name: /^Actual/ }).getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: /Solo URL/ }));
+    expect(setPrebufferMode).toHaveBeenCalledWith('url-only');
+  });
+
+  it('mantiene alta disponible y permite seleccionarla explícitamente', () => {
+    const { setQuality } = setup({ quality: 'medium' });
+    const high = screen.getByRole('button', { name: /Alta.*Opus ~160k/ });
+    expect(high.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(high);
+    expect(setQuality).toHaveBeenCalledWith('high');
+  });
+
+  it('ofrece proxy, directo experimental y auto con auto activo por defecto', () => {
+    const { setPlaybackMode } = setup();
+    expect(screen.getByRole('button', { name: /Auto.*Prueba \+ respaldo/ }).getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: /Directo.*Experimental/ }));
+    expect(setPlaybackMode).toHaveBeenCalledWith('direct-experimental');
+    fireEvent.click(screen.getByRole('button', { name: /Proxy.*Firmado/ }));
+    expect(setPlaybackMode).toHaveBeenCalledWith('proxy');
   });
 
   it('agrupa los ajustes con secciones visibles', () => {

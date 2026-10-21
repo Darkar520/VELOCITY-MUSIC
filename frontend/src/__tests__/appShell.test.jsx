@@ -45,8 +45,11 @@ const apiMock = vi.hoisted(() => ({
   // streaming
   streamUrl: vi.fn(() => '/api/stream-proxy?unsigned=1'),
   peekStreamUrl: vi.fn(() => null),
+  peekPlaybackUrl: vi.fn(() => null),
   ensureStreamUrl: vi.fn(async () => SIGNED),
   warmStreamUrl: vi.fn(() => {}),
+  isDirectPlaybackUrl: vi.fn(() => false),
+  recordDirectPlaybackSuccess: vi.fn(() => false),
   prefetchStream: vi.fn(async () => {}),
   _streamSignCache: { clear: vi.fn(), delete: vi.fn() },
   _streamSignKey: vi.fn(() => 'k'),
@@ -109,6 +112,7 @@ describe('App shell — flujos críticos', () => {
     vi.clearAllMocks();
     apiMock.ensureStreamUrl.mockResolvedValue(SIGNED);
     apiMock.peekStreamUrl.mockReturnValue(null);
+    apiMock.peekPlaybackUrl.mockReturnValue(null);
     useLibraryStore.getState().reset();
     usePlayerStore.setState({
       track: null, playing: false, time: 0, duration: 0, queue: [],

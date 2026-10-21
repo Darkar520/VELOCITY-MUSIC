@@ -3,7 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const apiMock = vi.hoisted(() => ({
   peekStreamUrl: vi.fn(() => null),
+  peekPlaybackUrl: vi.fn(() => null),
   ensureStreamUrl: vi.fn(async () => '/api/stream-proxy?exp=1&sig=test'),
+  isDirectPlaybackUrl: vi.fn(() => false),
+  recordDirectPlaybackSuccess: vi.fn(() => false),
   streamUrl: vi.fn(() => '/api/stream-proxy'),
   recordHistory: vi.fn(async () => {}),
   updateNowPlaying: vi.fn(),
@@ -65,7 +68,12 @@ function setup({ intent = 'play', ended = false, readyState = 4, error = null, l
 }
 
 describe('selecting the current track', () => {
-  beforeEach(() => { vi.clearAllMocks(); vi.useFakeTimers(); resetStores(); });
+  beforeEach(() => {
+    vi.clearAllMocks();
+    apiMock.isDirectPlaybackUrl.mockReturnValue(false);
+    vi.useFakeTimers();
+    resetStores();
+  });
   afterEach(() => {
     cleanup();
     usePlayerStore.getState().setPolicyEffectCtx(null);
@@ -108,6 +116,26 @@ describe('selecting the current track', () => {
     expect(result.current.effectCtxRef.current._pendingSeek).toBe(42);
   });
 
+  it('keeps fade-in volume in range when the animation timestamp precedes its start time', () => {
+    const { result, audio } = setup();
+    vi.spyOn(window.performance, 'now').mockReturnValue(100);
+    vi.spyOn(window, 'requestAnimationFrame')
+      .mockImplementationOnce((callback) => { callback(99); return 1; })
+      .mockReturnValue(2);
+
+    act(() => result.current.fadeInAudio());
+
+    expect(audio.volume).toBe(0);
+  });
+
+  it('records a trusted direct source only after native playback starts', () => {
+    const { result } = setup();
+    const directUrl = 'https://rr1.googlevideo.com/videoplayback?expire=1900000000';
+    apiMock.isDirectPlaybackUrl.mockReturnValue(true);
+    act(() => result.current.effectCtxRef.current.onPlayOk({ currentSrc: directUrl }));
+    expect(apiMock.recordDirectPlaybackSuccess).toHaveBeenCalledWith(directUrl);
+  });
+
   it('resumes a paused track from its existing position and opens the player', () => {
     const { result, track, audio } = setup({ intent: 'pause' });
     act(() => result.current.play(track));
@@ -125,6 +153,23 @@ describe('selecting the current track', () => {
     expect(usePlayerStore.getState().time).toBe(0);
     expect(usePlayerStore.getState().queue).toEqual([other.id]);
     expect(audio.pause).toHaveBeenCalledOnce();
+  });
+
+  it('aborts next-track URL preparation when the queue moves to a different next track', () => {
+    const requests = [];
+    const createPendingWarm = (_params, { signal } = {}) => {
+      requests.push(signal);
+      return new Promise(() => {});
+    };
+    apiMock.warmStreamUrl.mockImplementationOnce(createPendingWarm).mockImplementationOnce(createPendingWarm);
+    const { result, track, other, ids } = setup();
+
+    act(() => { result.current.prefetchNext(track.id, ids, 'high'); });
+    act(() => { result.current.prefetchNext(other.id, ids, 'high'); });
+
+    expect(apiMock.warmStreamUrl).toHaveBeenCalledTimes(2);
+    expect(requests[0].aborted).toBe(true);
+    expect(requests[1].aborted).toBe(false);
   });
 
   it('consecutive notification next actions advance even before React mirrors the selected track', () => {

@@ -13,6 +13,7 @@
 //  o prueba directamente contra http://localhost:3001.
 // ════════════════════════════════════════════════════════════════
 process.env.PORT = process.env.PORT || '3001';
+process.env.VELOCITY_STAGING = '1';
 // Almacén JSON aislado (no comparte velocity-db.json con producción).
 process.env.VELOCITY_DATA_DIR = process.env.VELOCITY_DATA_DIR || 'data-staging';
 // Nunca usar el cluster/PG de producción en staging por accidente.

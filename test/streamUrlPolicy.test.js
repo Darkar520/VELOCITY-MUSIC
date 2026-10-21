@@ -7,6 +7,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { isAllowedStreamUrl } from '../src/lib/streamUrlPolicy.js';
+import {
+  directPlaybackExpiresAt,
+  directPlaybackProvider,
+  isTrustedDirectPlaybackUrl,
+} from '../src/lib/directPlaybackPolicy.js';
 import { resolve, ResolveError } from '../src/services/audioResolver.js';
 
 // ── Política de hosts ─────────────────────────────────────────
@@ -58,6 +63,33 @@ test('streamUrlPolicy: entradas no-URL y no-string → false', () => {
   for (const v of ['', '   ', 'no-es-una-url', null, undefined, 42, {}, ['https://sndcdn.com/x']]) {
     assert.equal(isAllowedStreamUrl(v), false, String(v));
   }
+});
+
+test('directPlaybackPolicy: solo acepta HTTPS de CDN de YouTube o Deezer', () => {
+  assert.equal(directPlaybackProvider('https://rr1.googlevideo.com/videoplayback'), 'youtube');
+  assert.equal(directPlaybackProvider('https://cdn.dzcdn.net/audio.mp3'), 'deezer');
+  assert.equal(directPlaybackProvider('https://googlevideo.com.evil.test/audio'), null);
+  assert.equal(directPlaybackProvider('http://rr1.googlevideo.com/audio'), null);
+  assert.equal(directPlaybackProvider('https://soundcloud.com/artist/track'), null);
+  assert.equal(isTrustedDirectPlaybackUrl('https://cdn.dzcdn.net/audio.mp3', 'youtube'), false);
+  assert.equal(isTrustedDirectPlaybackUrl('https://cdn.dzcdn.net/audio.mp3', 'deezer'), true);
+});
+
+test('directPlaybackPolicy: respeta expiry de origen y limita caché de URL sin expiry', () => {
+  const nowMs = 1_800_000_000_000;
+  const nowSeconds = Math.floor(nowMs / 1000);
+  assert.equal(
+    directPlaybackExpiresAt(`https://rr1.googlevideo.com/videoplayback?expire=${nowSeconds + 900}`, nowMs),
+    nowSeconds + 300,
+  );
+  assert.equal(
+    directPlaybackExpiresAt(`https://rr1.googlevideo.com/videoplayback?expire=${nowSeconds + 10}`, nowMs),
+    null,
+  );
+  assert.equal(
+    directPlaybackExpiresAt('https://rr1.googlevideo.com/videoplayback', nowMs),
+    nowSeconds + 60,
+  );
 });
 
 // ── Comportamiento del resolver ───────────────────────────────

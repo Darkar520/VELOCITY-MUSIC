@@ -18,6 +18,7 @@ import { sendWelcomeEmail } from './services/mailer.js';
 import { createRequireAuth } from './middleware/requireAuth.js';
 import { checkAdminKey } from './middleware/adminAuth.js';
 import { signStreamParams, verifyStreamParams } from './lib/streamSign.js';
+import { directPlaybackExpiresAt, isTrustedDirectPlaybackUrl } from './lib/directPlaybackPolicy.js';
 import { logServerError } from './lib/logError.js';
 import {
   cleanLyricQuery,
@@ -128,6 +129,7 @@ export function createApp(deps = {}) {
     revocationService = null,
     // Inyectable para probar el proxy de carátulas sin tocar la red.
     fetchImpl = globalThis.fetch,
+    playbackMetrics = null,
     staticDir = path.join(__dirname, '..', 'public'),
   } = deps;
 
@@ -811,6 +813,12 @@ export function createApp(deps = {}) {
     // una pista con fuente real. A diferencia de /api/stream-sign, expone una
     // causa tipada si yt-dlp no logra resolverla, evitando spinners sin fin.
     app.get('/api/playback/prepare', requireAuth, streamSignLimiter, async (req, res) => {
+      const metric = playbackMetrics?.startPrepare();
+      if (metric) {
+        const finishMetric = () => metric.finish(res.statusCode);
+        res.once('finish', finishMetric);
+        res.once('close', finishMetric);
+      }
       const mode = getActiveMode();
       const params = {
         artist: String(req.query.artist || '').trim(),
@@ -819,6 +827,14 @@ export function createApp(deps = {}) {
         quality: String(req.query.quality || '').trim() || undefined,
         stream: String(req.query.stream || '').trim() || undefined,
       };
+      const playbackMode = String(req.query.playbackMode || 'proxy');
+      if (!['proxy', 'direct-experimental', 'auto'].includes(playbackMode)) {
+        return res.status(400).json({
+          error: 'Modo de transporte de audio inválido.',
+          code: 'INVALID_PLAYBACK_MODE',
+          retryable: false,
+        });
+      }
       // El catálogo/frontend llaman al identificador `id`, pero el resolver
       // distingue explícitamente `videoId` para evitar una búsqueda textual
       // ambigua. Pasar el ID real permite detectar Premium y buscar una subida
@@ -877,7 +893,30 @@ export function createApp(deps = {}) {
         if (res.destroyed) return;
         if (result.status === 302) {
           const { exp, sig } = signStreamParams(params, streamSecret);
-          return res.json({ exp, sig, provider: result.provider || 'youtube' });
+          const provider = result.provider || 'youtube';
+          const proxyQuery = new URLSearchParams({ transport: '2' });
+          for (const key of ['artist', 'title', 'id', 'quality', 'stream']) {
+            if (params[key]) proxyQuery.set(key, String(params[key]));
+          }
+          proxyQuery.set('exp', String(exp));
+          proxyQuery.set('sig', sig);
+          const prepared = {
+            exp,
+            sig,
+            provider,
+            proxyUrl: `/api/stream-proxy?${proxyQuery.toString()}`,
+          };
+          if (
+            playbackMode !== 'proxy'
+            && isTrustedDirectPlaybackUrl(result.url, provider)
+          ) {
+            const directExpiresAt = directPlaybackExpiresAt(result.url);
+            if (directExpiresAt) {
+              prepared.directUrl = result.url;
+              prepared.directExpiresAt = directExpiresAt;
+            }
+          }
+          return res.json(prepared);
         }
         if (result.errorCode === 'YT_DLP_BINARY_BROKEN' && typeof setActiveMode === 'function') {
           // No mantener /api/status en `full` si el binario dejó de iniciar
@@ -914,6 +953,7 @@ export function createApp(deps = {}) {
   // ---- Proxy de streaming (firma HMAC en query; NO rate-limit; NO gzip) ----
   const streamProxyHandler = createStreamProxyHandler({
     resolveUrl: (params, opts) => doResolve(params, opts),
+    playbackMetrics,
   });
   app.get('/api/stream-proxy', (req, res, next) => {
     if (!verifyStreamParams(req.query, streamSecret)) {
@@ -934,6 +974,17 @@ export function createApp(deps = {}) {
         ? { ...extractorDiagnostics, load: getExtractorLoad() }
         : null,
       deezer: { ...app.locals.deezerStatus },
+      ...(process.env.VELOCITY_STAGING === '1' && playbackMetrics
+        ? {
+          playbackDiagnostics: {
+            ...playbackMetrics.snapshot(),
+            process: {
+              cpu: process.cpuUsage(),
+              memory: process.memoryUsage(),
+            },
+          },
+        }
+        : {}),
     });
   });
 
@@ -941,11 +992,11 @@ export function createApp(deps = {}) {
   app.get('/api/qualities', (req, res) => {
     res.json({
       qualities: [
-        { id: 'high',   label: 'Alta (Opus ~160kbps)',  selector: 'bestaudio[acodec=opus]/bestaudio' },
-        { id: 'medium', label: 'Media (AAC ~128kbps)', selector: 'bestaudio[ext=m4a]/bestaudio' },
+        { id: 'high',   label: 'Alta (objetivo Opus ~160kbps)',  selector: 'bestaudio[acodec=opus]/bestaudio' },
+        { id: 'medium', label: 'Media (objetivo ~128kbps)', selector: 'bestaudio[ext=m4a]/bestaudio' },
         { id: 'low',    label: 'Baja (~64kbps)',        selector: 'worstaudio' },
       ],
-      default: 'high',
+      default: 'medium',
     });
   });
 
@@ -1275,6 +1326,7 @@ export function createApp(deps = {}) {
     const body = req.body || {};
     if (!body.trackId)   return res.status(400).json({ error: 'Falta el campo "trackId".' });
     if (!body.errorCode) return res.status(400).json({ error: 'Falta el campo "errorCode".' });
+    playbackMetrics?.recordPlaybackError(body.errorCode);
     const userId = optionalUserId(req);
     const userAgent = String(req.headers['user-agent'] || '').slice(0, 300);
     if (errorRepo) {

@@ -12,7 +12,8 @@ import { useLibraryStore } from '../store/libraryStore.js';
 import { usePlayerStore } from '../store/playerStore.js';
 
 export function ProfileTab({
-  T, themeKey, setThemeKey, quality, setQuality, glow, setGlow, eq, setEq,
+  T, themeKey, setThemeKey, quality, setQuality, prebufferMode = 'current', setPrebufferMode = () => {},
+  playbackMode = 'auto', setPlaybackMode = () => {}, glow, setGlow, eq, setEq,
   settings, setSettings, setOpenPlaylist, setTab, email, isGuest = false, onLogout,
   installApp, canInstall, isIOS, isStandalone, goWrapped,
   customPalettes, activeCustomId, setActiveCustomId, activePalette, addPalette, updatePalette, deletePalette,
@@ -194,11 +195,33 @@ export function ProfileTab({
       <SectionHeader label="Audio" accent={T.accent} />
       <SettingCard title="Calidad de Audio">
         <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:9 }}>
-          {[['high','Alta','Opus ~160k'],['medium','Media','AAC ~128k'],['low','Baja','~96k · ahorro']].map(([val,label,desc]) => (
-            <button key={val} onClick={() => setQuality(val)} className="btn-tap" style={{ padding:'9px 0', borderRadius:13, fontSize:11.5, fontWeight:800, background: val===quality ? grad(T) : 'var(--surf-1)', color: val===quality ? '#04060a' : 'var(--txt-2)', border: `1px solid ${val===quality ? 'transparent' : 'var(--line-soft)'}`, cursor:'pointer', boxShadow: val===quality ? `0 4px 14px ${hex2rgba(T.accent,.4)}` : 'none', display:'flex', flexDirection:'column', alignItems:'center', gap:3 }}>
+          {[['high','Alta','Opus ~160k'],['medium','Media','objetivo ~128k'],['low','Baja','hasta ~96k']].map(([val,label,desc]) => (
+            <button key={val} onClick={() => setQuality(val)} aria-pressed={val===quality} className="btn-tap" style={{ padding:'9px 0', borderRadius:13, fontSize:11.5, fontWeight:800, background: val===quality ? grad(T) : 'var(--surf-1)', color: val===quality ? '#04060a' : 'var(--txt-2)', border: `1px solid ${val===quality ? 'transparent' : 'var(--line-soft)'}`, cursor:'pointer', boxShadow: val===quality ? `0 4px 14px ${hex2rgba(T.accent,.4)}` : 'none', display:'flex', flexDirection:'column', alignItems:'center', gap:3 }}>
               {label}<span style={{ fontSize:8.5, fontWeight:700, opacity:.8 }}>{desc}</span>
             </button>
           ))}
+        </div>
+        <div style={{ fontSize:10, color:'var(--txt-3)', marginTop:8, lineHeight:1.45 }}>
+          El bitrate final depende del formato disponible en la fuente y de la compatibilidad del navegador.
+        </div>
+      </SettingCard>
+
+      <SettingCard title="Ruta de reproducción">
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:9 }}>
+          {[
+            ['proxy','Proxy','Firmado'],
+            ['direct-experimental','Directo','Experimental'],
+            ['auto','Auto','Prueba + respaldo'],
+          ].map(([value, label, description]) => (
+            <button key={value} type="button" className="btn-tap" aria-pressed={value === playbackMode}
+              onClick={() => setPlaybackMode(value)}
+              style={{ padding:'9px 0', borderRadius:13, fontSize:11.5, fontWeight:800, background:value === playbackMode ? grad(T) : 'var(--surf-1)', color:value === playbackMode ? '#04060a' : 'var(--txt-2)', border:`1px solid ${value === playbackMode ? 'transparent' : 'var(--line-soft)'}`, cursor:'pointer', display:'flex', flexDirection:'column', alignItems:'center', gap:3 }}>
+              {label}<span style={{ fontSize:8.5, fontWeight:700, opacity:.8 }}>{description}</span>
+            </button>
+          ))}
+        </div>
+        <div style={{ fontSize:10, color:'var(--txt-3)', marginTop:8, lineHeight:1.45 }}>
+          Auto prueba el stream directo. Si falla, usa el proxy firmado para ese proveedor durante esta sesión.
         </div>
       </SettingCard>
 
@@ -210,6 +233,21 @@ export function ProfileTab({
       <SettingCard title="Reproducción">
         <ToggleRow label="Reproducción automática" desc="Continúa al terminar la pista" on={settings.autoplay} onToggle={() => set('autoplay', !settings.autoplay)} T={T} />
         <ToggleRow label="Normalizar volumen" desc="Mismo nivel en todas las pistas" on={settings.normalize} onToggle={() => set('normalize', !settings.normalize)} T={T} />
+      </SettingCard>
+
+      <SettingCard title="Precarga de audio">
+        <div style={{ fontSize:11, color:'var(--txt-2)', lineHeight:1.5, marginBottom:10 }}>Controla cuánto audio de la cola se solicita antes de reproducir. La siguiente URL se sigue preparando en todos los modos.</div>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8 }}>
+          {[
+            ['current', 'Actual', 'Hasta 2 pistas'],
+            ['one-track', 'Una pista', 'Solo la siguiente'],
+            ['url-only', 'Solo URL', 'Sin audio previo'],
+          ].map(([value, label, detail]) => (
+            <button key={value} type="button" aria-pressed={prebufferMode === value} onClick={() => setPrebufferMode(value)} className="btn-tap" style={{ padding:'9px 4px', borderRadius:12, fontSize:11, fontWeight:800, background:prebufferMode === value ? grad(T) : 'var(--surf-1)', color:prebufferMode === value ? '#04060a' : 'var(--txt-2)', border:`1px solid ${prebufferMode === value ? 'transparent' : 'var(--line-soft)'}`, cursor:'pointer', display:'flex', flexDirection:'column', alignItems:'center', gap:3 }}>
+              {label}<span style={{ fontSize:8.5, fontWeight:700, opacity:.8 }}>{detail}</span>
+            </button>
+          ))}
+        </div>
       </SettingCard>
 
       <SectionHeader label="Descargas" accent={T.accent} />

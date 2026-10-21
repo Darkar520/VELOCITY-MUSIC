@@ -2,6 +2,7 @@ import { pathToFileURL, fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { loadEnv } from './src/lib/loadEnv.js';
 import { createApp } from './src/app.js';
+import { createPlaybackMetrics } from './src/services/playbackMetrics.js';
 import { StreamCache } from './src/services/streamCache.js';
 import { createCancellableInflight, withAbortableTimeout } from './src/lib/concurrency.js';
 import { normalizeText } from './src/lib/normalize.js';
@@ -260,6 +261,7 @@ export async function bootstrap() {
 
   const app = createApp({
     cache,
+    playbackMetrics: process.env.VELOCITY_STAGING === '1' ? createPlaybackMetrics() : null,
     // Catálogo: YouTube Music API (rápido, portadas de álbum, solo canciones).
     // Fallback a yt-dlp si ytmusic-api falla.
     catalogImpl: catalogWithFallback,
