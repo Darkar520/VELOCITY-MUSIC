@@ -222,7 +222,7 @@ export function ExpandedPlayer({ open, onClose, track, playing, togglePlay, next
     </div>
   );
   const translationToggle = <>
-    <button type="button" aria-label="Traducir letra" aria-pressed={translationOn} title={translationOn ? 'Mostrar letra original' : 'Traducir letra'} onClick={() => setTranslationOn(value => !value)} className="lyrics-translation-toggle">Traducir</button>
+    <button type="button" aria-label={`Traducción ${translationOn ? 'activada' : 'desactivada'}`} aria-pressed={translationOn} title={translationOn ? 'Mostrar letra original' : 'Traducir letra'} onClick={() => setTranslationOn(value => !value)} className="lyrics-translation-toggle">Traducir</button>
     {translationOn && <span className="lyrics-visually-hidden" role="status" aria-live="polite">{translationStatus}</span>}
   </>;
 
