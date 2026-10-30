@@ -138,7 +138,27 @@ describe('api.ensureStreamUrl playback preflight', () => {
     });
   });
 
-  it('abandona una preparación colgada a los 25 s, cancela fetch y libera inflight', async () => {
+  it('acepta una respuesta válida después de 28 s sin cancelar la preparación', async () => {
+    vi.useFakeTimers();
+    try {
+      let requestSignal;
+      mockFetch.mockImplementationOnce((_, options) => {
+        requestSignal = options.signal;
+        return new Promise(resolve => setTimeout(() => resolve({
+          ok: true,
+          text: async () => JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600, sig: 'late' }),
+        }), 28000));
+      });
+      const pending = api.ensureStreamUrl({ artist: 'A', title: 'B', id: 'late-response' });
+      await vi.advanceTimersByTimeAsync(28000);
+      await expect(pending).resolves.toContain('sig=late');
+      expect(requestSignal.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('abandona una preparación colgada a los 45 s, cancela fetch y libera inflight', async () => {
     vi.useFakeTimers();
     try {
       let requestSignal;
@@ -152,7 +172,7 @@ describe('api.ensureStreamUrl playback preflight', () => {
         code: 'PLAYBACK_PREPARE_NETWORK_TIMEOUT', retryable: true,
       });
 
-      await vi.advanceTimersByTimeAsync(24999);
+      await vi.advanceTimersByTimeAsync(44999);
       expect(requestSignal.aborted).toBe(false);
       await vi.advanceTimersByTimeAsync(2);
       await rejected;

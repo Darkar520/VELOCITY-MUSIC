@@ -117,14 +117,13 @@ async function jsonOrThrow(res, signal) {
   return data;
 }
 
-// The backend resolver is bounded at 18 s because a Premium-restricted video
-// may require a bounded public-upload search. Allow 7 s for the response to
-// cross a slow client-to-origin/tunnel path after that server-side deadline.
-const PLAYBACK_PREPARE_TIMEOUT_MS = 25000;
+// The extractor has its own 18 s deadline. Origin or tunnel load can delay a
+// valid response beyond that deadline; keep the client deadline bounded too.
+const PLAYBACK_PREPARE_TIMEOUT_MS = 45000;
 
 function playbackPrepareTimeoutError() {
   return Object.assign(
-    new Error('La preparación de esta pista tardó más de 25 segundos. Revisa la conexión e inténtalo de nuevo.'),
+    new Error('La preparación de esta pista tardó más de 45 segundos. Revisa la conexión e inténtalo de nuevo.'),
     { code: 'PLAYBACK_PREPARE_NETWORK_TIMEOUT', retryable: true },
   );
 }
